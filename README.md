@@ -1,23 +1,34 @@
 # Agent Knowledge Harness
 
-Bộ khung hoàn chỉnh để vận hành **QiQi** tại một local workspace chứa nhiều Git
-repository độc lập, đồng thời quản lý tri thức cross-repo có evidence.
+Bộ khung để vận hành **QiQi** tại một local workspace chứa nhiều Git repository
+độc lập và tạo vòng kín tri thức giữa workspace với coding agent trong từng
+repository con.
 
-Repo này được phát triển từ các ý tưởng workspace orchestration trong
-`agent-repo-harness`, nhưng là một sản phẩm độc lập. Nó chỉ lấy và điều chỉnh các
-thành phần cần cho multi-repo QiQi; không sao chép workflow dành cho single repo
-hoặc toàn bộ harness cũ.
+Repo này được phát triển từ các ý tưởng phù hợp trong `agent-repo-harness`,
+nhưng là một sản phẩm độc lập. Nó chỉ giữ các thành phần cần cho QiQi multi-repo
+và knowledge lifecycle.
 
-## Mục tiêu
+## Vòng kín
 
-- Cung cấp QiQi hoàn chỉnh tại workspace root.
-- Định tuyến yêu cầu đến đúng repository và đúng coding agent.
-- Giữ context cho task dài, task cần resume hoặc UAT lại.
-- Chuyển decision, contract và evidence giữa các phiên phụ thuộc.
-- Tách foundation, durable knowledge và working context.
-- Giữ chi tiết nội bộ tại repository sở hữu thay vì gom mọi thứ vào workspace.
+```text
+Đại ca
+  ↓ yêu cầu và quyết định
+QiQi tại workspace
+  ↓ context, contract, evidence và phạm vi
+Agent tại repository con
+  ↓ implementation, verification và repo-local knowledge
+  ↓ cross-repo knowledge candidate
+QiQi
+  ↓ task context hoặc knowledge proposal có evidence
+Đại ca
+```
 
-## Cấu trúc
+## Hai template
+
+### `workspace-template/`
+
+Được đặt tại workspace root. Nó sở hữu QiQi, repository registry, topology,
+working context, model routing, Herdr và tri thức cross-repo.
 
 ```text
 workspace-template/
@@ -27,67 +38,81 @@ workspace-template/
 ├── SYSTEM_MAP.md
 ├── KNOWLEDGE.md
 ├── README.md
-├── instructions/
-│   └── model-routing.md
+├── instructions/model-routing.md
 ├── knowledge/
-│   ├── INDEX.md
-│   ├── glossary.md
-│   ├── systems/
-│   ├── contracts/
-│   ├── decisions/
-│   └── proposals/
-├── .qiqi/
-│   └── tasks/
-│       ├── TEMPLATE.md
-│       ├── active/
-│       └── completed/
-├── .agents/
-│   └── skills/
-│       └── herdr/
-│           ├── SKILL.md
-│           ├── LICENSE.txt
-│           └── SOURCE.md
-├── docs/
-│   └── WORKSPACE_SETUP.md
-└── scripts/
-    └── workspace-check.sh
+├── .qiqi/tasks/
+├── .agents/skills/herdr/
+├── docs/WORKSPACE_SETUP.md
+└── scripts/workspace-check.sh
 ```
+
+### `repo-template/`
+
+Được đặt tại Git root của từng repository con. Nó giúp coding agent hiểu kiến
+trúc nội bộ, chạy verification và trả tri thức đúng tầng về QiQi.
+
+```text
+repo-template/
+├── AGENTS.md
+├── ARCHITECTURE.md
+├── docs/
+│   ├── VERIFY.md
+│   └── REPO_SETUP.md
+└── scripts/
+    └── repo-check.sh
+```
+
+Template không tạo sẵn `docs/domain/`, `docs/specs/`, `docs/decisions/` hoặc các
+artifact optional khác. Repo chỉ tạo chúng khi có nhu cầu thật.
 
 ## Ranh giới sở hữu
 
 | Loại thông tin | Nơi lưu |
 |---|---|
-| Repository và đường dẫn local | `repos.yaml` |
-| Topology, dependency và ownership liên repo | `SYSTEM_MAP.md` |
-| Luồng, contract và decision cross-repo có evidence | `knowledge/` |
-| Kiến trúc, domain rule và verification nội bộ | Tài liệu trong repo con |
-| Yêu cầu, progress, blocker, session và UAT context | `.qiqi/tasks/` |
-| Agent/model khả dụng | `instructions/model-routing.md` |
-| Workflow điều phối | `AGENTS.md` và `identity.md` |
+| Repository và đường dẫn local | Workspace `repos.yaml` |
+| Topology, dependency và ownership liên repo | Workspace `SYSTEM_MAP.md` |
+| Luồng, contract và decision cross-repo có evidence | Workspace `knowledge/` |
+| Yêu cầu, progress, blocker, session và UAT context | Workspace `.qiqi/tasks/` |
+| Agent/model khả dụng và orchestration | Workspace QiQi |
+| Kiến trúc, domain rule, implementation và verification nội bộ | Repository con |
+| Phát hiện cross-repo chưa được QiQi duyệt | Task context hoặc `knowledge/proposals/` |
 
 ## Áp dụng vào Workspace
 
-Nên thử trên một workspace mẫu hoặc backup trước. Sao chép nội dung template vào
-workspace root mà không ghi đè file hiện có ngoài ý muốn, ví dụ với `rsync`:
+Nên thử trên workspace mẫu hoặc backup trước. Sao chép mà không ghi đè file hiện
+có ngoài ý muốn:
 
 ```bash
 rsync -av --ignore-existing workspace-template/ /path/to/multi-repo/
-```
-
-Sau đó:
-
-```bash
 cd /path/to/multi-repo
 cat docs/WORKSPACE_SETUP.md
 bash scripts/workspace-check.sh
 ```
 
-Checker cần `bash`, `git`, `rg` và `yq` phiên bản 4. Nó xác minh cấu trúc,
-placeholder, Herdr bundle và repository registry; không chạy test của repo con.
+Workspace checker cần `bash`, `git`, `rg` và `yq` phiên bản 4. Nó không chạy
+test của repo con.
+
+## Áp dụng vào Repository con
+
+Với từng Git repository trong `repos.yaml`:
+
+```bash
+rsync -av --ignore-existing repo-template/ /path/to/multi-repo/<repository>/
+cd /path/to/multi-repo/<repository>
+cat docs/REPO_SETUP.md
+bash scripts/repo-check.sh
+```
+
+Nếu repo đã có `AGENTS.md`, không ghi đè. Agent setup phải giữ workflow đặc thù
+và gộp các nguyên tắc tối thiểu về Git-root boundary, architecture, verification
+và knowledge output contract.
+
+`repo-check.sh` chỉ kiểm tra cấu trúc harness và placeholder. Test hoặc build của
+repo vẫn phải chạy theo `docs/VERIFY.md`.
 
 ## Thiết kế Cố ý
 
-Repo hiện không thêm vector database, embedding pipeline, knowledge graph hoặc
-service runtime. Markdown, Git, router và evidence được ưu tiên trước. Các lớp
-tìm kiếm nâng cao chỉ nên bổ sung khi workflow thu thập và chắt lọc tri thức đã
-ổn định.
+Repo hiện không thêm installer, vector database, embedding pipeline, knowledge
+graph hoặc service runtime. Markdown, Git, router và evidence được ưu tiên trước.
+Các lớp tự động hóa chỉ nên bổ sung sau khi vòng kín thu thập, xác minh, chắt lọc
+và định tuyến đã ổn định.
