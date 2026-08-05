@@ -1,0 +1,22 @@
+# Registry của các Git repository được clone trong local workspace.
+# Đường dẫn được tính tương đối từ thư mục chứa tệp này.
+
+workspace:
+  name: "{{WORKSPACE_NAME}}"
+  integration_command: "{{INTEGRATION_COMMAND}}"
+
+repositories:
+  - name: "{{MODULE_1}}"
+    path: "{{MODULE_1_PATH}}"
+    role: "{{MODULE_1_ROLE}}"
+    required_for:
+      - "{{PRIMARY_WORKFLOW}}"
+    depends_on:
+      - "{{DEPENDENCY_MODULE}}"
+
+  - name: "{{MODULE_2}}"
+    path: "{{MODULE_2_PATH}}"
+    role: "{{MODULE_2_ROLE}}"
+    required_for:
+      - "{{PRIMARY_WORKFLOW}}"
+    depends_on: []
