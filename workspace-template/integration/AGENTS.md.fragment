@@ -1,0 +1,11 @@
+## Định tuyến tri thức
+
+- Đọc `KNOWLEDGE.md` khi task phụ thuộc tri thức đã ghi nhận, liên quan nhiều
+  repository hoặc có khả năng tạo tri thức dùng lại.
+- Bắt đầu từ `knowledge/INDEX.md`; không đọc toàn bộ thư viện.
+- Truyền cho agent con chỉ context, contract, decision và source liên quan trực
+  tiếp đến task.
+- Chi tiết nội bộ của repository phải được đọc và cập nhật trong repository đó.
+- `.qiqi/tasks/` là working context, không mặc nhiên là source of truth lâu bền.
+- Tri thức mới phải đi qua `knowledge/proposals/` và có evidence trước khi được
+  chuyển vào `systems/`, `contracts/` hoặc `decisions/`.
