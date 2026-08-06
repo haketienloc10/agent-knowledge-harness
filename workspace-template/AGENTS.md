@@ -142,8 +142,8 @@ Với mỗi task cần thực hiện trong repository con:
    - dependency và output từ phiên trước nếu có;
    - yêu cầu làm việc hoàn toàn trong repository hiện tại;
    - yêu cầu đọc và tuân theo `AGENTS.md` của repository;
-   - output cuối: kết luận, thay đổi, verification, Git state, blocker và native
-     session ID khi có.
+   - output cuối: kết quả, thay đổi, verification, Git state, repo-local
+     knowledge, cross-repo knowledge candidate và blocker.
 6. Ưu tiên `herdr agent prompt <agent> "<prompt>" --wait` để gửi và chờ lifecycle
    event trong cùng một lệnh.
 
@@ -182,23 +182,43 @@ Mỗi agent chỉ có một lệnh chờ lifecycle đang hoạt động. Không 
 tín hiệu tiến độ. Không gọi `agent read` khi agent đang làm việc, trừ khi người
 dùng yêu cầu hoặc cần chẩn đoán lỗi bất thường.
 
-Nếu báo cáo thiếu nguyên nhân, thay đổi, verification, Git state, blocker hoặc
-bước tiếp theo, yêu cầu chính phiên đó bổ sung trước khi đóng.
+Nếu báo cáo thiếu nguyên nhân, thay đổi, verification, Git state, repo-local
+knowledge, cross-repo knowledge candidate, blocker hoặc bước tiếp theo, yêu cầu
+chính phiên đó bổ sung trước khi đóng.
+
+## Xử lý Tri thức từ Agent con
+
+Sau khi nhận báo cáo cuối:
+
+1. Với `Repo-local knowledge`:
+   - kiểm tra đường dẫn nằm trong repository sở hữu;
+   - ghi đường dẫn và kết luận chính vào task context nếu task có file;
+   - không sao chép nội dung repo-local vào workspace knowledge.
+2. Với `Cross-repo knowledge candidate`:
+   - nếu `Không có`, không tạo artifact;
+   - nếu `unverified`, giữ trong task context như phát hiện chưa xác minh;
+   - nếu `verified`, có evidence và có khả năng dùng lại, tạo proposal từ
+     `knowledge/proposals/TEMPLATE.md`;
+   - không promote thẳng vào `systems/`, `contracts/` hoặc `decisions/` chỉ từ
+     báo cáo của một agent.
+3. Nếu candidate thực chất chỉ thuộc một repo, yêu cầu agent cập nhật source of
+   truth repo-local hoặc giải thích vì sao không cập nhật được.
+4. Khi task sau phụ thuộc candidate chưa được promote, prompt phải ghi rõ trạng
+   thái và evidence; không truyền nó như một sự thật đã xác nhận.
 
 ## Kết thúc và Dọn Phiên
 
 Sau khi thu đủ kết quả:
 
-1. Cập nhật task context nếu có.
-2. Xác định task phụ thuộc nào có thể bắt đầu.
-3. Lấy `agent_session.value` bằng `herdr agent get <agent>` và ghi native session
+1. Xử lý repo-local knowledge và cross-repo candidate theo quy tắc trên.
+2. Cập nhật task context nếu có.
+3. Xác định task phụ thuộc nào có thể bắt đầu.
+4. Lấy `agent_session.value` bằng `herdr agent get <agent>` và ghi native session
    ID cùng repository path trước khi đóng pane.
-4. Chỉ đóng workspace, tab hoặc pane do QiQi tạo và chỉ sau khi đã lưu session
+5. Chỉ đóng workspace, tab hoặc pane do QiQi tạo và chỉ sau khi đã lưu session
    ID. Nếu không có session ID, giữ phiên và báo rõ không thể resume.
-5. Không giữ phiên hoàn thành chỉ để làm lịch sử; lịch sử thuộc task document,
+6. Không giữ phiên hoàn thành chỉ để làm lịch sử; lịch sử thuộc task document,
    Git và artifact của repo con.
-6. Xem xét có durable knowledge cần đề xuất hay không. Không tạo proposal chỉ để
-   đáp ứng hình thức.
 
 ## Báo cáo cho Người dùng
 
@@ -208,9 +228,11 @@ Báo cáo theo repository:
 - kết quả chính;
 - verification do agent con báo cáo;
 - branch, commit hoặc working-tree state nếu có;
+- repo-local knowledge đã cập nhật và đường dẫn;
+- cross-repo proposal đã tạo hoặc candidate chưa xác minh còn giữ trong task;
 - native session ID và repository path khi phiên đã đóng;
 - blocker, rủi ro hoặc quyết định còn lại;
-- task và knowledge artifact đã cập nhật nếu có.
+- task artifact đã cập nhật nếu có.
 
 Không kể lại từng tool call hoặc toàn bộ transcript. Không tuyên bố hoàn thành
 khi verification bắt buộc chưa chạy hoặc đang fail.
