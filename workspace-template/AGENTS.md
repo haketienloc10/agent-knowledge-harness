@@ -159,8 +159,32 @@ câu nhiệm vụ rồi dựa vào lịch sử của QiQi hoặc yêu cầu agen
 luận đã có evidence.
 
 Tiếp tục phiên còn sống khi cần hỏi sâu, xử lý blocker hoặc sửa verification của
-chính task đó. Nếu pane đã đóng nhưng vẫn là cùng task, resume bằng native
-session ID đã lưu; không tạo session mới làm mất context.
+chính task đó.
+
+## Resume Phiên đã đóng
+
+Chỉ resume khi pane cũ đã đóng nhưng vẫn là cùng task và task context đã lưu
+native session ID cùng repository path.
+
+1. Tạo pane mới tại đúng Git root của repository.
+2. Lấy agent kind và native resume arguments chính xác từ model routing hoặc task
+   context; không tự đoán cú pháp resume.
+3. Chạy:
+
+   ```bash
+   bash scripts/qiqi-agent-resume.sh \
+     --name <agent> \
+     --pane <pane-id> \
+     --kind <agent-kind> \
+     -- <native-resume-arguments...>
+   ```
+
+4. Chỉ khi nhận `QIQI_AGENT_RESUME_FINISHED ... status=success`, gửi lượt tiếp
+   theo bằng `scripts/qiqi-agent-turn.sh`.
+
+`qiqi-agent-resume.sh` chỉ phục hồi session vào pane đã tồn tại. Script không tạo
+pane, không chọn model, không suy đoán native arguments, không gửi prompt và
+không chờ turn. Không dùng script này để tạo session mới.
 
 ## Single-flight Lifecycle
 
@@ -170,13 +194,16 @@ Mỗi agent chỉ có một lifecycle owner tại một thời điểm.
   `scripts/qiqi-agent-turn.sh`.
 - `prompt` đọc nội dung từ stdin, từ chối prompt rỗng và giữ lock riêng cho agent
   trong toàn bộ thời gian chờ lifecycle.
+- `scripts/qiqi-agent-resume.sh` dùng cùng lock theo agent trong thời gian phục
+  hồi session. Không gửi prompt trước khi resume kết thúc thành công.
 - Khi tool runner chuyển wrapper thành background terminal, terminal đó vẫn sở
   hữu lifecycle. Việc lượt gọi bên ngoài kết thúc không có nghĩa agent đã hoàn
   thành.
 - Khi chưa thấy marker `QIQI_AGENT_TURN_FINISHED` từ chính background terminal,
   không gọi thêm `prompt`, `wait`, `agent get` hoặc `agent read` cho cùng agent.
-- `QIQI_AGENT_TURN_BUSY` nghĩa là lifecycle owner cũ vẫn tồn tại. Không tạo
-  waiter thay thế; tiếp tục theo dõi đúng background terminal đang giữ lock.
+- `QIQI_AGENT_TURN_BUSY` hoặc `QIQI_AGENT_RESUME_BUSY` nghĩa là owner cũ vẫn tồn
+  tại. Không tạo owner thay thế; tiếp tục theo dõi đúng background terminal đang
+  giữ lock.
 - Không dùng timeout làm tín hiệu tiến độ và không tạo chuỗi waiter có timeout.
 - Chỉ dùng chế độ `wait` khi task đã được gửi nhưng lifecycle owner trước đó đã
   thoát hoặc biến mất:
