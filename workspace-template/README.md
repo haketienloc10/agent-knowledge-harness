@@ -14,8 +14,8 @@ KNOWLEDGE.md                      # Router và vòng đời tri thức
 instructions/model-routing.md     # Inventory agent/model và profile
 knowledge/                        # Durable cross-repo knowledge
 .qiqi/tasks/                      # Working context và lịch sử task
-.agents/skills/herdr/             # Herdr skill, license và provenance
 docs/WORKSPACE_SETUP.md           # Quy trình setup/takeover
+scripts/qiqi-agent-turn.sh        # Single-flight prompt/wait theo agent
 scripts/workspace-check.sh        # Kiểm tra cấu trúc và registry
 ```
 
@@ -26,6 +26,7 @@ scripts/workspace-check.sh        # Kiểm tra cấu trúc và registry
   bộ.
 - `.qiqi/tasks/` giữ bối cảnh làm việc, không phải nguồn tri thức chính thức.
 - `knowledge/` chỉ giữ nội dung có evidence và khả năng dùng lại.
+- Mỗi agent chỉ có một lifecycle owner; prompt và wait phải đi qua wrapper.
 
 ## Sử dụng
 
@@ -40,6 +41,13 @@ scripts/workspace-check.sh        # Kiểm tra cấu trúc và registry
    ```
 
 5. Khởi động Herdr tại workspace root và chạy QiQi trong pane có `HERDR_ENV=1`.
+6. Gửi task bằng stdin:
+
+   ```bash
+   cat <<'PROMPT' | bash scripts/qiqi-agent-turn.sh prompt <agent>
+   <task prompt>
+   PROMPT
+   ```
 
 Không dùng template như monorepo wrapper và không chạy Git ở workspace root để
 suy luận trạng thái của các repository con.
