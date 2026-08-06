@@ -90,6 +90,35 @@ hoặc quyết định cần QiQi điều phối:
 QiQi chịu trách nhiệm kiểm tra candidate, cập nhật task context và tạo proposal
 trong workspace khi cần.
 
+## Ghi nhận Friction
+
+Friction là vấn đề đã quan sát được khiến agent đổi planned approach, thực hiện
+lại một bước có chi phí hoặc làm giảm độ tin cậy của feedback loop.
+
+Khi có friction đáng kể thuộc repository, tooling hoặc instruction của task,
+tạo một observation mới tại:
+
+`docs/friction/<yyyy-mm-dd>-<short-name>.md`
+
+Mỗi file ghi đúng một friction theo format:
+
+```md
+# <Mô tả cụ thể vấn đề>
+
+- Impact:
+- Evidence:
+```
+
+Chỉ ghi nhận; không đọc lại, tìm kiếm, gộp hoặc cập nhật friction đã có. Không
+bắt buộc tìm root cause, đề xuất giải pháp hoặc sửa friction trong task hiện tại.
+
+Không ghi typo, command lỗi không đáng kể, hậu quả suy đoán, bug sản phẩm đang
+được xử lý hoặc việc agent thiếu kiến thức chung. Không có friction đáng kể thì
+không tạo thư mục hoặc file rỗng.
+
+Friction thuộc workspace hoặc cơ chế điều phối không ghi vào repository; trả về
+QiQi trong báo cáo cuối.
+
 ## Verification
 
 Chọn command nhỏ nhất đủ chứng minh thay đổi, sau đó mở rộng theo rủi ro và
@@ -119,6 +148,11 @@ Báo cáo cuối phải có các mục sau; giữ ngắn nhưng không bỏ mụ
 - Đã cập nhật: <đường dẫn và nội dung chính>
 - Hoặc: Không có.
 
+## Friction
+- Recorded: `docs/friction/<file>.md`
+- Workspace friction: <trả về QiQi nếu có>
+- Hoặc: Không có.
+
 ## Cross-repo knowledge candidate
 - Type: system | contract | decision
 - Status: verified | unverified
@@ -138,4 +172,5 @@ candidate.
 
 Task chỉ hoàn thành khi mục tiêu đã đạt, verification liên quan đã chạy hoặc
 phần chưa chạy được báo rõ, không có regression mới đã biết, tri thức repo-local
-đã được cập nhật khi cần và candidate cross-repo đã được trả về QiQi.
+đã được cập nhật khi cần, friction đáng kể đã được ghi nhận và candidate
+cross-repo đã được trả về QiQi.
