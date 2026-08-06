@@ -26,6 +26,10 @@ required_files=(
   ARCHITECTURE.md
   docs/VERIFY.md
   docs/REPO_SETUP.md
+  docs/domain/README.md
+  docs/specs/README.md
+  docs/decisions/README.md
+  docs/friction/README.md
   scripts/repo-check.sh
 )
 

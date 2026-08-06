@@ -59,13 +59,19 @@ repo-template/
 ├── ARCHITECTURE.md
 ├── docs/
 │   ├── VERIFY.md
-│   └── REPO_SETUP.md
+│   ├── REPO_SETUP.md
+│   ├── domain/README.md
+│   ├── specs/README.md
+│   ├── decisions/README.md
+│   └── friction/README.md
 └── scripts/
     └── repo-check.sh
 ```
 
-Template không tạo sẵn `docs/domain/`, `docs/specs/`, `docs/decisions/` hoặc các
-artifact optional khác. Repo chỉ tạo chúng khi có nhu cầu thật.
+Các `README.md` trong `docs/domain/`, `docs/specs/`, `docs/decisions/` và
+`docs/friction/` là contract cục bộ để agent biết nội dung nào thuộc thư mục,
+khi nào cần tạo tài liệu và cấu trúc tối thiểu. Template không tạo sẵn tài liệu
+nội dung; repo chỉ thêm file khi có tri thức, quyết định hoặc observation thực tế.
 
 ## Ranh giới sở hữu
 
@@ -117,8 +123,8 @@ Nếu repo đã có `AGENTS.md`, không ghi đè. Agent setup phải giữ workf
 và gộp các nguyên tắc tối thiểu về Git-root boundary, architecture, verification
 và knowledge output contract.
 
-`repo-check.sh` chỉ kiểm tra cấu trúc harness và placeholder. Test hoặc build của
-repo vẫn phải chạy theo `docs/VERIFY.md`.
+`repo-check.sh` kiểm tra cấu trúc harness, các README contract bắt buộc và
+placeholder. Test hoặc build của repo vẫn phải chạy theo `docs/VERIFY.md`.
 
 ## Thiết kế Cố ý
 
