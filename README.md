@@ -44,6 +44,7 @@ workspace-template/
 ├── docs/WORKSPACE_SETUP.md
 └── scripts/
     ├── qiqi-agent-turn.sh
+    ├── qiqi-agent-resume.sh
     └── workspace-check.sh
 ```
 
@@ -96,6 +97,10 @@ chạy test của repo con.
 Prompt và wait của từng agent phải đi qua `scripts/qiqi-agent-turn.sh`. Wrapper
 chặn prompt rỗng, giữ một lock theo agent và chỉ kết thúc lifecycle khi phát
 completion marker.
+
+Khi tiếp tục native session đã đóng, QiQi tạo pane mới tại đúng repository rồi
+gọi `scripts/qiqi-agent-resume.sh` với agent kind và native resume arguments đã
+xác nhận. Resume wrapper không tạo pane, không gửi prompt và không chờ turn.
 
 ## Áp dụng vào Repository con
 
