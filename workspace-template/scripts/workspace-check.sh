@@ -155,6 +155,8 @@ if [[ -f "$workspace_root/instructions/model-routing.md" ]]; then
     fail 'model-routing.md: missing exact model ID inventory'
   rg -q 'Native arguments' "$workspace_root/instructions/model-routing.md" || \
     fail 'model-routing.md: missing native arguments'
+  rg -q 'Native resume arguments' "$workspace_root/instructions/model-routing.md" || \
+    fail 'model-routing.md: missing native resume arguments'
   for profile in fast balanced deep verifier; do
     rg -q "\`$profile\`" "$workspace_root/instructions/model-routing.md" || \
       fail "model-routing.md: missing $profile profile"
