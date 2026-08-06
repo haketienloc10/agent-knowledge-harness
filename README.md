@@ -28,7 +28,7 @@ QiQi
 ### `workspace-template/`
 
 Được đặt tại workspace root. Nó sở hữu QiQi, repository registry, topology,
-working context, model routing, Herdr và tri thức cross-repo.
+working context, model routing, session orchestration và tri thức cross-repo.
 
 ```text
 workspace-template/
@@ -41,9 +41,10 @@ workspace-template/
 ├── instructions/model-routing.md
 ├── knowledge/
 ├── .qiqi/tasks/
-├── .agents/skills/herdr/
 ├── docs/WORKSPACE_SETUP.md
-└── scripts/workspace-check.sh
+└── scripts/
+    ├── qiqi-agent-turn.sh
+    └── workspace-check.sh
 ```
 
 ### `repo-template/`
@@ -89,8 +90,12 @@ cat docs/WORKSPACE_SETUP.md
 bash scripts/workspace-check.sh
 ```
 
-Workspace checker cần `bash`, `git`, `rg` và `yq` phiên bản 4. Nó không chạy
-test của repo con.
+Workspace checker cần `bash`, `git`, `rg`, `flock` và `yq` phiên bản 4. Nó không
+chạy test của repo con.
+
+Prompt và wait của từng agent phải đi qua `scripts/qiqi-agent-turn.sh`. Wrapper
+chặn prompt rỗng, giữ một lock theo agent và chỉ kết thúc lifecycle khi phát
+completion marker.
 
 ## Áp dụng vào Repository con
 
@@ -113,6 +118,6 @@ repo vẫn phải chạy theo `docs/VERIFY.md`.
 ## Thiết kế Cố ý
 
 Repo hiện không thêm installer, vector database, embedding pipeline, knowledge
-graph hoặc service runtime. Markdown, Git, router và evidence được ưu tiên trước.
-Các lớp tự động hóa chỉ nên bổ sung sau khi vòng kín thu thập, xác minh, chắt lọc
-và định tuyến đã ổn định.
+graph, watcher hoặc daemon. Markdown, Git, router, lock theo agent và evidence
+được ưu tiên trước. Các lớp tự động hóa chỉ nên bổ sung sau khi vòng kín thu
+thập, xác minh, chắt lọc và định tuyến đã ổn định.
