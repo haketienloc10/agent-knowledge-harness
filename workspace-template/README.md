@@ -16,6 +16,7 @@ knowledge/                        # Durable cross-repo knowledge
 .qiqi/tasks/                      # Working context và lịch sử task
 docs/WORKSPACE_SETUP.md           # Quy trình setup/takeover
 scripts/qiqi-agent-turn.sh        # Single-flight prompt/wait theo agent
+scripts/qiqi-agent-resume.sh      # Resume native session vào pane đã có
 scripts/workspace-check.sh        # Kiểm tra cấu trúc và registry
 ```
 
@@ -26,7 +27,9 @@ scripts/workspace-check.sh        # Kiểm tra cấu trúc và registry
   bộ.
 - `.qiqi/tasks/` giữ bối cảnh làm việc, không phải nguồn tri thức chính thức.
 - `knowledge/` chỉ giữ nội dung có evidence và khả năng dùng lại.
-- Mỗi agent chỉ có một lifecycle owner; prompt và wait phải đi qua wrapper.
+- Mỗi agent chỉ có một lifecycle owner; prompt và wait phải đi qua turn wrapper.
+- Resume wrapper chỉ phục hồi session; nó không tạo pane, gửi prompt hoặc chờ
+  turn.
 
 ## Sử dụng
 
@@ -49,5 +52,16 @@ scripts/workspace-check.sh        # Kiểm tra cấu trúc và registry
    PROMPT
    ```
 
-Không dùng template như monorepo wrapper và không chạy Git ở workspace root để
-suy luận trạng thái của các repository con.
+7. Khi tiếp tục native session đã đóng, tạo pane mới rồi chạy:
+
+   ```bash
+   bash scripts/qiqi-agent-resume.sh \
+     --name <agent> \
+     --pane <pane-id> \
+     --kind <agent-kind> \
+     -- <native-resume-arguments...>
+   ```
+
+Chỉ gửi prompt sau khi resume trả marker thành công. Không dùng template như
+monorepo wrapper và không chạy Git ở workspace root để suy luận trạng thái của
+các repository con.
