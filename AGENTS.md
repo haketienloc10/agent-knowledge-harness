@@ -19,6 +19,8 @@ thể.
 - Workspace sở hữu registry, topology, context điều phối và tri thức cross-repo.
 - Agent repo con không sửa workspace knowledge; nó chỉ trả candidate có evidence
   cho QiQi xử lý.
+- Mỗi agent chỉ có một lifecycle owner; prompt và wait phải đi qua wrapper có
+  lock theo agent.
 - Ưu tiên Markdown có thể đọc trực tiếp, source of truth rõ và evidence có thể
   kiểm tra.
 - Không thêm vector database, embedding, service runtime hoặc dependency ngoài
@@ -33,14 +35,16 @@ thể.
 3. Bảo đảm prompt QiQi truyền đủ context nhưng không sao chép toàn bộ knowledge.
 4. Giữ proposal là vùng chờ; durable knowledge cần evidence và scope rõ.
 5. Giữ task document là working context, không phải source of truth mặc định.
-6. Nếu thay đổi file bắt buộc, cập nhật đồng thời setup guide, checker và README
+6. Giữ `scripts/qiqi-agent-turn.sh` là đường duy nhất cho prompt và wait; không
+   tạo thêm waiter, watcher hoặc daemon song song.
+7. Nếu thay đổi file bắt buộc, cập nhật đồng thời setup guide, checker và README
    liên quan.
 
 ## Khi thay đổi Repository Template
 
 1. Giữ template tối thiểu và không tạo sẵn artifact optional rỗng.
-2. Không đưa identity, model routing, Herdr, workspace task hoặc cross-repo
-   knowledge store xuống repo con.
+2. Không đưa identity, model routing, session orchestration, workspace task hoặc
+   cross-repo knowledge store xuống repo con.
 3. Bảo vệ Git-root boundary và cấm agent tự sửa repository anh em.
 4. Repo-local knowledge phải cập nhật tại source of truth của repo sở hữu.
 5. Cross-repo knowledge phải được trả về QiQi dưới dạng candidate; không promote
@@ -54,7 +58,8 @@ Review tối thiểu phải xác nhận:
 
 - mỗi template tự chứa các file mà `AGENTS.md` của nó định tuyến tới;
 - checker chỉ kiểm tra harness, không chạy test hoặc sửa source sản phẩm;
-- Herdr skill có license và provenance;
+- lifecycle wrapper chặn prompt rỗng, giữ lock theo agent và phát completion
+  marker;
 - ranh giới workspace knowledge và repo-local knowledge không bị phá vỡ;
 - candidate chưa xác minh không được truyền hoặc lưu như sự thật;
 - README phản ánh đúng cách cài cả workspace và repo con.

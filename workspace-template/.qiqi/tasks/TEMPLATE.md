@@ -24,8 +24,12 @@ tất.
 
 ## Phiên agent
 
-| Repository | Agent/session ID | Trạng thái | Mục tiêu |
-|---|---|---|---|
+| Repository/path | Agent name | Agent kind | Model/profile | Native session ID | Trạng thái | Mục tiêu |
+|---|---|---|---|---|---|---|
+
+Ghi `Native session ID` trước khi đóng pane khi task có thể cần tiếp tục. Khi
+resume, dùng đúng agent kind và model/profile để lấy native resume arguments từ
+model routing; không suy đoán từ tên agent.
 
 ## Ứng viên tri thức lâu bền
 

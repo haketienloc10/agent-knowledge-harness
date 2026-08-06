@@ -11,6 +11,8 @@ provider config và CLI đang cài trên máy là nguồn sự thật.
 - Ghi đúng agent kind Herdr hỗ trợ và đúng model ID cần truyền cho agent.
 - Ghi native arguments hoàn chỉnh đặt sau `--` của `herdr agent start`, gồm model
   và chế độ permission phù hợp.
+- Ghi native resume arguments chính xác cho agent kind đó. Nếu không hỗ trợ
+  resume, ghi `Not supported — <lý do>` thay vì đoán cú pháp.
 - Chỉ ghi model đã xác nhận có thể khởi động trong môi trường hiện tại.
 - Ghi evidence availability: model picker, provider config hoặc lần start thành
   công.
@@ -23,11 +25,11 @@ provider config và CLI đang cài trên máy là nguồn sự thật.
 Trong setup, thay toàn bộ placeholder bằng dữ liệu thực tế. Có thể thêm hoặc xóa
 hàng để khớp đúng inventory.
 
-| Agent kind | Model ID chính xác | Native arguments | Evidence khả dụng | Điểm mạnh | Điểm yếu | Nên dùng cho | Không nên dùng cho | Reasoning effort | Giới hạn song song |
-|---|---|---|---|---|---|---|---|---|---|
-| `{{AGENT_1_KIND}}` | `{{MODEL_1_ID}}` | `{{AGENT_1_ARGUMENTS}}` | `{{MODEL_1_EVIDENCE}}` | `{{MODEL_1_STRENGTHS}}` | `{{MODEL_1_WEAKNESSES}}` | `{{MODEL_1_USE_CASES}}` | `{{MODEL_1_AVOID}}` | `{{MODEL_1_EFFORT}}` | `{{MODEL_1_CONCURRENCY}}` |
-| `{{AGENT_2_KIND}}` | `{{MODEL_2_ID}}` | `{{AGENT_2_ARGUMENTS}}` | `{{MODEL_2_EVIDENCE}}` | `{{MODEL_2_STRENGTHS}}` | `{{MODEL_2_WEAKNESSES}}` | `{{MODEL_2_USE_CASES}}` | `{{MODEL_2_AVOID}}` | `{{MODEL_2_EFFORT}}` | `{{MODEL_2_CONCURRENCY}}` |
-| `{{AGENT_3_KIND}}` | `{{MODEL_3_ID}}` | `{{AGENT_3_ARGUMENTS}}` | `{{MODEL_3_EVIDENCE}}` | `{{MODEL_3_STRENGTHS}}` | `{{MODEL_3_WEAKNESSES}}` | `{{MODEL_3_USE_CASES}}` | `{{MODEL_3_AVOID}}` | `{{MODEL_3_EFFORT}}` | `{{MODEL_3_CONCURRENCY}}` |
+| Agent kind | Model ID chính xác | Native arguments | Native resume arguments | Evidence khả dụng | Điểm mạnh | Điểm yếu | Nên dùng cho | Không nên dùng cho | Reasoning effort | Giới hạn song song |
+|---|---|---|---|---|---|---|---|---|---|---|
+| `{{AGENT_1_KIND}}` | `{{MODEL_1_ID}}` | `{{AGENT_1_ARGUMENTS}}` | `{{AGENT_1_RESUME_ARGUMENTS}}` | `{{MODEL_1_EVIDENCE}}` | `{{MODEL_1_STRENGTHS}}` | `{{MODEL_1_WEAKNESSES}}` | `{{MODEL_1_USE_CASES}}` | `{{MODEL_1_AVOID}}` | `{{MODEL_1_EFFORT}}` | `{{MODEL_1_CONCURRENCY}}` |
+| `{{AGENT_2_KIND}}` | `{{MODEL_2_ID}}` | `{{AGENT_2_ARGUMENTS}}` | `{{AGENT_2_RESUME_ARGUMENTS}}` | `{{MODEL_2_EVIDENCE}}` | `{{MODEL_2_STRENGTHS}}` | `{{MODEL_2_WEAKNESSES}}` | `{{MODEL_2_USE_CASES}}` | `{{MODEL_2_AVOID}}` | `{{MODEL_2_EFFORT}}` | `{{MODEL_2_CONCURRENCY}}` |
+| `{{AGENT_3_KIND}}` | `{{MODEL_3_ID}}` | `{{AGENT_3_ARGUMENTS}}` | `{{AGENT_3_RESUME_ARGUMENTS}}` | `{{MODEL_3_EVIDENCE}}` | `{{MODEL_3_STRENGTHS}}` | `{{MODEL_3_WEAKNESSES}}` | `{{MODEL_3_USE_CASES}}` | `{{MODEL_3_AVOID}}` | `{{MODEL_3_EFFORT}}` | `{{MODEL_3_CONCURRENCY}}` |
 
 ## Profile Định tuyến
 
@@ -48,8 +50,10 @@ Một model có thể phục vụ nhiều profile.
    dependency bên ngoài.
 3. Chọn profile thấp nhất vẫn đủ tin cậy.
 4. Lấy agent kind, model ID và native arguments chính xác từ inventory.
-5. Kiểm tra giới hạn song song trước khi tạo phiên.
-6. Ghi lựa chọn trong task context khi nó ảnh hưởng chi phí, độ trễ hoặc chất
+5. Khi resume, lấy native resume arguments từ đúng hàng inventory và kết hợp với
+   session ID đã lưu; không suy ra từ native arguments khởi động mới.
+6. Kiểm tra giới hạn song song trước khi tạo phiên.
+7. Ghi lựa chọn trong task context khi nó ảnh hưởng chi phí, độ trễ hoặc chất
    lượng.
 
 ## Quy tắc Chuyển Model
@@ -78,3 +82,6 @@ fail, repository thiếu tài liệu, yêu cầu chưa rõ hoặc test baseline 
 Khi tạo phiên, QiQi cần biết repository, task, profile, agent kind, model ID,
 native arguments, reasoning effort, dependency và lý do lựa chọn nếu không dùng
 profile mặc định.
+
+Khi đóng một phiên có thể cần tiếp tục, QiQi phải lưu native session ID. Khi
+resume, QiQi phải dùng native resume arguments từ inventory cùng session ID đó.

@@ -24,8 +24,7 @@ Khi bắt đầu phiên tại workspace root:
 5. Đọc `KNOWLEDGE.md` và `knowledge/INDEX.md` khi task cần tri thức cross-repo
    đã được xác minh hoặc có khả năng tạo tri thức dùng lại.
 6. Đọc `instructions/model-routing.md` trước khi tạo phiên coding agent.
-7. Đọc `.agents/skills/herdr/SKILL.md` trước khi điều khiển Herdr.
-8. Xác nhận `HERDR_ENV=1` trước mọi lệnh điều khiển Herdr. Nếu không có, báo rằng
+7. Xác nhận `HERDR_ENV=1` trước mọi lệnh điều khiển Herdr. Nếu không có, báo rằng
    QiQi chưa chạy trong pane do Herdr quản lý và không tự điều khiển session từ
    bên ngoài.
 
@@ -134,7 +133,7 @@ Với mỗi task cần thực hiện trong repository con:
    pane hiện tại trừ khi người dùng yêu cầu.
 4. Khởi động agent bằng agent kind, model và native arguments của profile đã
    chọn. Chỉ truyền native arguments sau `--` của `herdr agent start`.
-5. Gửi prompt gồm tối thiểu:
+5. Chuẩn bị prompt gồm tối thiểu:
    - bối cảnh, vấn đề và lý do task cần thực hiện;
    - mục tiêu và điều kiện hoàn thành;
    - phạm vi và phần ngoài phạm vi;
@@ -144,16 +143,81 @@ Với mỗi task cần thực hiện trong repository con:
    - yêu cầu đọc và tuân theo `AGENTS.md` của repository;
    - output cuối: kết quả, thay đổi, verification, Git state, repo-local
      knowledge, cross-repo knowledge candidate và blocker.
-6. Ưu tiên `herdr agent prompt <agent> "<prompt>" --wait` để gửi và chờ lifecycle
-   event trong cùng một lệnh.
+6. Truyền prompt qua stdin cho wrapper duy nhất:
+
+   ```bash
+   cat <<'PROMPT' | bash scripts/qiqi-agent-turn.sh prompt <agent>
+   <nội dung prompt đầy đủ>
+   PROMPT
+   ```
+
+Không lưu prompt vào biến shell để dùng ở tool call sau. Mỗi tool call có thể
+chạy trong shell khác và làm biến trở thành rỗng.
 
 Prompt mới cho task phụ thuộc phải tự chứa context cần thiết. Không chỉ giao một
 câu nhiệm vụ rồi dựa vào lịch sử của QiQi hoặc yêu cầu agent điều tra lại kết
 luận đã có evidence.
 
 Tiếp tục phiên còn sống khi cần hỏi sâu, xử lý blocker hoặc sửa verification của
-chính task đó. Nếu pane đã đóng nhưng vẫn là cùng task, resume bằng native
-session ID đã lưu; không tạo session mới làm mất context.
+chính task đó.
+
+## Resume Phiên đã đóng
+
+Chỉ resume khi pane cũ đã đóng nhưng vẫn là cùng task và task context đã lưu
+native session ID cùng repository path.
+
+1. Tạo pane mới tại đúng Git root của repository.
+2. Lấy agent kind và native resume arguments chính xác từ model routing hoặc task
+   context; không tự đoán cú pháp resume.
+3. Chạy:
+
+   ```bash
+   bash scripts/qiqi-agent-resume.sh \
+     --name <agent> \
+     --pane <pane-id> \
+     --kind <agent-kind> \
+     -- <native-resume-arguments...>
+   ```
+
+4. Chỉ khi nhận `QIQI_AGENT_RESUME_FINISHED ... status=success`, gửi lượt tiếp
+   theo bằng `scripts/qiqi-agent-turn.sh`.
+
+`qiqi-agent-resume.sh` chỉ phục hồi session vào pane đã tồn tại. Script không tạo
+pane, không chọn model, không suy đoán native arguments, không gửi prompt và
+không chờ turn. Không dùng script này để tạo session mới.
+
+## Single-flight Lifecycle
+
+Mỗi agent chỉ có một lifecycle owner tại một thời điểm.
+
+- Mọi thao tác gửi prompt hoặc chờ agent phải đi qua
+  `scripts/qiqi-agent-turn.sh`.
+- `prompt` đọc nội dung từ stdin, từ chối prompt rỗng và giữ lock riêng cho agent
+  trong toàn bộ thời gian chờ lifecycle.
+- `scripts/qiqi-agent-resume.sh` dùng cùng lock theo agent trong thời gian phục
+  hồi session. Không gửi prompt trước khi resume kết thúc thành công.
+- Khi tool runner chuyển wrapper thành background terminal, terminal đó vẫn sở
+  hữu lifecycle. Việc lượt gọi bên ngoài kết thúc không có nghĩa agent đã hoàn
+  thành.
+- Khi chưa thấy marker `QIQI_AGENT_TURN_FINISHED` từ chính background terminal,
+  không gọi thêm `prompt`, `wait`, `agent get` hoặc `agent read` cho cùng agent.
+- `QIQI_AGENT_TURN_BUSY` hoặc `QIQI_AGENT_RESUME_BUSY` nghĩa là owner cũ vẫn tồn
+  tại. Không tạo owner thay thế; tiếp tục theo dõi đúng background terminal đang
+  giữ lock.
+- Không dùng timeout làm tín hiệu tiến độ và không tạo chuỗi waiter có timeout.
+- Chỉ dùng chế độ `wait` khi task đã được gửi nhưng lifecycle owner trước đó đã
+  thoát hoặc biến mất:
+
+  ```bash
+  bash scripts/qiqi-agent-turn.sh wait <agent>
+  ```
+
+- Khi Đại ca yêu cầu trạng thái, có thể gọi `herdr agent get <agent>` đúng một
+  lần. Nếu trạng thái vẫn là `working`, không đọc transcript và không tạo waiter
+  mới.
+- Nếu wrapper kết thúc với `status=error`, gọi `herdr agent get <agent>` đúng một
+  lần để reconcile. Chỉ khởi động một `wait` mới sau khi xác nhận wrapper cũ đã
+  kết thúc và agent vẫn `working`.
 
 ## Song song và Thứ tự
 
@@ -170,21 +234,19 @@ trừ khi có cơ chế worktree isolation được chấp thuận.
 
 ## Quản lý Trạng thái Phiên
 
-- `working`: để agent tiếp tục; không polling hoặc gửi prompt lặp lại để hỏi tiến
-  độ.
-- `blocked`: đọc output, xử lý câu hỏi hoặc approval; chỉ hỏi người dùng khi
-  artifact hiện có không đủ.
+Sau khi lifecycle owner phát marker hoàn tất:
+
+- `blocked`: đọc output một lần, xử lý câu hỏi hoặc approval; chỉ hỏi người dùng
+  khi artifact hiện có không đủ.
 - `done` hoặc `idle`: đọc báo cáo cuối đúng một lần và kiểm tra output yêu cầu.
+- `working`: chỉ hợp lệ sau một lỗi wrapper đã được reconcile; tạo đúng một
+  lifecycle owner mới bằng chế độ `wait`.
 - `unknown`: không coi là hoàn thành; dùng `agent get` rồi chỉ đọc transcript khi
   cần chẩn đoán.
 
-Mỗi agent chỉ có một lệnh chờ lifecycle đang hoạt động. Không dùng timeout như
-tín hiệu tiến độ. Không gọi `agent read` khi agent đang làm việc, trừ khi người
-dùng yêu cầu hoặc cần chẩn đoán lỗi bất thường.
-
 Nếu báo cáo thiếu nguyên nhân, thay đổi, verification, Git state, repo-local
 knowledge, cross-repo knowledge candidate, blocker hoặc bước tiếp theo, yêu cầu
-chính phiên đó bổ sung trước khi đóng.
+chính phiên đó bổ sung bằng một turn mới qua wrapper trước khi đóng.
 
 ## Xử lý Tri thức từ Agent con
 

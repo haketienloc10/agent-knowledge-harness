@@ -25,6 +25,7 @@ require_dir() {
 
 require_command git
 require_command rg
+require_command flock
 
 required_files=(
   AGENTS.md
@@ -37,9 +38,8 @@ required_files=(
   knowledge/proposals/TEMPLATE.md
   .qiqi/tasks/TEMPLATE.md
   instructions/model-routing.md
-  .agents/skills/herdr/SKILL.md
-  .agents/skills/herdr/LICENSE.txt
-  .agents/skills/herdr/SOURCE.md
+  scripts/qiqi-agent-turn.sh
+  scripts/qiqi-agent-resume.sh
   docs/WORKSPACE_SETUP.md
 )
 
@@ -87,12 +87,56 @@ if [[ -f "$workspace_root/AGENTS.md" ]]; then
     fail 'AGENTS.md: must route QiQi to KNOWLEDGE.md'
   rg -q '`instructions/model-routing\.md`' "$workspace_root/AGENTS.md" || \
     fail 'AGENTS.md: must route QiQi to model routing'
-  rg -q '`\.agents/skills/herdr/SKILL\.md`' "$workspace_root/AGENTS.md" || \
-    fail 'AGENTS.md: must route QiQi to the Herdr skill'
+  rg -q '`scripts/qiqi-agent-turn\.sh`' "$workspace_root/AGENTS.md" || \
+    fail 'AGENTS.md: must route prompt and wait through qiqi-agent-turn.sh'
+  rg -q '`scripts/qiqi-agent-resume\.sh`' "$workspace_root/AGENTS.md" || \
+    fail 'AGENTS.md: must route closed-session resume through qiqi-agent-resume.sh'
+  rg -q 'QIQI_AGENT_TURN_FINISHED' "$workspace_root/AGENTS.md" || \
+    fail 'AGENTS.md: missing lifecycle completion marker'
+  rg -q 'QIQI_AGENT_TURN_BUSY' "$workspace_root/AGENTS.md" || \
+    fail 'AGENTS.md: missing active-owner behavior'
+  rg -q 'QIQI_AGENT_RESUME_FINISHED' "$workspace_root/AGENTS.md" || \
+    fail 'AGENTS.md: missing resume completion marker'
   rg -q 'HERDR_ENV=1' "$workspace_root/AGENTS.md" || \
-    fail 'AGENTS.md: must require HERDR_ENV=1 before Herdr control'
+    fail 'AGENTS.md: must require HERDR_ENV=1 before session control'
   rg -q '`\.qiqi/tasks/' "$workspace_root/AGENTS.md" || \
     fail 'AGENTS.md: must define task-context routing'
+fi
+
+turn_wrapper="$workspace_root/scripts/qiqi-agent-turn.sh"
+if [[ -f "$turn_wrapper" ]]; then
+  bash -n "$turn_wrapper" || fail 'qiqi-agent-turn.sh: invalid Bash syntax'
+  rg -q 'flock -n' "$turn_wrapper" || \
+    fail 'qiqi-agent-turn.sh: missing non-blocking per-agent lock'
+  rg -q 'prompt must not be empty' "$turn_wrapper" || \
+    fail 'qiqi-agent-turn.sh: must reject empty prompts'
+  rg -q 'QIQI_AGENT_TURN_BUSY' "$turn_wrapper" || \
+    fail 'qiqi-agent-turn.sh: missing busy marker'
+  rg -q 'QIQI_AGENT_TURN_FINISHED' "$turn_wrapper" || \
+    fail 'qiqi-agent-turn.sh: missing completion marker'
+  rg -q 'herdr agent prompt' "$turn_wrapper" || \
+    fail 'qiqi-agent-turn.sh: missing prompt command'
+  rg -q 'herdr agent wait' "$turn_wrapper" || \
+    fail 'qiqi-agent-turn.sh: missing wait command'
+fi
+
+resume_wrapper="$workspace_root/scripts/qiqi-agent-resume.sh"
+if [[ -f "$resume_wrapper" ]]; then
+  bash -n "$resume_wrapper" || fail 'qiqi-agent-resume.sh: invalid Bash syntax'
+  rg -q 'flock -n' "$resume_wrapper" || \
+    fail 'qiqi-agent-resume.sh: missing non-blocking per-agent lock'
+  rg -q 'native resume arguments must not be empty' "$resume_wrapper" || \
+    fail 'qiqi-agent-resume.sh: must reject empty resume arguments'
+  rg -q 'QIQI_AGENT_RESUME_BUSY' "$resume_wrapper" || \
+    fail 'qiqi-agent-resume.sh: missing busy marker'
+  rg -q 'QIQI_AGENT_RESUME_FINISHED' "$resume_wrapper" || \
+    fail 'qiqi-agent-resume.sh: missing completion marker'
+  rg -q 'herdr agent start' "$resume_wrapper" || \
+    fail 'qiqi-agent-resume.sh: missing agent start command'
+  rg -q -- '--kind' "$resume_wrapper" || \
+    fail 'qiqi-agent-resume.sh: missing agent kind forwarding'
+  rg -q -- '--pane' "$resume_wrapper" || \
+    fail 'qiqi-agent-resume.sh: missing pane forwarding'
 fi
 
 if [[ -f "$workspace_root/KNOWLEDGE.md" ]]; then
@@ -104,35 +148,6 @@ if [[ -f "$workspace_root/KNOWLEDGE.md" ]]; then
     fail 'KNOWLEDGE.md: must preserve repo-local ownership'
 fi
 
-herdr_skill="$workspace_root/.agents/skills/herdr/SKILL.md"
-herdr_license="$workspace_root/.agents/skills/herdr/LICENSE.txt"
-herdr_source="$workspace_root/.agents/skills/herdr/SOURCE.md"
-
-if [[ -f "$herdr_skill" ]]; then
-  rg -q '^---$' "$herdr_skill" || \
-    fail '.agents/skills/herdr/SKILL.md: missing YAML frontmatter'
-  rg -q '^name:[[:space:]]+herdr$' "$herdr_skill" || \
-    fail '.agents/skills/herdr/SKILL.md: frontmatter name must be herdr'
-  rg -q 'HERDR_ENV=1' "$herdr_skill" || \
-    fail '.agents/skills/herdr/SKILL.md: must require HERDR_ENV=1'
-fi
-
-if [[ -f "$herdr_license" ]]; then
-  rg -q 'Apache License' "$herdr_license" || \
-    fail '.agents/skills/herdr/LICENSE.txt: expected Apache License text'
-  rg -q 'Version 2\.0' "$herdr_license" || \
-    fail '.agents/skills/herdr/LICENSE.txt: expected Version 2.0'
-fi
-
-if [[ -f "$herdr_source" ]]; then
-  rg -q 'https://github\.com/ogulcancelik/herdr' "$herdr_source" || \
-    fail '.agents/skills/herdr/SOURCE.md: missing upstream repository'
-  rg -q 'Upstream commit' "$herdr_source" || \
-    fail '.agents/skills/herdr/SOURCE.md: missing pinned upstream commit'
-  rg -q 'Local modifications' "$herdr_source" || \
-    fail '.agents/skills/herdr/SOURCE.md: missing modification status'
-fi
-
 if [[ -f "$workspace_root/instructions/model-routing.md" ]]; then
   rg -q 'Agent kind' "$workspace_root/instructions/model-routing.md" || \
     fail 'model-routing.md: missing agent kind inventory'
@@ -140,6 +155,8 @@ if [[ -f "$workspace_root/instructions/model-routing.md" ]]; then
     fail 'model-routing.md: missing exact model ID inventory'
   rg -q 'Native arguments' "$workspace_root/instructions/model-routing.md" || \
     fail 'model-routing.md: missing native arguments'
+  rg -q 'Native resume arguments' "$workspace_root/instructions/model-routing.md" || \
+    fail 'model-routing.md: missing native resume arguments'
   for profile in fast balanced deep verifier; do
     rg -q "\`$profile\`" "$workspace_root/instructions/model-routing.md" || \
       fail "model-routing.md: missing $profile profile"

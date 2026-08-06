@@ -16,7 +16,8 @@ Sau khi hoàn thành:
 - `SYSTEM_MAP.md` mô tả vai trò, dependency, contract và ownership liên repo;
 - `identity.md` xác định QiQi là agent điều phối;
 - `instructions/model-routing.md` ghi inventory agent/model đã xác nhận;
-- Herdr skill tồn tại tại `.agents/skills/herdr/` cùng license và provenance;
+- `scripts/qiqi-agent-turn.sh` bảo đảm mỗi agent chỉ có một lifecycle owner;
+- `scripts/qiqi-agent-resume.sh` chỉ phục hồi native session vào pane đã có;
 - `KNOWLEDGE.md` và `knowledge/INDEX.md` định tuyến tri thức đúng tầng;
 - `.qiqi/tasks/` sẵn sàng giữ context cho task dài hoặc cần resume;
 - mọi placeholder `{{...}}` trong artifact cấu hình đã được thay;
@@ -58,9 +59,8 @@ KNOWLEDGE.md
 knowledge/INDEX.md
 instructions/model-routing.md
 .qiqi/tasks/TEMPLATE.md
-.agents/skills/herdr/SKILL.md
-.agents/skills/herdr/LICENSE.txt
-.agents/skills/herdr/SOURCE.md
+scripts/qiqi-agent-turn.sh
+scripts/qiqi-agent-resume.sh
 ```
 
 ## Bước 2: Lập Inventory Repository
@@ -142,6 +142,7 @@ Dùng model picker, provider config hoặc một phiên thử read-only để x�
 - agent kind đúng theo Herdr;
 - model ID chính xác;
 - native arguments;
+- native resume arguments chính xác cho từng agent kind cần resume;
 - evidence availability;
 - điểm mạnh, điểm yếu và task phù hợp;
 - reasoning effort và giới hạn song song.
@@ -149,22 +150,50 @@ Dùng model picker, provider config hoặc một phiên thử read-only để x�
 Gán các profile `fast`, `balanced`, `deep`, `verifier`. Nhiều profile có thể dùng
 cùng model. Xóa hàng mẫu không dùng.
 
-## Bước 7: Xác nhận Herdr
+## Bước 7: Xác nhận Điều phối Phiên
 
-Skill đã được vendor tại `.agents/skills/herdr/`. Xác nhận runtime:
+Xác nhận runtime:
 
 ```bash
 command -v herdr
 herdr --version
+command -v flock
 command -v codex
 codex --version
+bash -n scripts/qiqi-agent-turn.sh
+bash -n scripts/qiqi-agent-resume.sh
 ```
-
-Không chạy bare `herdr` để discovery vì lệnh đó mở hoặc attach TUI. Dùng
-`herdr --help` và command-group help theo skill.
 
 Để QiQi điều khiển agent, khởi động Herdr tại workspace root rồi chạy QiQi trong
 pane do Herdr quản lý. Khi đó `HERDR_ENV=1` phải tồn tại.
+
+Mọi prompt và thao tác chờ phải đi qua turn wrapper:
+
+```bash
+cat <<'PROMPT' | bash scripts/qiqi-agent-turn.sh prompt <agent>
+<task prompt>
+PROMPT
+
+bash scripts/qiqi-agent-turn.sh wait <agent>
+```
+
+Không dùng biến shell chứa prompt qua nhiều tool call. Không tạo thêm waiter khi
+background terminal cũ chưa phát `QIQI_AGENT_TURN_FINISHED`.
+
+Khi pane cũ đã đóng nhưng vẫn là cùng task, tạo pane mới tại đúng repository rồi
+resume bằng native arguments đã xác nhận:
+
+```bash
+bash scripts/qiqi-agent-resume.sh \
+  --name <agent> \
+  --pane <pane-id> \
+  --kind <agent-kind> \
+  -- <native-resume-arguments...>
+```
+
+Chỉ gửi prompt mới sau marker
+`QIQI_AGENT_RESUME_FINISHED ... status=success`. Resume wrapper không tạo pane,
+không suy đoán arguments, không gửi prompt và không dùng cho session mới.
 
 Herdr integration là thay đổi user-level; chỉ cài khi người dùng đồng ý:
 
@@ -175,15 +204,15 @@ herdr integration install claude
 
 ## Bước 8: Xác minh Workspace
 
-Cần `bash`, `git`, `rg` và `yq` phiên bản 4:
+Cần `bash`, `git`, `rg`, `flock` và `yq` phiên bản 4:
 
 ```bash
 bash scripts/workspace-check.sh
 ```
 
-Checker xác minh artifact bắt buộc, placeholder, Herdr bundle, knowledge router
-và repository registry. Nó không thay thế test của repository con hoặc kiểm tra
-runtime provider/model.
+Checker xác minh artifact bắt buộc, placeholder, turn/resume wrappers, knowledge
+router và repository registry. Nó không thay thế test của repository con hoặc
+kiểm tra runtime provider/model.
 
 ## Bước 9: Fresh-session Test
 
@@ -195,7 +224,10 @@ Mở phiên mới tại workspace root và xác nhận QiQi trả lời được
 4. Knowledge nào cần đọc cho một task cross-repo cụ thể.
 5. Model/profile nào phù hợp cho từng loại task.
 6. Khi `HERDR_ENV` không bằng `1`, QiQi phải làm gì.
-7. Khi task tiếp tục sau khi pane đóng, session ID nằm ở đâu.
+7. Khi task tiếp tục sau khi pane đóng, session ID nằm ở đâu và resume theo luồng
+   nào.
+8. Khi một lifecycle owner đang chạy, QiQi phải chờ marker nào và không được gọi
+   thêm lệnh nào.
 
 Chỉ báo workspace sẵn sàng khi checker pass, registry trỏ đúng Git root, model
 được xác nhận và blocker runtime đã được phân loại.
