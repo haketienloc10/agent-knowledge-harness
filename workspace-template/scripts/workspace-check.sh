@@ -39,6 +39,7 @@ required_files=(
   .qiqi/tasks/TEMPLATE.md
   instructions/model-routing.md
   scripts/qiqi-agent-turn.sh
+  scripts/qiqi-agent-resume.sh
   docs/WORKSPACE_SETUP.md
 )
 
@@ -88,10 +89,14 @@ if [[ -f "$workspace_root/AGENTS.md" ]]; then
     fail 'AGENTS.md: must route QiQi to model routing'
   rg -q '`scripts/qiqi-agent-turn\.sh`' "$workspace_root/AGENTS.md" || \
     fail 'AGENTS.md: must route prompt and wait through qiqi-agent-turn.sh'
+  rg -q '`scripts/qiqi-agent-resume\.sh`' "$workspace_root/AGENTS.md" || \
+    fail 'AGENTS.md: must route closed-session resume through qiqi-agent-resume.sh'
   rg -q 'QIQI_AGENT_TURN_FINISHED' "$workspace_root/AGENTS.md" || \
     fail 'AGENTS.md: missing lifecycle completion marker'
   rg -q 'QIQI_AGENT_TURN_BUSY' "$workspace_root/AGENTS.md" || \
     fail 'AGENTS.md: missing active-owner behavior'
+  rg -q 'QIQI_AGENT_RESUME_FINISHED' "$workspace_root/AGENTS.md" || \
+    fail 'AGENTS.md: missing resume completion marker'
   rg -q 'HERDR_ENV=1' "$workspace_root/AGENTS.md" || \
     fail 'AGENTS.md: must require HERDR_ENV=1 before session control'
   rg -q '`\.qiqi/tasks/' "$workspace_root/AGENTS.md" || \
@@ -113,6 +118,25 @@ if [[ -f "$turn_wrapper" ]]; then
     fail 'qiqi-agent-turn.sh: missing prompt command'
   rg -q 'herdr agent wait' "$turn_wrapper" || \
     fail 'qiqi-agent-turn.sh: missing wait command'
+fi
+
+resume_wrapper="$workspace_root/scripts/qiqi-agent-resume.sh"
+if [[ -f "$resume_wrapper" ]]; then
+  bash -n "$resume_wrapper" || fail 'qiqi-agent-resume.sh: invalid Bash syntax'
+  rg -q 'flock -n' "$resume_wrapper" || \
+    fail 'qiqi-agent-resume.sh: missing non-blocking per-agent lock'
+  rg -q 'native resume arguments must not be empty' "$resume_wrapper" || \
+    fail 'qiqi-agent-resume.sh: must reject empty resume arguments'
+  rg -q 'QIQI_AGENT_RESUME_BUSY' "$resume_wrapper" || \
+    fail 'qiqi-agent-resume.sh: missing busy marker'
+  rg -q 'QIQI_AGENT_RESUME_FINISHED' "$resume_wrapper" || \
+    fail 'qiqi-agent-resume.sh: missing completion marker'
+  rg -q 'herdr agent start' "$resume_wrapper" || \
+    fail 'qiqi-agent-resume.sh: missing agent start command'
+  rg -q -- '--kind' "$resume_wrapper" || \
+    fail 'qiqi-agent-resume.sh: missing agent kind forwarding'
+  rg -q -- '--pane' "$resume_wrapper" || \
+    fail 'qiqi-agent-resume.sh: missing pane forwarding'
 fi
 
 if [[ -f "$workspace_root/KNOWLEDGE.md" ]]; then
