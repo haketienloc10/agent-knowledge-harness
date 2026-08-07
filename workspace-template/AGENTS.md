@@ -244,6 +244,11 @@ Sau khi lifecycle owner phát marker hoàn tất:
 - `unknown`: không coi là hoàn thành; dùng `agent get` rồi chỉ đọc transcript khi
   cần chẩn đoán.
 
+Nếu output terminal bị cắt hoặc thiếu một phần của báo cáo đã có, không yêu cầu
+agent điều tra hoặc tóm tắt lại. Yêu cầu chính phiên đó ghi báo cáo đầy đủ vào
+một file dưới `tmp/` của workspace, cho phép rõ việc ghi file này ngoài Git root,
+rồi QiQi đọc file để lấy kết quả đầy đủ.
+
 Nếu báo cáo thiếu nguyên nhân, thay đổi, verification, Git state, repo-local
 knowledge, cross-repo knowledge candidate, blocker hoặc bước tiếp theo, yêu cầu
 chính phiên đó bổ sung bằng một turn mới qua wrapper trước khi đóng.
