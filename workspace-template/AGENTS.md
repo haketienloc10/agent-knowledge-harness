@@ -131,9 +131,7 @@ Với mỗi task cần thực hiện trong repository con:
 3. Tạo tab hoặc workspace do QiQi sở hữu với working directory là Git root của
    repository đích. Mặc định dùng tab riêng, không chuyển focus và không split
    pane hiện tại trừ khi người dùng yêu cầu.
-4. Khởi động agent bằng agent kind, model và native arguments của profile đã
-   chọn. Chỉ truyền native arguments sau `--` của `herdr agent start`.
-5. Chuẩn bị prompt gồm tối thiểu:
+4. Chuẩn bị prompt gồm tối thiểu:
    - bối cảnh, vấn đề và lý do task cần thực hiện;
    - mục tiêu và điều kiện hoàn thành;
    - phạm vi và phần ngoài phạm vi;
@@ -142,6 +140,8 @@ Với mỗi task cần thực hiện trong repository con:
    - yêu cầu làm việc hoàn toàn trong repository hiện tại;
    - output cuối: kết quả, thay đổi, verification, Git state, repo-local
      knowledge, cross-repo knowledge candidate và blocker.
+5. Khởi động agent bằng agent kind, model và native arguments của profile đã
+   chọn. Chỉ truyền native arguments sau `--` của `herdr agent start`.
 6. Truyền prompt qua stdin cho wrapper duy nhất:
 
    ```bash
@@ -149,6 +149,9 @@ Với mỗi task cần thực hiện trong repository con:
    <nội dung prompt đầy đủ>
    PROMPT
    ```
+
+`prompt` mode luôn phải nhận nội dung qua stdin trong cùng tool call. Không bao
+giờ gọi `bash scripts/qiqi-agent-turn.sh prompt <agent>` đứng một mình.
 
 Không lưu prompt vào biến shell để dùng ở tool call sau. Mỗi tool call có thể
 chạy trong shell khác và làm biến trở thành rỗng.
