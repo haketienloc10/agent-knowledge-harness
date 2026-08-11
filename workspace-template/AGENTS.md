@@ -198,34 +198,23 @@ Mỗi agent chỉ có một lifecycle owner tại một thời điểm.
   trong toàn bộ thời gian chờ lifecycle.
 - `scripts/qiqi-agent-resume.sh` dùng cùng lock theo agent trong thời gian phục
   hồi session. Không gửi prompt trước khi resume kết thúc thành công.
-- Khi tool runner chuyển wrapper thành background terminal, terminal đó vẫn sở
-  hữu lifecycle. Việc lượt gọi bên ngoài kết thúc không có nghĩa agent đã hoàn
+- Terminal process đang chạy `scripts/qiqi-agent-turn.sh` hoặc
+  `scripts/qiqi-agent-resume.sh` là lifecycle owner. Việc tool call bên ngoài
+  kết thúc hoặc chuyển wrapper sang background không có nghĩa lifecycle đã hoàn
   thành.
-- Khi `scripts/qiqi-agent-turn.sh` hoặc `scripts/qiqi-agent-resume.sh` đang chạy
-  trong background terminal, không chạy thêm bất kỳ lệnh hoặc tool call nào và
-  không phát status trung gian. Giữ im lặng cho đến khi chính background
-  terminal đó kết thúc.
-- Chỉ tiếp tục điều phối sau khi nhận marker `QIQI_AGENT_TURN_FINISHED` hoặc
-  `QIQI_AGENT_RESUME_FINISHED` tương ứng.
-- `QIQI_AGENT_TURN_BUSY` hoặc `QIQI_AGENT_RESUME_BUSY` nghĩa là owner cũ vẫn tồn
-  tại. Không tạo owner thay thế.
-- Không dùng timeout làm tín hiệu tiến độ và không tạo chuỗi waiter có timeout.
-- Chỉ dùng chế độ `wait` khi task đã được gửi nhưng lifecycle owner trước đó đã
-  thoát hoặc biến mất:
-
-  ```bash
-  bash scripts/qiqi-agent-turn.sh wait <agent>
-  ```
-
-- Nếu wrapper kết thúc với `status=error`, gọi `herdr agent get <agent>` đúng một
-  lần để reconcile. Chỉ khởi động một `wait` mới sau khi xác nhận wrapper cũ đã
-  kết thúc và agent vẫn `working`.
-- Riêng với Claude Code, nếu `prompt` kết thúc bằng `agent_prompt_stalled` và
-  reconcile cho thấy agent vẫn `idle`, đọc terminal đúng một lần. Nếu xác nhận
-  prompt đã nằm trong composer nhưng chưa được submit, chỉ gửi Enter đúng một
-  lần; không gửi lại prompt. Sau đó tiếp tục lifecycle bằng
-  `scripts/qiqi-agent-turn.sh wait <agent>`. Không áp dụng recovery này cho agent
-  kind khác.
+- QiQi có thể khởi động nhiều lifecycle độc lập trong cùng một batch. Xác định
+  batch trước, tạo các tab hoặc pane cần thiết, start hoặc resume agent và khởi
+  động các turn terminal thuộc batch đó.
+- Sau khi các lifecycle terminal của batch đã được khởi động, không gọi thêm
+  lệnh Herdr, không polling, không đọc trạng thái và không phát status trung
+  gian. Giữ im lặng cho đến khi tất cả terminal của batch kết thúc.
+- Chỉ tiếp tục điều phối sau khi thu đủ marker `QIQI_AGENT_TURN_FINISHED` hoặc
+  `QIQI_AGENT_RESUME_FINISHED` tương ứng với tất cả lifecycle trong batch.
+- `QIQI_AGENT_TURN_BUSY` hoặc `QIQI_AGENT_RESUME_BUSY` nghĩa là agent đó đã có
+  lifecycle owner. Không tạo owner thay thế.
+- Không dùng timeout làm tín hiệu tiến độ. Nếu wrapper kết thúc với
+  `status=error`, ghi nhận lỗi hoặc blocker sau khi batch kết thúc; không tự
+  polling, reconcile, gửi lại prompt hoặc tạo waiter thay thế.
 
 ## Song song và Thứ tự
 
@@ -236,21 +225,26 @@ Có thể chạy song song khi task:
 - không cùng thao tác một resource bên ngoài có thể xung đột;
 - có mục tiêu và output độc lập.
 
+Các task độc lập có thể nằm trong cùng một batch. Chuẩn bị toàn bộ tab, pane và
+agent cần thiết trước khi bước vào silent barrier của batch.
+
 Phải chạy tuần tự khi consumer cần contract, migration, schema hoặc quyết định
-từ producer. Không tạo nhiều agent cùng sửa một repository hoặc working tree
-trừ khi có cơ chế worktree isolation được chấp thuận.
+từ producer. Task phụ thuộc phải nằm ở batch sau. Không tạo nhiều agent cùng sửa
+một repository hoặc working tree trừ khi có cơ chế worktree isolation được chấp
+thuận.
 
 ## Quản lý Trạng thái Phiên
 
-Sau khi lifecycle owner phát marker hoàn tất:
+Chỉ xử lý trạng thái sau khi tất cả lifecycle terminal trong batch đã kết thúc.
 
-- `blocked`: đọc output một lần, xử lý câu hỏi hoặc approval; chỉ hỏi người dùng
-  khi artifact hiện có không đủ.
-- `done` hoặc `idle`: đọc báo cáo cuối đúng một lần và kiểm tra output yêu cầu.
-- `working`: chỉ hợp lệ sau một lỗi wrapper đã được reconcile; tạo đúng một
-  lifecycle owner mới bằng chế độ `wait`.
-- `unknown`: không coi là hoàn thành; dùng `agent get` rồi chỉ đọc transcript khi
-  cần chẩn đoán.
+- `status=success`: đọc báo cáo cuối đúng một lần và kiểm tra output yêu cầu.
+- `status=error`: đọc lỗi hoặc output liên quan đúng một lần, ghi blocker và quyết
+  định bước tiếp theo; không tự suy đoán trạng thái agent từ tiến độ trung gian.
+- Nếu terminal kết thúc mà không có completion marker, coi lifecycle là bất
+  thường và báo blocker; không tự tạo waiter, prompt hoặc resume thay thế.
+
+Nếu cần thêm một turn cho cùng task, chỉ khởi động turn mới sau khi lifecycle
+terminal trước đã kết thúc.
 
 Nếu output terminal bị cắt hoặc thiếu một phần của báo cáo đã có, không yêu cầu
 agent điều tra hoặc tóm tắt lại. Yêu cầu chính phiên đó ghi báo cáo đầy đủ vào
