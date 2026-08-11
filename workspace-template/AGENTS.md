@@ -220,6 +220,12 @@ Mỗi agent chỉ có một lifecycle owner tại một thời điểm.
 - Nếu wrapper kết thúc với `status=error`, gọi `herdr agent get <agent>` đúng một
   lần để reconcile. Chỉ khởi động một `wait` mới sau khi xác nhận wrapper cũ đã
   kết thúc và agent vẫn `working`.
+- Riêng với Claude Code, nếu `prompt` kết thúc bằng `agent_prompt_stalled` và
+  reconcile cho thấy agent vẫn `idle`, đọc terminal đúng một lần. Nếu xác nhận
+  prompt đã nằm trong composer nhưng chưa được submit, chỉ gửi Enter đúng một
+  lần; không gửi lại prompt. Sau đó tiếp tục lifecycle bằng
+  `scripts/qiqi-agent-turn.sh wait <agent>`. Không áp dụng recovery này cho agent
+  kind khác.
 
 ## Song song và Thứ tự
 
