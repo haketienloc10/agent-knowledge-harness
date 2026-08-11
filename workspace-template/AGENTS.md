@@ -151,14 +151,6 @@ Với mỗi task cần thực hiện trong repository con:
      --pane <pane-id> \
      -- <native-arguments...>
    ```
-
-Trong phase bootstrap, thực hiện từng agent lần lượt. Mỗi lệnh tạo tab hoặc pane,
-`herdr agent start` hoặc `scripts/qiqi-agent-resume.sh` phải là một lệnh hoàn
-chỉnh trong một tool call và phải kết thúc thành công trước khi chạy lệnh
-bootstrap tiếp theo. Không chạy partial command rồi bổ sung argument, pipe hoặc
-continuation ở tool call sau. Chỉ sau khi tất cả agent trong batch đã bootstrap
-xong mới khởi động các turn terminal có thể chạy song song.
-
 6. Truyền prompt qua stdin cho wrapper duy nhất:
 
    ```bash
@@ -233,8 +225,8 @@ Mỗi agent chỉ có một lifecycle owner tại một thời điểm.
   kết thúc hoặc chuyển wrapper sang background không có nghĩa lifecycle đã hoàn
   thành.
 - QiQi có thể khởi động nhiều lifecycle độc lập trong cùng một batch. Xác định
-  batch trước; bootstrap từng agent lần lượt và chỉ sau khi tất cả agent đã sẵn
-  sàng mới khởi động các turn terminal thuộc batch đó.
+  batch trước, tạo các tab hoặc pane cần thiết, start hoặc resume agent và khởi
+  động các turn terminal thuộc batch đó.
 - Sau khi các lifecycle terminal của batch đã được khởi động và các thao tác
   submit riêng của Claude Code (nếu có) đã hoàn tất, không gọi thêm lệnh Herdr,
   không polling, không đọc trạng thái và không phát status trung gian. Giữ im
