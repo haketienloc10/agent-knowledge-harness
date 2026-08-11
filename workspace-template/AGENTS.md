@@ -141,7 +141,16 @@ Với mỗi task cần thực hiện trong repository con:
    - output cuối: kết quả, thay đổi, verification, Git state, repo-local
      knowledge, cross-repo knowledge candidate và blocker.
 5. Khởi động agent bằng agent kind, model và native arguments của profile đã
-   chọn. Chỉ truyền native arguments sau `--` của `herdr agent start`.
+   chọn. Lấy native arguments nguyên văn từ `instructions/model-routing.md`;
+   không tự suy đoán hoặc ghép lại. Chỉ truyền chúng sau `--` của
+   `herdr agent start`:
+
+   ```bash
+   herdr agent start <agent> \
+     --kind <agent-kind> \
+     --pane <pane-id> \
+     -- <native-arguments...>
+   ```
 6. Truyền prompt qua stdin cho wrapper duy nhất:
 
    ```bash
