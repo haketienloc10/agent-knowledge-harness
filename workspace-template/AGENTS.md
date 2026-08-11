@@ -140,7 +140,6 @@ Với mỗi task cần thực hiện trong repository con:
    - decision, contract, evidence và kết quả đã xác nhận có liên quan;
    - dependency và output từ phiên trước nếu có;
    - yêu cầu làm việc hoàn toàn trong repository hiện tại;
-   - yêu cầu đọc và tuân theo `AGENTS.md` của repository;
    - output cuối: kết quả, thay đổi, verification, Git state, repo-local
      knowledge, cross-repo knowledge candidate và blocker.
 6. Truyền prompt qua stdin cho wrapper duy nhất:
