@@ -162,6 +162,19 @@ Với mỗi task cần thực hiện trong repository con:
 `prompt` mode luôn phải nhận nội dung qua stdin trong cùng tool call. Không bao
 giờ gọi `bash scripts/qiqi-agent-turn.sh prompt <agent>` đứng một mình.
 
+Riêng với Claude Code trong môi trường Herdr đã xác nhận chỉ paste prompt vào
+composer mà chưa submit, sau khi turn terminal đã được khởi động, gửi đúng một
+Enter qua Herdr:
+
+```bash
+herdr agent send-keys <agent> enter
+```
+
+Lệnh Enter này chỉ hoàn tất thao tác submit prompt đã được paste. Không gửi lại
+prompt, không polling và không đọc trạng thái để xác nhận. Với batch có Claude
+Code, chỉ bước vào silent barrier sau khi đã gửi Enter cho tất cả Claude turn
+trong batch cần fallback này.
+
 Không lưu prompt vào biến shell để dùng ở tool call sau. Mỗi tool call có thể
 chạy trong shell khác và làm biến trở thành rỗng.
 
@@ -214,9 +227,10 @@ Mỗi agent chỉ có một lifecycle owner tại một thời điểm.
 - QiQi có thể khởi động nhiều lifecycle độc lập trong cùng một batch. Xác định
   batch trước, tạo các tab hoặc pane cần thiết, start hoặc resume agent và khởi
   động các turn terminal thuộc batch đó.
-- Sau khi các lifecycle terminal của batch đã được khởi động, không gọi thêm
-  lệnh Herdr, không polling, không đọc trạng thái và không phát status trung
-  gian. Giữ im lặng cho đến khi tất cả terminal của batch kết thúc.
+- Sau khi các lifecycle terminal của batch đã được khởi động và các thao tác
+  submit riêng của Claude Code (nếu có) đã hoàn tất, không gọi thêm lệnh Herdr,
+  không polling, không đọc trạng thái và không phát status trung gian. Giữ im
+  lặng cho đến khi tất cả terminal của batch kết thúc.
 - Chỉ tiếp tục điều phối sau khi thu đủ marker `QIQI_AGENT_TURN_FINISHED` hoặc
   `QIQI_AGENT_RESUME_FINISHED` tương ứng với tất cả lifecycle trong batch.
 - `QIQI_AGENT_TURN_BUSY` hoặc `QIQI_AGENT_RESUME_BUSY` nghĩa là agent đó đã có
