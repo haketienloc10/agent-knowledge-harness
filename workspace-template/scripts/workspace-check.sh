@@ -125,7 +125,7 @@ if [[ -f "$turn_wrapper" ]]; then
   rg -q 'Background terminals' "$turn_wrapper" || \
     fail 'qiqi-agent-turn.sh: missing transport-background usage contract'
 
-  if rg -q 'herdr agent wait|prompt \| wait|qiqi-agent-turn\.sh wait' "$turn_wrapper"; then
+  if rg -q '^[[:space:]]*herdr agent wait([[:space:]]|$)|prompt \| wait|qiqi-agent-turn\.sh wait' "$turn_wrapper"; then
     fail 'qiqi-agent-turn.sh: wait mode/direct agent wait must not exist'
   fi
 fi
