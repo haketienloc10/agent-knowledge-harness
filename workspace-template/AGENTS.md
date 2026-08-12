@@ -242,7 +242,13 @@ Mỗi agent chỉ có một lifecycle owner tại một thời điểm.
 - `scripts/qiqi-agent-resume.sh` dùng cùng lock theo agent trong thời gian phục
   hồi session. Không gửi prompt trước khi resume kết thúc thành công.
 - Khi chưa thấy marker `QIQI_AGENT_TURN_FINISHED` từ chính background terminal,
-  không gọi thêm `prompt`, `wait`, `agent get` hoặc `agent read` cho cùng agent.
+  không gọi thêm `prompt`, `wait`, `agent get` hoặc `agent read` cho cùng agent;
+  cũng không dùng `ps`, PID, `kill -0`, `sleep`, polling hoặc timeout để kiểm tra,
+  suy luận hay thay thế lifecycle owner. Output tool rỗng, bị cắt, timeout hoặc bị
+  hủy không phải bằng chứng owner đã kết thúc. Khi không thấy output từ
+  transport, trạng thái là `unknown`; không được mô tả là wrapper “trả rỗng”,
+  “trả sớm” hoặc đã kết thúc. QiQi im lặng chờ marker, kết quả hoặc lỗi từ chính
+  owner.
 - `QIQI_AGENT_TURN_BUSY` hoặc `QIQI_AGENT_RESUME_BUSY` nghĩa là owner cũ vẫn tồn
   tại. Không tạo owner thay thế; tiếp tục theo dõi đúng background terminal đang
   giữ lock.
@@ -255,8 +261,11 @@ Mỗi agent chỉ có một lifecycle owner tại một thời điểm.
   ```
 
 - Khi Đại ca yêu cầu trạng thái, có thể gọi `herdr agent get <agent>` đúng một
-  lần. Nếu trạng thái vẫn là `working`, không đọc transcript và không tạo waiter
-  mới.
+  lần. Nếu trạng thái là `working`, không đọc transcript và không tạo waiter
+  mới. Nếu trạng thái là `idle` hoặc `done` nhưng chưa có marker, gọi
+  `bash scripts/qiqi-agent-turn.sh wait <agent>` đúng một lần để thu marker; nếu
+  nhận `QIQI_AGENT_TURN_BUSY`, giữ trạng thái `active/unknown`, không tạo thêm
+  prompt, waiter, polling hoặc suy luận nguyên nhân từ output transport.
 - Nếu wrapper kết thúc với `status=error`, gọi `herdr agent get <agent>` đúng một
   lần để reconcile. Chỉ khởi động một `wait` mới sau khi xác nhận wrapper cũ đã
   kết thúc và agent vẫn `working`.
