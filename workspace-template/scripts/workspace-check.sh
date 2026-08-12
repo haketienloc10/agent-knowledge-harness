@@ -112,6 +112,8 @@ if [[ -f "$turn_wrapper" ]]; then
   bash -n "$turn_wrapper" || fail 'qiqi-agent-turn.sh: invalid Bash syntax'
   rg -q 'flock -n' "$turn_wrapper" || \
     fail 'qiqi-agent-turn.sh: missing non-blocking ownership guard'
+  rg -q 'qiqi\.lifecycle\.lock' "$turn_wrapper" || \
+    fail 'qiqi-agent-turn.sh: must use global QiQi lifecycle lock'
   rg -q 'prompt must not be empty' "$turn_wrapper" || \
     fail 'qiqi-agent-turn.sh: must reject empty prompts'
   rg -q 'QIQI_AGENT_TURN_BUSY' "$turn_wrapper" || \
@@ -134,7 +136,9 @@ resume_wrapper="$workspace_root/scripts/qiqi-agent-resume.sh"
 if [[ -f "$resume_wrapper" ]]; then
   bash -n "$resume_wrapper" || fail 'qiqi-agent-resume.sh: invalid Bash syntax'
   rg -q 'flock -n' "$resume_wrapper" || \
-    fail 'qiqi-agent-resume.sh: missing non-blocking per-agent lock'
+    fail 'qiqi-agent-resume.sh: missing non-blocking ownership guard'
+  rg -q 'qiqi\.lifecycle\.lock' "$resume_wrapper" || \
+    fail 'qiqi-agent-resume.sh: must share global QiQi lifecycle lock'
   rg -q 'native resume arguments must not be empty' "$resume_wrapper" || \
     fail 'qiqi-agent-resume.sh: must reject empty resume arguments'
   rg -q 'QIQI_AGENT_RESUME_BUSY' "$resume_wrapper" || \
