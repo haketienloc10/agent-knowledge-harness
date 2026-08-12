@@ -18,6 +18,10 @@ set -euo pipefail
 # still active and QiQi is still logically blocked until this same wrapper
 # invocation emits QIQI_AGENT_TURN_FINISHED.
 #
+# The flock below is GLOBAL for this QiQi runtime, not per agent. A second turn
+# or resume operation for any agent must fail BUSY while this invocation owns the
+# lifecycle. This hard-enforces the one-active-delegated-operation policy.
+#
 # While this invocation is active QiQi MUST NOT issue another tool, shell or
 # session-observation command to inspect or advance the turn. In particular:
 #   - no `/ps` or equivalent background-terminal inspection;
@@ -27,9 +31,9 @@ set -euo pipefail
 #   - no background, detach, nohup, disown, or fire-and-forget wrapper execution;
 #   - no direct `herdr agent prompt`; prompt submission goes through this wrapper.
 #
-# If QIQI_AGENT_TURN_BUSY is returned, another owner already exists. Do not
-# retry, poll, or create a replacement waiter. Reconcile according to workspace
-# AGENTS.md only after the existing owner has terminally ended.
+# If QIQI_AGENT_TURN_BUSY is returned, another lifecycle owner already exists.
+# Do not retry, poll, or create a replacement waiter. Reconcile according to
+# workspace AGENTS.md only after the existing owner has terminally ended.
 #
 # QIQI_AGENT_TURN_FINISHED means this wrapper turn reached terminal completion.
 # It does NOT by itself mean the overall user task is complete.
@@ -77,7 +81,7 @@ runtime_dir="$runtime_base/qiqi-agent-turn-${UID}"
 mkdir -p "$runtime_dir"
 chmod 700 "$runtime_dir"
 
-lock_file="$runtime_dir/${agent}.lock"
+lock_file="$runtime_dir/qiqi.lifecycle.lock"
 exec 9>"$lock_file"
 
 if ! flock -n 9; then
