@@ -1,9 +1,8 @@
-# Registry của các Git repository được clone trong local workspace.
-# Đường dẫn được tính tương đối từ thư mục chứa tệp này.
+# Registry các Git repository local do QiQi điều phối.
+# `path` tính tương đối từ workspace root và phải trỏ đúng Git root.
 
 workspace:
   name: "{{WORKSPACE_NAME}}"
-  integration_command: "{{INTEGRATION_COMMAND}}"
 
 repositories:
   - name: "{{MODULE_1}}"
