@@ -1,39 +1,46 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# QiQi usage contract
-# -------------------
-# This script is the synchronous boundary for a delegated agent turn.
-# If QiQi reads this file, the rules below are part of the operating contract,
-# not implementation suggestions.
+# QiQi synchronous turn contract
+# ------------------------------
+# This wrapper owns exactly one delegated agent turn from prompt submission until
+# terminal completion. These rules are operating constraints, not suggestions.
 #
 # Normal flow:
-#   1. Invoke `prompt` in the FOREGROUND.
-#   2. Remain blocked until this command returns terminal completion.
+#   1. Invoke `prompt` as a foreground operation.
+#   2. Remain blocked until THIS SAME invocation reaches terminal completion.
 #   3. Reconcile the returned final result.
-#   4. Only then may QiQi create the next delegated turn.
+#   4. Only then may QiQi create another delegated turn.
 #
-# Required invariants:
-#   - Never background, detach, nohup, disown, or fire-and-forget this wrapper.
-#   - Never start another delegated turn while the current turn is active.
-#   - Never poll `herdr agent get/read`, process state, PID, timeout, or transcript
-#     to infer progress during the normal blocking path.
-#   - Do not bypass this wrapper by calling `herdr agent prompt` directly.
-#   - `wait` is RECOVERY ONLY when a previously-owned turn lost its waiter; it is
-#     not a normal progress/status mechanism and must not be used in a loop.
-#   - `QIQI_AGENT_TURN_BUSY` means an owner already exists. Do not retry/poll;
-#     reconcile the existing owner according to workspace AGENTS.md.
-#   - `QIQI_AGENT_TURN_FINISHED` means this wrapper turn reached terminal
-#     completion. It does NOT by itself mean the overall user task is complete.
+# IMPORTANT — transport backgrounding does NOT release the lifecycle lock:
+# Codex/the tool runner may move a long-running foreground command into a UI area
+# named "Background terminals". That is transport behavior only. The turn is
+# still active and QiQi is still logically blocked until this same wrapper
+# invocation emits QIQI_AGENT_TURN_FINISHED.
 #
-# Workspace `AGENTS.md` is the source of truth when this contract needs more
-# context. Keep this script's usage contract aligned with that policy.
+# While this invocation is active QiQi MUST NOT issue another tool, shell or
+# session-observation command to inspect or advance the turn. In particular:
+#   - no `/ps` or equivalent background-terminal inspection;
+#   - no `herdr agent wait`, `herdr agent get`, or `herdr agent read`;
+#   - no `herdr pane read`, `herdr pane process-info`, or `herdr pane wait-output`;
+#   - no sleep/poll/status loop and no second qiqi-agent-turn invocation;
+#   - no background, detach, nohup, disown, or fire-and-forget wrapper execution;
+#   - no direct `herdr agent prompt`; prompt submission goes through this wrapper.
+#
+# If QIQI_AGENT_TURN_BUSY is returned, another owner already exists. Do not
+# retry, poll, or create a replacement waiter. Reconcile according to workspace
+# AGENTS.md only after the existing owner has terminally ended.
+#
+# QIQI_AGENT_TURN_FINISHED means this wrapper turn reached terminal completion.
+# It does NOT by itself mean the overall user task is complete.
+#
+# There is intentionally NO `wait` mode in this wrapper. Recovery after a real
+# wrapper/session error is a separate exceptional workflow governed by AGENTS.md.
 
 usage() {
   cat >&2 <<'EOF'
 Usage:
-  qiqi-agent-turn.sh prompt <agent>  # synchronous; read prompt from stdin; foreground only
-  qiqi-agent-turn.sh wait <agent>    # recovery only; not for polling/progress checks
+  qiqi-agent-turn.sh prompt <agent>  # synchronous; stdin prompt; one turn only
 EOF
   exit 64
 }
@@ -43,10 +50,7 @@ EOF
 mode="$1"
 agent="$2"
 
-case "$mode" in
-  prompt | wait) ;;
-  *) usage ;;
-esac
+[[ "$mode" == "prompt" ]] || usage
 
 if [[ ! "$agent" =~ ^[a-z][a-z0-9_-]{0,31}$ ]]; then
   printf 'ERROR: invalid agent name: %s\n' "$agent" >&2
@@ -85,38 +89,26 @@ finish() {
   local rc=$?
   trap - EXIT
   if [[ "$rc" -eq 0 ]]; then
-    printf 'QIQI_AGENT_TURN_FINISHED agent=%s mode=%s status=success\n' \
-      "$agent" "$mode" >&2
+    printf 'QIQI_AGENT_TURN_FINISHED agent=%s status=success\n' "$agent" >&2
   else
-    printf 'QIQI_AGENT_TURN_FINISHED agent=%s mode=%s status=error exit=%s\n' \
-      "$agent" "$mode" "$rc" >&2
+    printf 'QIQI_AGENT_TURN_FINISHED agent=%s status=error exit=%s\n' \
+      "$agent" "$rc" >&2
   fi
   exit "$rc"
 }
 trap finish EXIT
 
-case "$mode" in
-  prompt)
-    prompt="$(cat)"
-    if [[ -z "${prompt//[[:space:]]/}" ]]; then
-      printf 'ERROR: prompt must not be empty\n' >&2
-      exit 64
-    fi
+prompt="$(cat)"
+if [[ -z "${prompt//[[:space:]]/}" ]]; then
+  printf 'ERROR: prompt must not be empty\n' >&2
+  exit 64
+fi
 
-    prompt_output=""
-    if prompt_output="$(herdr agent prompt "$agent" "$prompt" --wait 2>&1)"; then
-      [[ -z "$prompt_output" ]] || printf '%s\n' "$prompt_output"
-    else
-      prompt_rc=$?
-      if [[ "$prompt_output" =~ \"code\"[[:space:]]*:[[:space:]]*\"agent_prompt_stalled\" ]]; then
-        herdr agent prompt "$agent" "$prompt" --wait
-      else
-        [[ -z "$prompt_output" ]] || printf '%s\n' "$prompt_output" >&2
-        exit "$prompt_rc"
-      fi
-    fi
-    ;;
-  wait)
-    herdr agent wait "$agent"
-    ;;
-esac
+prompt_output=""
+if prompt_output="$(herdr agent prompt "$agent" "$prompt" --wait 2>&1)"; then
+  [[ -z "$prompt_output" ]] || printf '%s\n' "$prompt_output"
+else
+  prompt_rc=$?
+  [[ -z "$prompt_output" ]] || printf '%s\n' "$prompt_output" >&2
+  exit "$prompt_rc"
+fi
