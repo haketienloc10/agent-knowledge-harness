@@ -208,12 +208,17 @@ Mỗi agent chỉ có một lifecycle owner tại một thời điểm.
 - Khi tool runner chuyển wrapper thành background terminal, terminal đó vẫn sở
   hữu lifecycle. Việc lượt gọi bên ngoài kết thúc không có nghĩa agent đã hoàn
   thành.
+- Chờ lifecycle terminal là transport wait, không phải một orchestration step.
+  Không dùng short polling để kiểm tra tiến độ.
 - Khi chưa thấy marker `QIQI_AGENT_TURN_FINISHED` từ chính background terminal,
   không gọi thêm `prompt`, `wait`, `agent get` hoặc `agent read` cho cùng agent.
 - `QIQI_AGENT_TURN_BUSY` hoặc `QIQI_AGENT_RESUME_BUSY` nghĩa là owner cũ vẫn tồn
-  tại. Không tạo owner thay thế; tiếp tục theo dõi đúng background terminal đang
-  giữ lock.
+  tại. Không tạo owner thay thế; giữ nguyên background terminal đang giữ lock.
 - Không dùng timeout làm tín hiệu tiến độ và không tạo chuỗi waiter có timeout.
+  Nếu execution runtime yêu cầu explicit wait/poll để chờ chính background
+  process, dùng blocking wait trên process đó với thời gian chờ dài nhất phù hợp.
+  Một wait trả control khi completion marker chưa xuất hiện không tạo
+  orchestration step mới.
 - Chỉ dùng chế độ `wait` khi task đã được gửi nhưng lifecycle owner trước đó đã
   thoát hoặc biến mất:
 
