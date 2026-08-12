@@ -1,6 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# QiQi resume contract
+# --------------------
+# Resume is a lifecycle operation and shares the SAME GLOBAL lock as
+# qiqi-agent-turn.sh. It must not run while any delegated turn or another resume
+# operation is active.
+#
+# If the tool runner displays this invocation under "Background terminals", that
+# does not release the lifecycle lock. QiQi must wait for this same invocation to
+# terminally finish and must not inspect/poll the session in parallel.
+
 usage() {
   cat >&2 <<'EOF'
 Usage:
@@ -75,7 +85,7 @@ runtime_dir="$runtime_base/qiqi-agent-turn-${UID}"
 mkdir -p "$runtime_dir"
 chmod 700 "$runtime_dir"
 
-lock_file="$runtime_dir/${name}.lock"
+lock_file="$runtime_dir/qiqi.lifecycle.lock"
 exec 9>"$lock_file"
 
 if ! flock -n 9; then
