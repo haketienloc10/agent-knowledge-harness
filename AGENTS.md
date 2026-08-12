@@ -1,68 +1,61 @@
 # AGENTS.md
 
-Repo này phát triển hai bộ khung phối hợp với nhau trong multi-repository
-workspace:
+Repo này phát triển hai template phối hợp trong multi-repository workspace:
 
-- `workspace-template/`: QiQi orchestration, task continuity và cross-repo
-  knowledge management;
-- `repo-template/`: workflow tối thiểu cho coding agent trong từng repository
-  con, gồm architecture, verification và knowledge output contract.
+- `workspace-template/`: QiQi control plane, synchronous MCP delegation, task
+  continuity và cross-repo knowledge;
+- `repo-template/`: workflow tối thiểu cho execution agent trong từng Git
+  repository con.
 
-Repo này không chứa tri thức nghiệp vụ thật của một workspace hoặc repository cụ
-thể.
+Repo không chứa tri thức nghiệp vụ thật của một workspace cụ thể.
 
 ## Nguyên tắc
 
-- Giữ QiQi là agent điều phối; không biến QiQi thành coding agent của repo con.
-- Mỗi repository con sở hữu workflow, kiến trúc, domain rule, implementation và
+- QiQi là coordinator, không phải coding agent của repo con.
+- Mọi repo-local work từ QiQi đi qua đúng một synchronous MCP tool:
+  `delegate_repo_task`.
+- MCP tool chỉ trả terminal structured result; không expose progress, status,
+  wait, resume hoặc transcript.
+- Repository con sở hữu architecture, domain rule, implementation và
   verification nội bộ.
-- Workspace sở hữu registry, topology, context điều phối và tri thức cross-repo.
-- Agent repo con không sửa workspace knowledge; nó chỉ trả candidate có evidence
-  cho QiQi xử lý.
-- Mỗi agent chỉ có một lifecycle owner; prompt và wait phải đi qua wrapper có
-  lock theo agent.
-- Ưu tiên Markdown có thể đọc trực tiếp, source of truth rõ và evidence có thể
-  kiểm tra.
-- Không thêm vector database, embedding, service runtime hoặc dependency ngoài
-  khi chưa có nhu cầu đã được chứng minh.
-- Ví dụ trong template phải trung lập, không chứa dữ liệu thật của dự án.
+- Workspace sở hữu registry, topology, task context và tri thức cross-repo.
+- Agent repo con không sửa workspace knowledge; nó chỉ trả cross-repo impact cho
+  QiQi xử lý.
+- Ưu tiên artifact nhỏ, source of truth rõ và evidence có thể kiểm tra.
+- Không thêm daemon, watcher, session manager hoặc observability primitive khi
+  chưa có nhu cầu thực tế.
 
 ## Khi thay đổi Workspace Template
 
-1. Kiểm tra quy tắc mới có chồng chéo với `AGENTS.md`, `KNOWLEDGE.md`,
-   `SYSTEM_MAP.md`, `.qiqi/tasks/` hoặc tài liệu repo con hay không.
-2. Ưu tiên sửa router và ownership trước khi thêm loại artifact mới.
-3. Bảo đảm prompt QiQi truyền đủ context nhưng không sao chép toàn bộ knowledge.
-4. Giữ proposal là vùng chờ; durable knowledge cần evidence và scope rõ.
-5. Giữ task document là working context, không phải source of truth mặc định.
-6. Giữ `scripts/qiqi-agent-turn.sh` là đường duy nhất cho prompt và wait; không
-   tạo thêm waiter, watcher hoặc daemon song song.
-7. Nếu thay đổi file bắt buộc, cập nhật đồng thời setup guide, checker và README
-   liên quan.
+1. Giữ `AGENTS.md`, `identity.md`, MCP server, setup guide, checker và README đồng
+   bộ cùng execution contract.
+2. Không thêm đường delegation thứ hai bằng shell hoặc session manager.
+3. Không thêm `status`, `wait`, `read_transcript`, `resume` hoặc `list_runs` vào
+   MCP server nếu chưa thay đổi policy có chủ đích.
+4. Child run phải one-shot, không recursive delegation và không stream transcript
+   về QiQi.
+5. Repository phải được resolve từ `repos.yaml` và path phải là exact Git root.
+6. Tool result contract phải đủ cho QiQi reconcile mà không tự vào repo kiểm tra.
+7. Nếu thay đổi artifact bắt buộc, cập nhật checker và tài liệu setup cùng lúc.
 
 ## Khi thay đổi Repository Template
 
-1. Giữ template tối thiểu và không tạo sẵn artifact optional rỗng.
-2. Không đưa identity, model routing, session orchestration, workspace task hoặc
-   cross-repo knowledge store xuống repo con.
-3. Bảo vệ Git-root boundary và cấm agent tự sửa repository anh em.
+1. Giữ template tối thiểu và không tạo artifact optional rỗng.
+2. Không đưa workspace orchestration, MCP server hoặc cross-repo knowledge store
+   xuống repo con.
+3. Bảo vệ Git-root boundary và cấm agent sửa repository anh em.
 4. Repo-local knowledge phải cập nhật tại source of truth của repo sở hữu.
-5. Cross-repo knowledge phải được trả về QiQi dưới dạng candidate; không promote
-   trực tiếp từ agent repo con.
-6. Output contract giữa agent con và QiQi phải đồng bộ ở cả
-   `repo-template/AGENTS.md` và `workspace-template/AGENTS.md`.
+5. Cross-repo impact được trả về QiQi; repo agent không promote workspace
+   knowledge trực tiếp.
+6. Final result contract phải tương thích với `delegate_repo_task`.
 
 ## Kiểm tra
 
 Review tối thiểu phải xác nhận:
 
-- mỗi template tự chứa các file mà `AGENTS.md` của nó định tuyến tới;
+- workspace template chỉ expose `delegate_repo_task` cho repo-local execution;
+- child Codex dùng one-shot non-interactive run và structured final output;
+- transcript không trở thành tool result;
 - checker chỉ kiểm tra harness, không chạy test hoặc sửa source sản phẩm;
-- lifecycle wrapper chặn prompt rỗng, giữ lock theo agent và phát completion
-  marker;
-- ranh giới workspace knowledge và repo-local knowledge không bị phá vỡ;
-- candidate chưa xác minh không được truyền hoặc lưu như sự thật;
-- README phản ánh đúng cách cài cả workspace và repo con.
-
-Không sao chép thêm thành phần từ `agent-repo-harness` nếu không phục vụ trực
-tiếp vòng kín QiQi multi-repo hoặc knowledge lifecycle.
+- ranh giới workspace/repo-local knowledge không bị phá vỡ;
+- README phản ánh đúng cách cài cả workspace và repo template.
