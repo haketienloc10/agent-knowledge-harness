@@ -214,25 +214,33 @@ không chờ turn. Không dùng script này để tạo session mới.
 
 Mỗi agent chỉ có một lifecycle owner tại một thời điểm.
 
+- Mỗi thao tác `prompt`, `wait` hoặc `resume` là một lifecycle operation có owner
+  và completion signal xác định. Operation chỉ hoàn thành khi owner kết thúc và
+  phát completion marker tương ứng.
 - Mọi thao tác gửi prompt hoặc chờ agent phải đi qua
   `scripts/qiqi-agent-turn.sh`.
 - `prompt` đọc nội dung từ stdin, từ chối prompt rỗng và giữ lock riêng cho agent
   trong toàn bộ thời gian chờ lifecycle.
 - `scripts/qiqi-agent-resume.sh` dùng cùng lock theo agent trong thời gian phục
   hồi session. Không gửi prompt trước khi resume kết thúc thành công.
-- Terminal process đang chạy `scripts/qiqi-agent-turn.sh` hoặc
-  `scripts/qiqi-agent-resume.sh` là lifecycle owner. Việc tool call bên ngoài
-  kết thúc hoặc chuyển wrapper sang background không có nghĩa lifecycle đã hoàn
-  thành.
+- Process đang chạy `scripts/qiqi-agent-turn.sh` hoặc
+  `scripts/qiqi-agent-resume.sh` là lifecycle owner của operation tương ứng.
+  Trạng thái của execution runtime bên ngoài owner không quyết định completion;
+  chỉ completion marker của owner mới kết thúc lifecycle operation.
+- Nếu QiQi nhận lại quyền điều khiển khi lifecycle operation chưa có completion
+  signal, operation đó vẫn pending. Không diễn giải trạng thái pending thành
+  success, error hoặc blocker và không tạo lifecycle owner khác cho cùng
+  operation.
 - QiQi có thể khởi động nhiều lifecycle độc lập trong cùng một batch. Xác định
   batch trước, tạo các tab hoặc pane cần thiết, start hoặc resume agent và khởi
-  động các turn terminal thuộc batch đó.
-- Sau khi các lifecycle terminal của batch đã được khởi động và các thao tác
-  submit riêng của Claude Code (nếu có) đã hoàn tất, không gọi thêm lệnh Herdr,
-  không polling, không đọc trạng thái và không phát status trung gian. Giữ im
-  lặng cho đến khi tất cả terminal của batch kết thúc.
-- Chỉ tiếp tục điều phối sau khi thu đủ marker `QIQI_AGENT_TURN_FINISHED` hoặc
-  `QIQI_AGENT_RESUME_FINISHED` tương ứng với tất cả lifecycle trong batch.
+  động các turn thuộc batch đó.
+- Sau khi tất cả lifecycle operation của batch đã được khởi động và các thao tác
+  submit riêng của Claude Code (nếu có) đã hoàn tất, batch bước vào barrier.
+  Trong barrier, không tạo operation thay thế, không polling Herdr, không đọc
+  trạng thái và không phát status trung gian. Barrier chỉ mở khi mọi lifecycle
+  operation ban đầu của batch đã phát completion signal.
+- Chỉ tiếp tục điều phối khi barrier của batch đã mở. Thiếu completion signal của
+  bất kỳ operation nào có nghĩa batch vẫn pending, không phải blocker.
 - `QIQI_AGENT_TURN_BUSY` hoặc `QIQI_AGENT_RESUME_BUSY` nghĩa là agent đó đã có
   lifecycle owner. Không tạo owner thay thế.
 - Không dùng timeout làm tín hiệu tiến độ. Nếu wrapper kết thúc với
@@ -258,16 +266,16 @@ thuận.
 
 ## Quản lý Trạng thái Phiên
 
-Chỉ xử lý trạng thái sau khi tất cả lifecycle terminal trong batch đã kết thúc.
+Chỉ xử lý trạng thái sau khi tất cả lifecycle operation trong batch đã hoàn tất.
 
 - `status=success`: đọc báo cáo cuối đúng một lần và kiểm tra output yêu cầu.
 - `status=error`: đọc lỗi hoặc output liên quan đúng một lần, ghi blocker và quyết
   định bước tiếp theo; không tự suy đoán trạng thái agent từ tiến độ trung gian.
-- Nếu terminal kết thúc mà không có completion marker, coi lifecycle là bất
-  thường và báo blocker; không tự tạo waiter, prompt hoặc resume thay thế.
+- Nếu lifecycle owner kết thúc mà không có completion marker, coi lifecycle là
+  bất thường và báo blocker; không tự tạo waiter, prompt hoặc resume thay thế.
 
 Nếu cần thêm một turn cho cùng task, chỉ khởi động turn mới sau khi lifecycle
-terminal trước đã kết thúc.
+operation trước đã hoàn tất.
 
 Nếu output terminal bị cắt hoặc thiếu một phần của báo cáo đã có, không yêu cầu
 agent điều tra hoặc tóm tắt lại. Yêu cầu chính phiên đó ghi báo cáo đầy đủ vào
