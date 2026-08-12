@@ -1,0 +1,8 @@
+[mcp_servers.qiqi_delegate]
+command = "bash"
+args = ["scripts/qiqi-mcp-server.sh"]
+startup_timeout_sec = 30
+tool_timeout_sec = 7200
+required = true
+enabled_tools = ["delegate_repo_task"]
+default_tools_approval_mode = "approve"
