@@ -1,11 +1,39 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# QiQi usage contract
+# -------------------
+# This script is the synchronous boundary for a delegated agent turn.
+# If QiQi reads this file, the rules below are part of the operating contract,
+# not implementation suggestions.
+#
+# Normal flow:
+#   1. Invoke `prompt` in the FOREGROUND.
+#   2. Remain blocked until this command returns terminal completion.
+#   3. Reconcile the returned final result.
+#   4. Only then may QiQi create the next delegated turn.
+#
+# Required invariants:
+#   - Never background, detach, nohup, disown, or fire-and-forget this wrapper.
+#   - Never start another delegated turn while the current turn is active.
+#   - Never poll `herdr agent get/read`, process state, PID, timeout, or transcript
+#     to infer progress during the normal blocking path.
+#   - Do not bypass this wrapper by calling `herdr agent prompt` directly.
+#   - `wait` is RECOVERY ONLY when a previously-owned turn lost its waiter; it is
+#     not a normal progress/status mechanism and must not be used in a loop.
+#   - `QIQI_AGENT_TURN_BUSY` means an owner already exists. Do not retry/poll;
+#     reconcile the existing owner according to workspace AGENTS.md.
+#   - `QIQI_AGENT_TURN_FINISHED` means this wrapper turn reached terminal
+#     completion. It does NOT by itself mean the overall user task is complete.
+#
+# Workspace `AGENTS.md` is the source of truth when this contract needs more
+# context. Keep this script's usage contract aligned with that policy.
+
 usage() {
   cat >&2 <<'EOF'
 Usage:
-  qiqi-agent-turn.sh prompt <agent>  # read prompt from stdin
-  qiqi-agent-turn.sh wait <agent>
+  qiqi-agent-turn.sh prompt <agent>  # synchronous; read prompt from stdin; foreground only
+  qiqi-agent-turn.sh wait <agent>    # recovery only; not for polling/progress checks
 EOF
   exit 64
 }
