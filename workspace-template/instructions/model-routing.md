@@ -31,6 +31,10 @@ hàng để khớp đúng inventory.
 | `{{AGENT_2_KIND}}` | `{{MODEL_2_ID}}` | `{{AGENT_2_ARGUMENTS}}` | `{{AGENT_2_RESUME_ARGUMENTS}}` | `{{MODEL_2_EVIDENCE}}` | `{{MODEL_2_STRENGTHS}}` | `{{MODEL_2_WEAKNESSES}}` | `{{MODEL_2_USE_CASES}}` | `{{MODEL_2_AVOID}}` | `{{MODEL_2_EFFORT}}` | `{{MODEL_2_CONCURRENCY}}` |
 | `{{AGENT_3_KIND}}` | `{{MODEL_3_ID}}` | `{{AGENT_3_ARGUMENTS}}` | `{{AGENT_3_RESUME_ARGUMENTS}}` | `{{MODEL_3_EVIDENCE}}` | `{{MODEL_3_STRENGTHS}}` | `{{MODEL_3_WEAKNESSES}}` | `{{MODEL_3_USE_CASES}}` | `{{MODEL_3_AVOID}}` | `{{MODEL_3_EFFORT}}` | `{{MODEL_3_CONCURRENCY}}` |
 
+`Giới hạn song song` là **capability metadata của model/provider**, không phải
+quyền cho QiQi chạy nhiều delegated turn cùng lúc. `AGENTS.md` hiện quy định một
+phiên QiQi chỉ có một active delegated turn tại một thời điểm.
+
 ## Profile Định tuyến
 
 Một model có thể phục vụ nhiều profile.
@@ -52,7 +56,8 @@ Một model có thể phục vụ nhiều profile.
 4. Lấy agent kind, model ID và native arguments chính xác từ inventory.
 5. Khi resume, lấy native resume arguments từ đúng hàng inventory và kết hợp với
    session ID đã lưu; không suy ra từ native arguments khởi động mới.
-6. Kiểm tra giới hạn song song trước khi tạo phiên.
+6. Đọc concurrency/capacity chỉ như metadata môi trường; không dùng nó để bypass
+   lifecycle serialization trong `AGENTS.md`.
 7. Ghi lựa chọn trong task context khi nó ảnh hưởng chi phí, độ trễ hoặc chất
    lượng.
 
@@ -69,13 +74,13 @@ Chỉ chuyển sang model mạnh hơn khi có evidence về giới hạn năng l
 Không chuyển model chỉ vì thiếu dependency, quyền truy cập, command môi trường
 fail, repository thiếu tài liệu, yêu cầu chưa rõ hoặc test baseline đang đỏ.
 
-## Quy tắc Song song
+## Concurrency Metadata
 
-- Tổng số phiên không vượt giới hạn nhỏ nhất của model, provider và máy local.
-- Không khởi động nhiều agent cùng model khi quota hoặc capacity chưa xác nhận.
-- Ưu tiên giảm concurrency thay vì để nhiều phiên tranh CPU, RAM, I/O hoặc quota.
-- Không chạy hai phiên sửa cùng repository/working tree nếu không có worktree
-  isolation được chấp thuận.
+- Ghi giới hạn model/provider để phục vụ capacity planning và thay đổi policy
+  trong tương lai.
+- Metadata này không cho phép QiQi tạo active turn thứ hai.
+- Policy thực thi hiện tại luôn theo `AGENTS.md`: turn mới chỉ bắt đầu sau khi turn
+  hiện tại terminally complete và đã reconcile.
 
 ## Output QiQi Cần Ghi nhận
 
