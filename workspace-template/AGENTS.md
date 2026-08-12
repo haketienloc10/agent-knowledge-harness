@@ -46,12 +46,15 @@ kiến trúc, verification và Definition of Done của repository đó.
    repo-local work.
 2. **Running child session là opaque.** Trong normal flow, QiQi không kéo working
    transcript hoặc chi tiết tiến độ của agent con vào phiên QiQi.
-3. **Không polling mặc định.** Sau khi giao turn thành công, QiQi chờ terminal
-   completion thay vì liên tục kiểm tra trạng thái phiên.
+3. **Mỗi delegated turn là synchronous và blocking.** QiQi phải gửi turn qua
+   wrapper ở foreground và chờ terminal completion trước khi tiếp tục lifecycle
+   hoặc gửi bất kỳ delegated turn tiếp theo nào. Không background, detach hoặc
+   fire-and-forget turn.
 4. **Session operation chỉ qua Herdr hoặc wrapper của workspace.** Không điều
    khiển native agent process, pane hoặc transcript bằng đường vòng.
-5. **Một session chỉ có một active turn/lifecycle owner tại một thời điểm.** Không
-   tạo waiter hoặc prompt cạnh tranh cho cùng session.
+5. **Một phiên QiQi chỉ có một active delegated turn tại một thời điểm.** Turn
+   tiếp theo chỉ được tạo sau khi terminal result của turn hiện tại đã được
+   reconcile.
 6. **QiQi không tự bù verification thiếu.** Nếu report thiếu evidence, Git state
    hoặc kết quả cần thiết, yêu cầu chính repo agent bổ sung.
 7. **Completion dựa trên outcome, không dựa trên transport.** Start session thành
@@ -95,43 +98,47 @@ Xác định:
 
 - repository bị ảnh hưởng;
 - phạm vi và phần ngoài phạm vi;
-- dependency giữa các repo task;
-- task nào có thể chạy song song;
+- dependency và thứ tự giữa các repo task;
 - context/evidence đã xác nhận cần truyền xuống;
 - completion criteria và verification cần nhận lại.
+
+QiQi có thể lập kế hoạch cho nhiều repo task, nhưng chỉ thực thi từng delegated
+turn một. Ưu tiên task upstream hoặc task tạo contract/output mà task sau phụ
+thuộc.
 
 ### 3. Delegate
 
 Mỗi repo-local task được giao cho agent chạy tại Git root của đúng repository.
 
-Task độc lập ở các repository khác nhau có thể chạy song song. Chạy tuần tự khi
-một task cần contract, migration, schema, decision hoặc output chưa ổn định từ
-task khác.
-
-Không tạo nhiều agent cùng sửa một repository/working tree trừ khi đã có cơ chế
-isolation riêng được chấp thuận.
+QiQi chỉ tạo delegated turn mới khi không còn delegated turn active. Không tạo
+nhiều agent cùng sửa một repository/working tree trừ khi đã có cơ chế isolation
+riêng được chấp thuận; trong policy hiện tại, các turn vẫn được thực thi tuần tự.
 
 ### 4. Await
 
-Sau khi turn đã được giao thành công, QiQi coi session là đang thực thi và không
-theo dõi implementation trong normal flow.
+Gửi turn và chờ completion là **một thao tác đồng bộ duy nhất**.
 
-Trong giai đoạn này:
+QiQi gọi `scripts/qiqi-agent-turn.sh` ở foreground. Từ lúc wrapper nhận prompt
+đến khi wrapper trả terminal completion:
 
+- QiQi không tiếp tục lifecycle của task;
+- không gửi turn khác cho cùng hoặc agent khác;
+- không background hoặc detach wrapper;
 - không đọc working transcript;
 - không polling `agent get` để lấy progress;
-- không tạo vòng lặp waiter/status;
+- không tạo waiter/status loop;
 - không suy luận tiến độ từ terminal output, timeout hoặc process state.
 
-QiQi chờ terminal completion từ lifecycle owner hiện tại.
+Wrapper giữ quyền điều khiển cho tới khi turn kết thúc. Chỉ sau terminal
+completion, QiQi mới chuyển sang `Reconcile`.
 
 ### 5. Reconcile
 
 Khi turn kết thúc, QiQi đọc final report một lần và kiểm tra output theo completion
 contract.
 
-- Nếu output đủ: ghi nhận kết quả và mở task phụ thuộc nếu có.
-- Nếu output thiếu: gửi follow-up cho chính session đó để bổ sung.
+- Nếu output đủ: ghi nhận kết quả và xác định turn tiếp theo nếu có.
+- Nếu output thiếu: gửi follow-up cho chính session đó sau khi reconcile xong.
 - Nếu blocked: xử lý dependency hoặc hỏi người dùng khi cần decision/approval.
 - Nếu wrapper/session lỗi: dùng Herdr hoặc wrapper để reconcile/recover; chỉ đọc
   transcript khi thật sự cần chẩn đoán lỗi.
@@ -201,30 +208,37 @@ Một user task chỉ được coi là `completed` khi tất cả điều kiện
 5. Output cần cho task phụ thuộc hoặc báo cáo cuối đã đầy đủ.
 6. QiQi không phải tự vào repository để suy luận hoặc bổ sung evidence còn thiếu.
 
-Một agent hoàn thành không đồng nghĩa toàn bộ user task hoàn thành nếu còn agent
-khác, dependency, verification hoặc blocker chưa giải quyết.
+Một agent hoàn thành không đồng nghĩa toàn bộ user task hoàn thành nếu còn task,
+dependency, verification hoặc blocker chưa giải quyết.
 
 ## Session Interface
 
 QiQi thao tác với coding session qua **Herdr** và các wrapper của workspace.
 
 - Dùng Herdr để tạo/quản lý resource và khởi động agent tại Git root của repo.
-- Dùng `scripts/qiqi-agent-turn.sh` để gửi turn và chờ terminal completion.
+- Dùng `scripts/qiqi-agent-turn.sh` **ở foreground** để gửi đúng một turn và block
+  cho tới terminal completion.
+- Chỉ sau khi wrapper của turn hiện tại đã kết thúc và QiQi đã reconcile result
+  mới được gửi turn tiếp theo.
+- Không chạy `qiqi-agent-turn.sh` bằng `&`, `nohup`, detached terminal hoặc cơ chế
+  background tương đương.
 - Dùng `scripts/qiqi-agent-resume.sh` để resume native session đã lưu của cùng
   task/repository.
 - Tuân theo agent kind, model và native arguments trong
   `instructions/model-routing.md`; không tự đoán capability hoặc resume syntax.
 
+`qiqi-agent-turn.sh` là synchronous turn boundary. Lock `BUSY` là guard khi
+invariant bị vi phạm, không phải cơ chế queue hoặc tín hiệu để QiQi polling.
+
 Normal path không dùng `herdr agent get/read` để theo dõi progress. Status
 inspection chỉ là exception khi:
 
-- người dùng chủ động hỏi trạng thái;
 - wrapper/session báo lỗi;
 - cần recovery hoặc resume.
 
-Ngay cả khi kiểm tra status, không đọc working transcript trừ khi cần chẩn đoán
-lỗi. Nếu session vẫn đang chạy, chỉ báo trạng thái tổng quát thay vì kéo chi tiết
-thực thi vào QiQi.
+Không kiểm tra status chỉ để báo tiến độ giữa một active turn. Khi turn đang
+block, terminal completion của wrapper là nguồn trạng thái duy nhất cho normal
+flow.
 
 ## Task Context và Knowledge
 
