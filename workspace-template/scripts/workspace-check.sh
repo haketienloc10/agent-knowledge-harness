@@ -23,9 +23,9 @@ require_dir() {
   [[ -d "$path" ]] || fail "missing directory: ${path#$workspace_root/}"
 }
 
-require_command git
-require_command rg
-require_command flock
+for command in git rg uv python3 yq; do
+  require_command "$command"
+done
 
 required_files=(
   AGENTS.md
@@ -38,8 +38,11 @@ required_files=(
   knowledge/proposals/TEMPLATE.md
   .qiqi/tasks/TEMPLATE.md
   instructions/model-routing.md
-  scripts/qiqi-agent-turn.sh
-  scripts/qiqi-agent-resume.sh
+  .codex/config.toml
+  mcp/qiqi_delegate/pyproject.toml
+  mcp/qiqi_delegate/server.py
+  scripts/qiqi-mcp-server.sh
+  scripts/workspace-check.sh
   docs/WORKSPACE_SETUP.md
 )
 
@@ -76,112 +79,99 @@ if ((${#existing_managed_files[@]} > 0)) && \
   fail 'unresolved placeholder(s) found in workspace configuration'
 fi
 
-if [[ -f "$workspace_root/AGENTS.md" ]]; then
-  rg -q '`identity\.md`' "$workspace_root/AGENTS.md" || \
-    fail 'AGENTS.md: must route QiQi to identity.md'
-  rg -q '`repos\.yaml`' "$workspace_root/AGENTS.md" || \
-    fail 'AGENTS.md: must route QiQi to repos.yaml'
-  rg -q '`SYSTEM_MAP\.md`' "$workspace_root/AGENTS.md" || \
-    fail 'AGENTS.md: must route QiQi to SYSTEM_MAP.md'
-  rg -q '`KNOWLEDGE\.md`' "$workspace_root/AGENTS.md" || \
-    fail 'AGENTS.md: must route QiQi to KNOWLEDGE.md'
-  rg -q '`instructions/model-routing\.md`' "$workspace_root/AGENTS.md" || \
-    fail 'AGENTS.md: must route QiQi to model routing'
-  rg -q '`scripts/qiqi-agent-turn\.sh`' "$workspace_root/AGENTS.md" || \
-    fail 'AGENTS.md: must route delegated turns through qiqi-agent-turn.sh'
-  rg -q '`scripts/qiqi-agent-resume\.sh`' "$workspace_root/AGENTS.md" || \
-    fail 'AGENTS.md: must route closed-session resume through qiqi-agent-resume.sh'
-  rg -q 'QIQI_AGENT_TURN_FINISHED' "$workspace_root/AGENTS.md" || \
-    fail 'AGENTS.md: missing turn completion marker'
-  rg -q 'QIQI_AGENT_TURN_BUSY' "$workspace_root/AGENTS.md" || \
-    fail 'AGENTS.md: missing active-owner behavior'
-  rg -qi 'transport backgrounding|Background terminals' "$workspace_root/AGENTS.md" || \
-    fail 'AGENTS.md: missing transport-background blocking rule'
-  rg -q 'HERDR_ENV=1' "$workspace_root/AGENTS.md" || \
-    fail 'AGENTS.md: must require HERDR_ENV=1 before session control'
-  rg -q '`\.qiqi/tasks/' "$workspace_root/AGENTS.md" || \
-    fail 'AGENTS.md: must define task-context routing'
+policy_files=(
+  "$workspace_root/AGENTS.md"
+  "$workspace_root/identity.md"
+  "$workspace_root/README.md"
+  "$workspace_root/docs/WORKSPACE_SETUP.md"
+  "$workspace_root/instructions/model-routing.md"
+)
 
-  if rg -q 'qiqi-agent-turn\.sh wait' "$workspace_root/AGENTS.md"; then
-    fail 'AGENTS.md: turn wrapper must not expose wait mode'
+existing_policy_files=()
+for path in "${policy_files[@]}"; do
+  [[ -f "$path" ]] && existing_policy_files+=("$path")
+done
+
+if ((${#existing_policy_files[@]} > 0)) && \
+  rg -n 'Herdr|HERDR_ENV|qiqi-agent-turn|qiqi-agent-resume' "${existing_policy_files[@]}"; then
+  fail 'legacy Herdr/session orchestration reference found in MCP-only policy'
+fi
+
+agents="$workspace_root/AGENTS.md"
+if [[ -f "$agents" ]]; then
+  for pattern in \
+    '`identity\.md`' \
+    '`repos\.yaml`' \
+    '`SYSTEM_MAP\.md`' \
+    '`KNOWLEDGE\.md`' \
+    '`instructions/model-routing\.md`' \
+    '`delegate_repo_task`' \
+    '`\.qiqi/tasks/'; do
+    rg -q "$pattern" "$agents" || fail "AGENTS.md: missing required route: $pattern"
+  done
+  rg -q 'Không có polling workflow' "$agents" || \
+    fail 'AGENTS.md: missing no-polling invariant'
+  rg -q 'Không có đường vòng' "$agents" || \
+    fail 'AGENTS.md: missing no-bypass invariant'
+fi
+
+codex_config="$workspace_root/.codex/config.toml"
+if [[ -f "$codex_config" ]]; then
+  rg -q '^\[mcp_servers\.qiqi_delegate\]$' "$codex_config" || \
+    fail '.codex/config.toml: missing qiqi_delegate MCP server'
+  rg -q 'enabled_tools = \["delegate_repo_task"\]' "$codex_config" || \
+    fail '.codex/config.toml: MCP must expose only delegate_repo_task'
+  rg -q 'tool_timeout_sec = 7200' "$codex_config" || \
+    fail '.codex/config.toml: expected long synchronous tool timeout'
+  rg -q 'required = true' "$codex_config" || \
+    fail '.codex/config.toml: qiqi_delegate must be required'
+fi
+
+launcher="$workspace_root/scripts/qiqi-mcp-server.sh"
+if [[ -f "$launcher" ]]; then
+  bash -n "$launcher" || fail 'qiqi-mcp-server.sh: invalid Bash syntax'
+  rg -q 'uv run --project' "$launcher" || \
+    fail 'qiqi-mcp-server.sh: must launch MCP through uv project'
+  rg -q 'QIQI_WORKSPACE_ROOT' "$launcher" || \
+    fail 'qiqi-mcp-server.sh: must pass workspace root to MCP server'
+fi
+
+server="$workspace_root/mcp/qiqi_delegate/server.py"
+if [[ -f "$server" ]]; then
+  python3 - "$server" <<'PY' || fail 'qiqi_delegate/server.py: invalid Python syntax'
+import pathlib
+import sys
+path = pathlib.Path(sys.argv[1])
+compile(path.read_text(encoding="utf-8"), str(path), "exec")
+PY
+
+  for pattern in \
+    'FastMCP' \
+    'asyncio\.Lock' \
+    'def delegate_repo_task' \
+    '"exec"' \
+    '"--ephemeral"' \
+    '"--output-schema"' \
+    'mcp_servers\.qiqi_delegate\.enabled=false' \
+    'transcript\.log'; do
+    rg -q "$pattern" "$server" || fail "qiqi_delegate/server.py: missing contract: $pattern"
+  done
+
+  if rg -q 'def (status|wait|read_transcript|resume|list_runs)\b' "$server"; then
+    fail 'qiqi_delegate/server.py: progress/session tool must not exist'
   fi
 fi
 
-turn_wrapper="$workspace_root/scripts/qiqi-agent-turn.sh"
-if [[ -f "$turn_wrapper" ]]; then
-  bash -n "$turn_wrapper" || fail 'qiqi-agent-turn.sh: invalid Bash syntax'
-  rg -q 'flock -n' "$turn_wrapper" || \
-    fail 'qiqi-agent-turn.sh: missing non-blocking ownership guard'
-  rg -q 'qiqi\.lifecycle\.lock' "$turn_wrapper" || \
-    fail 'qiqi-agent-turn.sh: must use global QiQi lifecycle lock'
-  rg -q 'prompt must not be empty' "$turn_wrapper" || \
-    fail 'qiqi-agent-turn.sh: must reject empty prompts'
-  rg -q 'QIQI_AGENT_TURN_BUSY' "$turn_wrapper" || \
-    fail 'qiqi-agent-turn.sh: missing busy marker'
-  rg -q 'QIQI_AGENT_TURN_FINISHED' "$turn_wrapper" || \
-    fail 'qiqi-agent-turn.sh: missing completion marker'
-  rg -q 'herdr agent prompt' "$turn_wrapper" || \
-    fail 'qiqi-agent-turn.sh: missing prompt command'
-  rg -q -- '--wait' "$turn_wrapper" || \
-    fail 'qiqi-agent-turn.sh: prompt must synchronously wait for completion'
-  rg -q 'Background terminals' "$turn_wrapper" || \
-    fail 'qiqi-agent-turn.sh: missing transport-background usage contract'
-
-  if rg -q '^[[:space:]]*herdr agent wait([[:space:]]|$)|prompt \| wait|qiqi-agent-turn\.sh wait' "$turn_wrapper"; then
-    fail 'qiqi-agent-turn.sh: wait mode/direct agent wait must not exist'
-  fi
-fi
-
-resume_wrapper="$workspace_root/scripts/qiqi-agent-resume.sh"
-if [[ -f "$resume_wrapper" ]]; then
-  bash -n "$resume_wrapper" || fail 'qiqi-agent-resume.sh: invalid Bash syntax'
-  rg -q 'flock -n' "$resume_wrapper" || \
-    fail 'qiqi-agent-resume.sh: missing non-blocking ownership guard'
-  rg -q 'qiqi\.lifecycle\.lock' "$resume_wrapper" || \
-    fail 'qiqi-agent-resume.sh: must share global QiQi lifecycle lock'
-  rg -q 'native resume arguments must not be empty' "$resume_wrapper" || \
-    fail 'qiqi-agent-resume.sh: must reject empty resume arguments'
-  rg -q 'QIQI_AGENT_RESUME_BUSY' "$resume_wrapper" || \
-    fail 'qiqi-agent-resume.sh: missing busy marker'
-  rg -q 'QIQI_AGENT_RESUME_FINISHED' "$resume_wrapper" || \
-    fail 'qiqi-agent-resume.sh: missing completion marker'
-  rg -q 'herdr agent start' "$resume_wrapper" || \
-    fail 'qiqi-agent-resume.sh: missing agent start command'
-  rg -q -- '--kind' "$resume_wrapper" || \
-    fail 'qiqi-agent-resume.sh: missing agent kind forwarding'
-  rg -q -- '--pane' "$resume_wrapper" || \
-    fail 'qiqi-agent-resume.sh: missing pane forwarding'
-fi
-
-if [[ -f "$workspace_root/KNOWLEDGE.md" ]]; then
-  rg -q 'knowledge/INDEX\.md' "$workspace_root/KNOWLEDGE.md" || \
-    fail 'KNOWLEDGE.md: must route through knowledge/INDEX.md'
-  rg -q 'knowledge/proposals/' "$workspace_root/KNOWLEDGE.md" || \
-    fail 'KNOWLEDGE.md: must define proposal lifecycle'
-  rg -q 'repository con' "$workspace_root/KNOWLEDGE.md" || \
-    fail 'KNOWLEDGE.md: must preserve repo-local ownership'
-fi
-
-if [[ -f "$workspace_root/instructions/model-routing.md" ]]; then
-  rg -q 'Agent kind' "$workspace_root/instructions/model-routing.md" || \
-    fail 'model-routing.md: missing agent kind inventory'
-  rg -q 'Model ID' "$workspace_root/instructions/model-routing.md" || \
-    fail 'model-routing.md: missing exact model ID inventory'
-  rg -q 'Native arguments' "$workspace_root/instructions/model-routing.md" || \
-    fail 'model-routing.md: missing native arguments'
-  rg -q 'Native resume arguments' "$workspace_root/instructions/model-routing.md" || \
-    fail 'model-routing.md: missing native resume arguments'
-  rg -q 'một active delegated turn' "$workspace_root/instructions/model-routing.md" || \
-    fail 'model-routing.md: concurrency metadata must not override serialized QiQi policy'
+routing="$workspace_root/instructions/model-routing.md"
+if [[ -f "$routing" ]]; then
+  rg -q 'Model ID' "$routing" || fail 'model-routing.md: missing Model ID'
+  rg -q 'Reasoning effort' "$routing" || fail 'model-routing.md: missing reasoning effort'
   for profile in fast balanced deep verifier; do
-    rg -q "\`$profile\`" "$workspace_root/instructions/model-routing.md" || \
-      fail "model-routing.md: missing $profile profile"
+    rg -q "\`$profile\`" "$routing" || fail "model-routing.md: missing $profile profile"
   done
 fi
 
-if ! command -v yq >/dev/null 2>&1; then
-  fail 'missing required command: yq version 4'
-elif ! yq --version 2>&1 | rg -q 'version v?4\.'; then
+if ! yq --version 2>&1 | rg -q 'version v?4\.'; then
   fail 'unsupported yq version; install yq version 4'
 else
   if ! yq -e '.workspace.name | type == "!!str" and length > 0' \
@@ -193,25 +183,17 @@ else
     "$workspace_root/repos.yaml" >/dev/null; then
     fail 'repos.yaml: repositories must be a non-empty list'
   else
-    mapfile -t repository_names < <(
-      yq -r '.repositories[].name' "$workspace_root/repos.yaml"
-    )
-    mapfile -t repository_paths < <(
-      yq -r '.repositories[].path' "$workspace_root/repos.yaml"
-    )
+    mapfile -t repository_names < <(yq -r '.repositories[].name' "$workspace_root/repos.yaml")
+    mapfile -t repository_paths < <(yq -r '.repositories[].path' "$workspace_root/repos.yaml")
 
     for index in "${!repository_names[@]}"; do
       name="${repository_names[$index]}"
       path="${repository_paths[$index]}"
 
-      [[ -n "$name" && "$name" != "null" ]] || \
-        fail 'repos.yaml: repository name is empty'
-      [[ -n "$path" && "$path" != "null" ]] || \
-        fail "repos.yaml: ${name}: path is empty"
-      [[ "$path" != /* ]] || \
-        fail "repos.yaml: ${name}: path must be relative"
-      [[ "$path" != *'..'* ]] || \
-        fail "repos.yaml: ${name}: path must not contain .."
+      [[ -n "$name" && "$name" != "null" ]] || fail 'repos.yaml: repository name is empty'
+      [[ -n "$path" && "$path" != "null" ]] || fail "repos.yaml: ${name}: path is empty"
+      [[ "$path" != /* ]] || fail "repos.yaml: ${name}: path must be relative"
+      [[ "$path" != *'..'* ]] || fail "repos.yaml: ${name}: path must not contain .."
 
       module_root="$workspace_root/$path"
       if ! git -C "$module_root" rev-parse --show-toplevel >/dev/null 2>&1; then
@@ -225,8 +207,7 @@ else
     done
 
     duplicate_names="$(printf '%s\n' "${repository_names[@]}" | sort | uniq -d)"
-    [[ -z "$duplicate_names" ]] || \
-      fail "repos.yaml: duplicate repository name(s): $duplicate_names"
+    [[ -z "$duplicate_names" ]] || fail "repos.yaml: duplicate repository name(s): $duplicate_names"
   fi
 fi
 
