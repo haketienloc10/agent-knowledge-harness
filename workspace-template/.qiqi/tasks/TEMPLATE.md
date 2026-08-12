@@ -18,22 +18,24 @@ tất.
 
 ## Tiến độ
 
+Chỉ ghi milestone hoặc terminal outcome có giá trị qua nhiều lượt. Không ghi
+working transcript hoặc progress polling.
+
+## Delegation đã hoàn tất
+
+| Repository | Run ID | Model/profile | Outcome | Verification chính |
+|---|---|---|---|---|
+
+Chỉ ghi delegation sau khi MCP tool đã return terminal result. Không có session
+ID, waiter, progress state hoặc resume lifecycle.
+
 ## Blocker hoặc câu hỏi mở
 
 ## Verification evidence
 
-## Phiên agent
-
-| Repository/path | Agent name | Agent kind | Model/profile | Native session ID | Trạng thái | Mục tiêu |
-|---|---|---|---|---|---|---|
-
-Ghi `Native session ID` trước khi đóng pane khi task có thể cần tiếp tục. Khi
-resume, dùng đúng agent kind và model/profile để lấy native resume arguments từ
-model routing; không suy đoán từ tên agent.
-
 ## Ứng viên tri thức lâu bền
 
-Chỉ ghi các phát hiện có khả năng dùng lại. Nếu cần giữ, tạo proposal trong
+Chỉ ghi phát hiện có khả năng dùng lại. Nếu cần giữ, tạo proposal trong
 `knowledge/proposals/`; không chép thẳng toàn bộ task sang durable knowledge.
 
 ## Kết quả cuối
