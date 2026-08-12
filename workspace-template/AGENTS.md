@@ -231,9 +231,11 @@ native session ID cùng repository path.
 pane, không chọn model, không suy đoán native arguments, không gửi prompt và
 không chờ turn. Không dùng script này để tạo session mới.
 
-## Single-flight Lifecycle
+## Vòng đời Single-flight và Trạng thái Phiên
 
 Mỗi agent chỉ có một lifecycle owner tại một thời điểm.
+
+### Gửi prompt và giữ khoá
 
 - Mọi thao tác gửi prompt hoặc chờ agent phải đi qua
   `scripts/qiqi-agent-turn.sh`.
@@ -241,6 +243,9 @@ Mỗi agent chỉ có một lifecycle owner tại một thời điểm.
   trong toàn bộ thời gian chờ lifecycle.
 - `scripts/qiqi-agent-resume.sh` dùng cùng lock theo agent trong thời gian phục
   hồi session. Không gửi prompt trước khi resume kết thúc thành công.
+
+### Trong khi chờ marker
+
 - Khi chưa thấy marker `QIQI_AGENT_TURN_FINISHED` từ chính background terminal,
   không gọi thêm `prompt`, `wait`, `agent get` hoặc `agent read` cho cùng agent;
   cũng không dùng `ps`, PID, `kill -0`, `sleep`, polling hoặc timeout để kiểm tra,
@@ -260,15 +265,37 @@ Mỗi agent chỉ có một lifecycle owner tại một thời điểm.
   bash scripts/qiqi-agent-turn.sh wait <agent>
   ```
 
-- Khi Đại ca yêu cầu trạng thái, có thể gọi `herdr agent get <agent>` đúng một
-  lần. Nếu trạng thái là `working`, không đọc transcript và không tạo waiter
-  mới. Nếu trạng thái là `idle` hoặc `done` nhưng chưa có marker, gọi
+### Khi người dùng hỏi trạng thái giữa lúc chờ
+
+- Có thể gọi `herdr agent get <agent>` đúng một lần. Nếu trạng thái là
+  `working`, không đọc transcript và không tạo waiter mới. Nếu trạng thái là
+  `idle` hoặc `done` nhưng chưa có marker, gọi
   `bash scripts/qiqi-agent-turn.sh wait <agent>` đúng một lần để thu marker; nếu
   nhận `QIQI_AGENT_TURN_BUSY`, giữ trạng thái `active/unknown`, không tạo thêm
   prompt, waiter, polling hoặc suy luận nguyên nhân từ output transport.
 - Nếu wrapper kết thúc với `status=error`, gọi `herdr agent get <agent>` đúng một
   lần để reconcile. Chỉ khởi động một `wait` mới sau khi xác nhận wrapper cũ đã
   kết thúc và agent vẫn `working`.
+
+### Sau khi marker báo hoàn tất, xử lý theo trạng thái
+
+- `blocked`: đọc output một lần, xử lý câu hỏi hoặc approval; chỉ hỏi người dùng
+  khi artifact hiện có không đủ.
+- `done` hoặc `idle`: đọc báo cáo cuối đúng một lần và kiểm tra output yêu cầu.
+- `working`: chỉ hợp lệ sau một lỗi wrapper đã được reconcile; tạo đúng một
+  lifecycle owner mới bằng chế độ `wait`.
+- `unknown`: không coi là hoàn thành; dùng `agent get` rồi chỉ đọc transcript khi
+  cần chẩn đoán.
+
+### Khi báo cáo bị cắt hoặc thiếu nội dung
+
+- Nếu output terminal bị cắt hoặc thiếu một phần của báo cáo đã có, không yêu cầu
+  agent điều tra hoặc tóm tắt lại. Yêu cầu chính phiên đó ghi báo cáo đầy đủ vào
+  một file dưới `tmp/` của workspace, cho phép rõ việc ghi file này ngoài Git
+  root, rồi QiQi đọc file để lấy kết quả đầy đủ.
+- Nếu báo cáo thiếu nguyên nhân, thay đổi, verification, Git state, repo-local
+  knowledge, cross-repo knowledge candidate, blocker hoặc bước tiếp theo, yêu cầu
+  chính phiên đó bổ sung bằng một turn mới qua wrapper trước khi đóng.
 
 ## Song song và Thứ tự
 
@@ -282,27 +309,6 @@ Có thể chạy song song khi task:
 Phải chạy tuần tự khi consumer cần contract, migration, schema hoặc quyết định
 từ producer. Không tạo nhiều agent cùng sửa một repository hoặc working tree
 trừ khi có cơ chế worktree isolation được chấp thuận.
-
-## Quản lý Trạng thái Phiên
-
-Sau khi lifecycle owner phát marker hoàn tất:
-
-- `blocked`: đọc output một lần, xử lý câu hỏi hoặc approval; chỉ hỏi người dùng
-  khi artifact hiện có không đủ.
-- `done` hoặc `idle`: đọc báo cáo cuối đúng một lần và kiểm tra output yêu cầu.
-- `working`: chỉ hợp lệ sau một lỗi wrapper đã được reconcile; tạo đúng một
-  lifecycle owner mới bằng chế độ `wait`.
-- `unknown`: không coi là hoàn thành; dùng `agent get` rồi chỉ đọc transcript khi
-  cần chẩn đoán.
-
-Nếu output terminal bị cắt hoặc thiếu một phần của báo cáo đã có, không yêu cầu
-agent điều tra hoặc tóm tắt lại. Yêu cầu chính phiên đó ghi báo cáo đầy đủ vào
-một file dưới `tmp/` của workspace, cho phép rõ việc ghi file này ngoài Git root,
-rồi QiQi đọc file để lấy kết quả đầy đủ.
-
-Nếu báo cáo thiếu nguyên nhân, thay đổi, verification, Git state, repo-local
-knowledge, cross-repo knowledge candidate, blocker hoặc bước tiếp theo, yêu cầu
-chính phiên đó bổ sung bằng một turn mới qua wrapper trước khi đóng.
 
 ## Xử lý Tri thức từ Agent con
 
