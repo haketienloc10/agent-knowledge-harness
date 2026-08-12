@@ -81,6 +81,42 @@ Không hỏi người dùng về chi tiết mà agent con có thể tự khám p
 Phải hỏi khi thiếu product decision, breaking contract, quyền truy cập, dữ liệu
 hoặc approval cho hành động khó đảo ngược.
 
+## Vòng đời Điều phối của QiQi
+
+Mỗi yêu cầu của người dùng là một lifecycle do QiQi sở hữu:
+
+1. Tiếp nhận yêu cầu, xác định kết quả, phạm vi và repository liên quan.
+2. Chuẩn bị context, dependency, quyết định và verification cần nhận.
+3. Chọn một trong hai nhánh:
+   - QiQi xử lý trực tiếp nếu không cần thao tác trong repository con.
+   - Tạo và giao phiên Herdr nếu cần điều tra, thay đổi hoặc verification tại
+     repository con.
+4. Khi đã gửi task qua `scripts/qiqi-agent-turn.sh`, giữ lifecycle ở trạng thái
+   `active` cho đến khi lifecycle owner phát marker hoàn tất và QiQi xử lý trạng
+   thái phiên.
+5. Thu và kiểm tra kết quả, verification, Git state, blocker và knowledge từ các
+   phiên; tiếp tục phiên hoặc bắt đầu task phụ thuộc nếu output chưa đủ.
+6. Cập nhật task/knowledge artifact, lưu session ID cần thiết và đóng resource do
+   QiQi tạo.
+7. Chỉ sau đó mới tổng hợp và báo cáo kết quả cuối cho người dùng.
+
+Lifecycle có các trạng thái tổng thể sau:
+
+- `active`: QiQi đang xử lý trực tiếp hoặc còn lifecycle owner, task phụ thuộc hay
+  verification cần hoàn thành.
+- `waiting_user`: công việc cần product decision, quyền, dữ liệu hoặc approval chỉ
+  người dùng có thể cung cấp; task chưa được coi là hoàn thành.
+- `completed`: kết quả yêu cầu đã đạt và verification bắt buộc đã đủ.
+- `cancelled`: người dùng hủy hoặc thay thế yêu cầu và mọi phiên đang chạy đã được
+  dừng hoặc reconcile an toàn.
+
+Việc prompt đã được gửi, `herdr agent start` thành công, tool call trả về hoặc
+chuyển sang background, wrapper phát `status=success`, hay một agent hoàn thành
+không tự kết thúc lifecycle. QiQi không được tuyên bố hoàn thành khi còn agent
+`working`, lifecycle owner chưa phát marker, task phụ thuộc chưa xong hoặc kết
+quả bắt buộc chưa được thu và kiểm tra. Phản hồi trạng thái và câu hỏi xử lý
+blocker không phải báo cáo hoàn thành.
+
 ## Quản lý Task Context
 
 Không bắt buộc tạo task file cho mọi câu hỏi. Tạo file từ
@@ -205,9 +241,6 @@ Mỗi agent chỉ có một lifecycle owner tại một thời điểm.
   trong toàn bộ thời gian chờ lifecycle.
 - `scripts/qiqi-agent-resume.sh` dùng cùng lock theo agent trong thời gian phục
   hồi session. Không gửi prompt trước khi resume kết thúc thành công.
-- Khi tool runner chuyển wrapper thành background terminal, terminal đó vẫn sở
-  hữu lifecycle. Việc lượt gọi bên ngoài kết thúc không có nghĩa agent đã hoàn
-  thành.
 - Khi chưa thấy marker `QIQI_AGENT_TURN_FINISHED` từ chính background terminal,
   không gọi thêm `prompt`, `wait`, `agent get` hoặc `agent read` cho cùng agent.
 - `QIQI_AGENT_TURN_BUSY` hoặc `QIQI_AGENT_RESUME_BUSY` nghĩa là owner cũ vẫn tồn
@@ -310,5 +343,5 @@ Báo cáo theo repository:
 - blocker, rủi ro hoặc quyết định còn lại;
 - task artifact đã cập nhật nếu có.
 
-Không kể lại từng tool call hoặc toàn bộ transcript. Không tuyên bố hoàn thành
-khi verification bắt buộc chưa chạy hoặc đang fail.
+Không kể lại từng tool call hoặc toàn bộ transcript. Trạng thái hoàn thành tuân
+theo mục `Vòng đời Điều phối của QiQi`.
