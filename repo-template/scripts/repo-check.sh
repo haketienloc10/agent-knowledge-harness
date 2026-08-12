@@ -63,48 +63,34 @@ fi
 
 agents="$repo_root/AGENTS.md"
 if [[ -f "$agents" ]]; then
-  rg -q '`ARCHITECTURE\.md`' "$agents" || \
-    fail 'AGENTS.md: must route agent to ARCHITECTURE.md'
-  rg -q '`docs/VERIFY\.md`' "$agents" || \
-    fail 'AGENTS.md: must route agent to docs/VERIFY.md'
-  rg -q 'Git root hiện tại' "$agents" || \
-    fail 'AGENTS.md: missing current Git-root boundary'
-  rg -q 'Không sửa repository anh em' "$agents" || \
-    fail 'AGENTS.md: missing sibling-repository boundary'
-  rg -q '^## Tri thức Repo-local$' "$agents" || \
-    fail 'AGENTS.md: missing repo-local knowledge rules'
-  rg -q '^## Ứng viên Tri thức Cross-repo$' "$agents" || \
-    fail 'AGENTS.md: missing cross-repo candidate rules'
-  rg -q '^## Repo-local knowledge$' "$agents" || \
-    fail 'AGENTS.md: final-report template must include repo-local knowledge'
-  rg -q '^## Cross-repo knowledge candidate$' "$agents" || \
-    fail 'AGENTS.md: final-report template must include cross-repo candidate'
+  rg -q '`ARCHITECTURE\.md`' "$agents" || fail 'AGENTS.md: must route to ARCHITECTURE.md'
+  rg -q '`docs/VERIFY\.md`' "$agents" || fail 'AGENTS.md: must route to docs/VERIFY.md'
+  rg -q 'Git root hiện tại' "$agents" || fail 'AGENTS.md: missing Git-root boundary'
+  rg -q 'Không sửa repository anh em' "$agents" || fail 'AGENTS.md: missing sibling-repository boundary'
+  rg -q '^## Tri thức Repo-local$' "$agents" || fail 'AGENTS.md: missing repo-local knowledge rules'
+  rg -q '^## Ứng viên Tri thức Cross-repo$' "$agents" || fail 'AGENTS.md: missing cross-repo rules'
+  rg -q '^## Final Result Contract$' "$agents" || fail 'AGENTS.md: missing final result contract'
+
+  for field in outcome changes verification git_state blockers repo_local_knowledge cross_repo_impact; do
+    rg -q "\`$field\`" "$agents" || fail "AGENTS.md: final result missing field $field"
+  done
 fi
 
 architecture="$repo_root/ARCHITECTURE.md"
 if [[ -f "$architecture" ]]; then
-  rg -q '^## Repository responsibility$' "$architecture" || \
-    fail 'ARCHITECTURE.md: missing repository responsibility'
-  rg -q '^## Module map$' "$architecture" || \
-    fail 'ARCHITECTURE.md: missing module map'
-  rg -q '^## External boundaries$' "$architecture" || \
-    fail 'ARCHITECTURE.md: missing external boundaries'
-  rg -q '^## Constraints$' "$architecture" || \
-    fail 'ARCHITECTURE.md: missing constraints'
+  rg -q '^## Repository responsibility$' "$architecture" || fail 'ARCHITECTURE.md: missing repository responsibility'
+  rg -q '^## Module map$' "$architecture" || fail 'ARCHITECTURE.md: missing module map'
+  rg -q '^## External boundaries$' "$architecture" || fail 'ARCHITECTURE.md: missing external boundaries'
+  rg -q '^## Constraints$' "$architecture" || fail 'ARCHITECTURE.md: missing constraints'
 fi
 
 verify="$repo_root/docs/VERIFY.md"
 if [[ -f "$verify" ]]; then
-  rg -q '^## Bootstrap$' "$verify" || \
-    fail 'docs/VERIFY.md: missing bootstrap command'
-  rg -q '^## Kiểm tra nhanh$' "$verify" || \
-    fail 'docs/VERIFY.md: missing focused check'
-  rg -q '^## Test liên quan$' "$verify" || \
-    fail 'docs/VERIFY.md: missing related test command'
-  rg -q '^## Build hoặc kiểm tra đầy đủ$' "$verify" || \
-    fail 'docs/VERIFY.md: missing full verification command'
-  rg -q '^## Side effects$' "$verify" || \
-    fail 'docs/VERIFY.md: missing side-effect documentation'
+  rg -q '^## Bootstrap$' "$verify" || fail 'docs/VERIFY.md: missing bootstrap command'
+  rg -q '^## Kiểm tra nhanh$' "$verify" || fail 'docs/VERIFY.md: missing focused check'
+  rg -q '^## Test liên quan$' "$verify" || fail 'docs/VERIFY.md: missing related test command'
+  rg -q '^## Build hoặc kiểm tra đầy đủ$' "$verify" || fail 'docs/VERIFY.md: missing full verification command'
+  rg -q '^## Side effects$' "$verify" || fail 'docs/VERIFY.md: missing side-effect documentation'
 fi
 
 if ((errors > 0)); then
