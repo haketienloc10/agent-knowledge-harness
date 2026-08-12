@@ -1,0 +1,304 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import asyncio
+import hashlib
+import json
+import os
+import shutil
+import subprocess
+import time
+import uuid
+from pathlib import Path
+from typing import Any, Literal
+
+import yaml
+from mcp.server.fastmcp import FastMCP
+
+WORKSPACE_ROOT = Path(
+    os.environ.get(
+        "QIQI_WORKSPACE_ROOT",
+        Path(__file__).resolve().parents[2],
+    )
+).resolve()
+
+RESULT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "outcome": {"type": "string", "enum": ["completed", "blocked"]},
+        "changes": {"type": "array", "items": {"type": "string"}},
+        "verification": {"type": "array", "items": {"type": "string"}},
+        "git_state": {"type": "string"},
+        "blockers": {"type": "array", "items": {"type": "string"}},
+        "repo_local_knowledge": {"type": "array", "items": {"type": "string"}},
+        "cross_repo_impact": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": [
+        "outcome",
+        "changes",
+        "verification",
+        "git_state",
+        "blockers",
+        "repo_local_knowledge",
+        "cross_repo_impact",
+    ],
+    "additionalProperties": False,
+}
+
+INSTRUCTIONS = (
+    "QiQi delegation boundary. Use delegate_repo_task for every repo-local "
+    "investigation, edit, Git inspection, or verification. The tool is synchronous: "
+    "one call owns the entire child-agent turn and returns only after terminal "
+    "completion. Do not poll, inspect progress, start shell-based child agents, or "
+    "look for transcripts while a delegation is active. There are intentionally no "
+    "status, wait, read, resume, or transcript tools."
+)
+
+mcp = FastMCP("QiQi Delegate", instructions=INSTRUCTIONS)
+_delegate_lock = asyncio.Lock()
+
+
+def _load_repo_registry() -> dict[str, Path]:
+    registry_path = WORKSPACE_ROOT / "repos.yaml"
+    if not registry_path.is_file():
+        raise RuntimeError(f"missing workspace registry: {registry_path}")
+
+    data = yaml.safe_load(registry_path.read_text(encoding="utf-8")) or {}
+    repositories = data.get("repositories")
+    if not isinstance(repositories, list):
+        raise RuntimeError("repos.yaml: repositories must be a list")
+
+    result: dict[str, Path] = {}
+    for entry in repositories:
+        if not isinstance(entry, dict):
+            continue
+        name = entry.get("name")
+        relative_path = entry.get("path")
+        if not isinstance(name, str) or not isinstance(relative_path, str):
+            continue
+        if "{{" in name or "{{" in relative_path:
+            continue
+
+        repo = (WORKSPACE_ROOT / relative_path).resolve()
+        try:
+            repo.relative_to(WORKSPACE_ROOT)
+        except ValueError as exc:
+            raise RuntimeError(
+                f"repos.yaml: repository {name!r} escapes workspace root"
+            ) from exc
+        result[name] = repo
+
+    return result
+
+
+def _resolve_repo(repository: str) -> Path:
+    registry = _load_repo_registry()
+    repo = registry.get(repository)
+    if repo is None:
+        available = ", ".join(sorted(registry)) or "<none>"
+        raise RuntimeError(
+            f"unknown repository {repository!r}; available repositories: {available}"
+        )
+    if not repo.is_dir():
+        raise RuntimeError(f"repository path does not exist: {repo}")
+
+    completed = subprocess.run(
+        ["git", "-C", str(repo), "rev-parse", "--show-toplevel"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if completed.returncode != 0:
+        raise RuntimeError(f"not a Git repository: {repo}")
+
+    git_root = Path(completed.stdout.strip()).resolve()
+    if git_root != repo:
+        raise RuntimeError(
+            f"repos.yaml path must be exact Git root: configured={repo}, git={git_root}"
+        )
+    return repo
+
+
+def _state_dir(run_id: str) -> Path:
+    xdg_state = os.environ.get("XDG_STATE_HOME")
+    base = Path(xdg_state).expanduser() if xdg_state else Path.home() / ".local" / "state"
+    workspace_key = hashlib.sha256(str(WORKSPACE_ROOT).encode()).hexdigest()[:12]
+    run_dir = base / "qiqi-delegate" / workspace_key / run_id
+    run_dir.mkdir(parents=True, exist_ok=False)
+    try:
+        run_dir.chmod(0o700)
+    except OSError:
+        pass
+    return run_dir
+
+
+def _build_prompt(task: str) -> str:
+    return f"""You are the execution agent for exactly one Git repository.
+
+Operating contract:
+- Work only inside the current Git repository.
+- Read and follow the repository's AGENTS.md and repo-local instructions.
+- Do not inspect, edit, or operate on sibling repositories or workspace-level control files.
+- Do not spawn or delegate to another coding agent.
+- Complete the task independently, including appropriate verification.
+- Keep intermediate reasoning and progress inside this child run.
+- Your final response must satisfy the JSON schema supplied by the runner.
+- For repo_local_knowledge and cross_repo_impact, return concise strings; use [] when there is nothing to report.
+- If the task cannot be completed without a user/product decision or unavailable dependency, set outcome to \"blocked\" and explain it in blockers.
+
+Task:
+{task}
+"""
+
+
+def _validate_result(payload: Any) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        raise RuntimeError("child agent final result is not a JSON object")
+
+    required_types = {
+        "outcome": str,
+        "changes": list,
+        "verification": list,
+        "git_state": str,
+        "blockers": list,
+        "repo_local_knowledge": list,
+        "cross_repo_impact": list,
+    }
+    for key, expected in required_types.items():
+        if key not in payload:
+            raise RuntimeError(f"child agent result missing field: {key}")
+        if not isinstance(payload[key], expected):
+            raise RuntimeError(f"child agent result has invalid field type: {key}")
+
+    if payload["outcome"] not in {"completed", "blocked"}:
+        raise RuntimeError("child agent result has invalid outcome")
+    return payload
+
+
+async def _terminate(proc: asyncio.subprocess.Process) -> None:
+    if proc.returncode is not None:
+        return
+    proc.terminate()
+    try:
+        await asyncio.wait_for(proc.wait(), timeout=5)
+    except asyncio.TimeoutError:
+        proc.kill()
+        await proc.wait()
+
+
+@mcp.tool()
+async def delegate_repo_task(
+    repository: str,
+    task: str,
+    model: str | None = None,
+    reasoning_effort: Literal["low", "medium", "high", "xhigh"] | None = None,
+) -> dict[str, Any]:
+    """Run one repo-local Codex task synchronously and return only its final result.
+
+    Use this for all repository investigation, implementation, Git inspection, and
+    verification. `repository` is the exact repository name from repos.yaml.
+    `model` and `reasoning_effort`, when provided, must come from
+    instructions/model-routing.md. This call intentionally exposes no progress,
+    status, transcript, wait, or resume operation.
+    """
+    repository = repository.strip()
+    task = task.strip()
+    if not repository:
+        raise ValueError("repository must not be empty")
+    if not task:
+        raise ValueError("task must not be empty")
+    if len(task) > 100_000:
+        raise ValueError("task is too large")
+
+    if _delegate_lock.locked():
+        raise RuntimeError(
+            "another delegated task is already active; do not poll or queue another task"
+        )
+
+    async with _delegate_lock:
+        repo = _resolve_repo(repository)
+        codex_bin = os.environ.get("QIQI_CODEX_BIN", "codex")
+        if shutil.which(codex_bin) is None:
+            raise RuntimeError(f"missing Codex CLI executable: {codex_bin}")
+
+        run_id = f"{int(time.time())}-{uuid.uuid4().hex[:8]}"
+        run_dir = _state_dir(run_id)
+        schema_path = run_dir / "result.schema.json"
+        result_path = run_dir / "result.json"
+        transcript_path = run_dir / "transcript.log"
+        schema_path.write_text(
+            json.dumps(RESULT_SCHEMA, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+        command = [
+            codex_bin,
+            "exec",
+            "--ephemeral",
+            "--sandbox",
+            "workspace-write",
+            "--ask-for-approval",
+            "never",
+            "--ignore-user-config",
+            "-C",
+            str(repo),
+            "-c",
+            "mcp_servers.qiqi_delegate.enabled=false",
+            "--output-schema",
+            str(schema_path),
+            "--output-last-message",
+            str(result_path),
+        ]
+        if model:
+            command.extend(["--model", model.strip()])
+        if reasoning_effort:
+            command.extend(["-c", f'model_reasoning_effort="{reasoning_effort}"'])
+        command.append("-")
+
+        prompt = _build_prompt(task)
+        started = time.monotonic()
+
+        with transcript_path.open("wb") as transcript:
+            proc = await asyncio.create_subprocess_exec(
+                *command,
+                cwd=str(repo),
+                stdin=asyncio.subprocess.PIPE,
+                stdout=transcript,
+                stderr=asyncio.subprocess.STDOUT,
+            )
+            try:
+                await proc.communicate(prompt.encode("utf-8"))
+            except asyncio.CancelledError:
+                await _terminate(proc)
+                raise
+
+        duration = round(time.monotonic() - started, 2)
+
+        if proc.returncode != 0:
+            raise RuntimeError(
+                f"child Codex run failed (run_id={run_id}, exit={proc.returncode}); "
+                "no transcript is exposed to QiQi"
+            )
+        if not result_path.is_file():
+            raise RuntimeError(
+                f"child Codex run produced no final result (run_id={run_id})"
+            )
+
+        try:
+            payload = json.loads(result_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(
+                f"child Codex final result is invalid JSON (run_id={run_id})"
+            ) from exc
+
+        result = _validate_result(payload)
+        return {
+            "run_id": run_id,
+            "repository": repository,
+            "duration_seconds": duration,
+            **result,
+        }
+
+
+if __name__ == "__main__":
+    mcp.run()
