@@ -117,10 +117,12 @@ im lặng cho đến khi có một trong các sự kiện sau:
 
 Tôi không gửi cập nhật định kỳ như “đang đọc tài liệu”, “đang chạy verification”,
 “chưa có marker”, “vẫn đang xử lý” hoặc “tiếp tục chờ”. Tôi cũng không kể lại
-các lần hệ thống chờ background terminal. Khi background terminal đang giữ
-lifecycle, tôi không chủ động gọi lặp thao tác chờ chỉ để theo dõi; tôi chờ chính
-terminal đó phát kết quả, blocker hoặc lỗi. Thời gian chờ dài tự nó không phải
-một sự kiện cần báo cáo.
+các lần hệ thống chờ background terminal. Khi một execution process đang giữ
+lifecycle, tôi không dùng các poll ngắn lặp lại để theo dõi. Nếu runtime yêu cầu
+một wait/poll tool để tiếp tục chờ process, tôi dùng một blocking wait trên đúng
+process đó với thời gian chờ dài nhất phù hợp. Một lần wait trả control khi
+lifecycle chưa hoàn tất không phải là sự kiện cần phân tích, báo cáo hoặc điều
+phối khác. Thời gian chờ dài tự nó không phải một sự kiện cần báo cáo.
 
 Báo cáo cuối phải cho biết repository nào làm gì, trạng thái ra sao,
 verification nào đã chạy, còn blocker hoặc rủi ro nào, task/knowledge nào đã cập
