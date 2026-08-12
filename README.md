@@ -1,37 +1,34 @@
 # Agent Knowledge Harness
 
 Bộ khung để vận hành **QiQi** tại một local workspace chứa nhiều Git repository
-độc lập và tạo vòng kín tri thức giữa workspace với coding agent trong từng
-repository con.
-
-Repo này được phát triển từ các ý tưởng phù hợp trong `agent-repo-harness`,
-nhưng là một sản phẩm độc lập. Nó chỉ giữ các thành phần cần cho QiQi multi-repo
-và knowledge lifecycle.
+độc lập, với execution boundary rõ giữa workspace coordinator và coding agent
+trong từng repository con.
 
 ## Vòng kín
 
 ```text
-Đại ca
+Người dùng
   ↓ yêu cầu và quyết định
 QiQi tại workspace
-  ↓ context, contract, evidence và phạm vi
-Agent tại repository con
-  ↓ implementation, verification và repo-local knowledge
-  ↓ cross-repo knowledge candidate
+  ↓ synchronous MCP delegate_repo_task
+Execution agent tại repository con
+  ↓ implementation + verification
+  ↓ terminal structured result
 QiQi
-  ↓ task context hoặc knowledge proposal có evidence
-Đại ca
+  ↓ task context / cross-repo knowledge khi cần
+Người dùng
 ```
 
 ## Hai template
 
 ### `workspace-template/`
 
-Được đặt tại workspace root. Nó sở hữu QiQi, repository registry, topology,
-working context, model routing, session orchestration và tri thức cross-repo.
+Đặt tại workspace root. Nó sở hữu QiQi, repository registry, topology, task
+context, model routing, MCP delegation và tri thức cross-repo.
 
 ```text
 workspace-template/
+├── .codex/config.toml
 ├── AGENTS.md
 ├── identity.md
 ├── repos.yaml
@@ -39,19 +36,25 @@ workspace-template/
 ├── KNOWLEDGE.md
 ├── README.md
 ├── instructions/model-routing.md
+├── mcp/qiqi_delegate/
+│   ├── pyproject.toml
+│   └── server.py
 ├── knowledge/
 ├── .qiqi/tasks/
 ├── docs/WORKSPACE_SETUP.md
 └── scripts/
-    ├── qiqi-agent-turn.sh
-    ├── qiqi-agent-resume.sh
+    ├── qiqi-mcp-server.sh
     └── workspace-check.sh
 ```
 
+QiQi không quản lý child session/pane/process. Repo-local work chỉ đi qua MCP tool
+`delegate_repo_task`. Tool tự chạy one-shot Codex, giữ transcript ngoài QiQi
+context và chỉ trả structured terminal result.
+
 ### `repo-template/`
 
-Được đặt tại Git root của từng repository con. Nó giúp coding agent hiểu kiến
-trúc nội bộ, chạy verification và trả tri thức đúng tầng về QiQi.
+Đặt tại Git root của từng repository con. Nó giúp execution agent hiểu
+architecture, verification và knowledge ownership nội bộ.
 
 ```text
 repo-template/
@@ -64,49 +67,35 @@ repo-template/
 │   ├── specs/README.md
 │   ├── decisions/README.md
 │   └── friction/README.md
-└── scripts/
-    └── repo-check.sh
+└── scripts/repo-check.sh
 ```
-
-Các `README.md` trong `docs/domain/`, `docs/specs/`, `docs/decisions/` và
-`docs/friction/` là contract cục bộ để agent biết nội dung nào thuộc thư mục,
-khi nào cần tạo tài liệu và cấu trúc tối thiểu. Template không tạo sẵn tài liệu
-nội dung; repo chỉ thêm file khi có tri thức, quyết định hoặc observation thực tế.
 
 ## Ranh giới sở hữu
 
 | Loại thông tin | Nơi lưu |
 |---|---|
 | Repository và đường dẫn local | Workspace `repos.yaml` |
-| Topology, dependency và ownership liên repo | Workspace `SYSTEM_MAP.md` |
-| Luồng, contract và decision cross-repo có evidence | Workspace `knowledge/` |
-| Yêu cầu, progress, blocker, session và UAT context | Workspace `.qiqi/tasks/` |
-| Agent/model khả dụng và orchestration | Workspace QiQi |
-| Kiến trúc, domain rule, implementation và verification nội bộ | Repository con |
-| Phát hiện cross-repo chưa được QiQi duyệt | Task context hoặc `knowledge/proposals/` |
+| Topology/dependency liên repo | Workspace `SYSTEM_MAP.md` |
+| Contract/decision cross-repo có evidence | Workspace `knowledge/` |
+| Yêu cầu, blocker và terminal outcome cần giữ | Workspace `.qiqi/tasks/` |
+| Model/reasoning effort | Workspace `instructions/model-routing.md` |
+| Repo execution | MCP `delegate_repo_task` |
+| Architecture, implementation, verification nội bộ | Repository con |
 
 ## Áp dụng vào Workspace
-
-Nên thử trên workspace mẫu hoặc backup trước. Sao chép mà không ghi đè file hiện
-có ngoài ý muốn:
 
 ```bash
 rsync -av --ignore-existing workspace-template/ /path/to/multi-repo/
 cd /path/to/multi-repo
-cat docs/WORKSPACE_SETUP.md
+uv sync --project mcp/qiqi_delegate
 bash scripts/workspace-check.sh
 ```
 
-Workspace checker cần `bash`, `git`, `rg`, `flock` và `yq` phiên bản 4. Nó không
-chạy test của repo con.
+Sau đó khởi động Codex tại workspace root. Project-scoped `.codex/config.toml`
+đăng ký STDIO MCP server `qiqi_delegate` và chỉ enable `delegate_repo_task`.
 
-Prompt và wait của từng agent phải đi qua `scripts/qiqi-agent-turn.sh`. Wrapper
-chặn prompt rỗng, giữ một lock theo agent và chỉ kết thúc lifecycle khi phát
-completion marker.
-
-Khi tiếp tục native session đã đóng, QiQi tạo pane mới tại đúng repository rồi
-gọi `scripts/qiqi-agent-resume.sh` với agent kind và native resume arguments đã
-xác nhận. Resume wrapper không tạo pane, không gửi prompt và không chờ turn.
+Xem `docs/WORKSPACE_SETUP.md` để điền registry/model routing và chạy fresh-session
+test.
 
 ## Áp dụng vào Repository con
 
@@ -115,20 +104,14 @@ Với từng Git repository trong `repos.yaml`:
 ```bash
 rsync -av --ignore-existing repo-template/ /path/to/multi-repo/<repository>/
 cd /path/to/multi-repo/<repository>
-cat docs/REPO_SETUP.md
 bash scripts/repo-check.sh
 ```
 
-Nếu repo đã có `AGENTS.md`, không ghi đè. Agent setup phải giữ workflow đặc thù
-và gộp các nguyên tắc tối thiểu về Git-root boundary, architecture, verification
-và knowledge output contract.
-
-`repo-check.sh` kiểm tra cấu trúc harness, các README contract bắt buộc và
-placeholder. Test hoặc build của repo vẫn phải chạy theo `docs/VERIFY.md`.
+Nếu repo đã có `AGENTS.md`, không ghi đè; gộp các nguyên tắc về Git-root boundary,
+architecture, verification và final result contract.
 
 ## Thiết kế Cố ý
 
-Repo hiện không thêm installer, vector database, embedding pipeline, knowledge
-graph, watcher hoặc daemon. Markdown, Git, router, lock theo agent và evidence
-được ưu tiên trước. Các lớp tự động hóa chỉ nên bổ sung sau khi vòng kín thu
-thập, xác minh, chắt lọc và định tuyến đã ổn định.
+Harness cố ý không có child-session manager, status polling, watcher, daemon,
+resume workflow hoặc transcript API. Nếu sau này cần concurrency hay resumability,
+chỉ thêm sau khi có use case thực tế và không làm bẩn QiQi orchestration context.
