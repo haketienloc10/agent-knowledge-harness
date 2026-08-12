@@ -2,11 +2,11 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 import os
 import shutil
 import subprocess
+import tempfile
 import time
 import uuid
 from pathlib import Path
@@ -16,10 +16,7 @@ import yaml
 from mcp.server.fastmcp import FastMCP
 
 WORKSPACE_ROOT = Path(
-    os.environ.get(
-        "QIQI_WORKSPACE_ROOT",
-        Path(__file__).resolve().parents[2],
-    )
+    os.environ.get("QIQI_WORKSPACE_ROOT", Path(__file__).resolve().parents[2])
 ).resolve()
 
 RESULT_SCHEMA: dict[str, Any] = {
@@ -45,16 +42,17 @@ RESULT_SCHEMA: dict[str, Any] = {
     "additionalProperties": False,
 }
 
-INSTRUCTIONS = (
-    "QiQi delegation boundary. Use delegate_repo_task for every repo-local "
-    "investigation, edit, Git inspection, or verification. The tool is synchronous: "
-    "one call owns the entire child-agent turn and returns only after terminal "
-    "completion. Do not poll, inspect progress, start shell-based child agents, or "
-    "look for transcripts while a delegation is active. There are intentionally no "
-    "status, wait, read, resume, or transcript tools."
+mcp = FastMCP(
+    "QiQi Delegate",
+    instructions=(
+        "Synchronous execution boundary for QiQi. Use delegate_repo_task for every "
+        "repo-local investigation, edit, Git inspection, and verification. A call "
+        "owns the full child-agent turn and returns only at terminal completion. "
+        "There are intentionally no status, wait, read, resume, list-runs, or "
+        "transcript tools. Do not replace this tool with shell-based delegation."
+    ),
 )
 
-mcp = FastMCP("QiQi Delegate", instructions=INSTRUCTIONS)
 _delegate_lock = asyncio.Lock()
 
 
@@ -119,32 +117,19 @@ def _resolve_repo(repository: str) -> Path:
     return repo
 
 
-def _state_dir(run_id: str) -> Path:
-    xdg_state = os.environ.get("XDG_STATE_HOME")
-    base = Path(xdg_state).expanduser() if xdg_state else Path.home() / ".local" / "state"
-    workspace_key = hashlib.sha256(str(WORKSPACE_ROOT).encode()).hexdigest()[:12]
-    run_dir = base / "qiqi-delegate" / workspace_key / run_id
-    run_dir.mkdir(parents=True, exist_ok=False)
-    try:
-        run_dir.chmod(0o700)
-    except OSError:
-        pass
-    return run_dir
-
-
 def _build_prompt(task: str) -> str:
     return f"""You are the execution agent for exactly one Git repository.
 
 Operating contract:
 - Work only inside the current Git repository.
 - Read and follow the repository's AGENTS.md and repo-local instructions.
-- Do not inspect, edit, or operate on sibling repositories or workspace-level control files.
+- Do not inspect, edit, or operate on sibling repositories or workspace control files.
 - Do not spawn or delegate to another coding agent.
 - Complete the task independently, including appropriate verification.
 - Keep intermediate reasoning and progress inside this child run.
 - Your final response must satisfy the JSON schema supplied by the runner.
-- For repo_local_knowledge and cross_repo_impact, return concise strings; use [] when there is nothing to report.
-- If the task cannot be completed without a user/product decision or unavailable dependency, set outcome to \"blocked\" and explain it in blockers.
+- Use [] for empty list fields.
+- If a user/product decision or unavailable dependency prevents completion, set outcome to \"blocked\" and explain it in blockers.
 
 Task:
 {task}
@@ -153,9 +138,9 @@ Task:
 
 def _validate_result(payload: Any) -> dict[str, Any]:
     if not isinstance(payload, dict):
-        raise RuntimeError("child agent final result is not a JSON object")
+        raise RuntimeError("child final result is not a JSON object")
 
-    required_types = {
+    expected = {
         "outcome": str,
         "changes": list,
         "verification": list,
@@ -164,14 +149,14 @@ def _validate_result(payload: Any) -> dict[str, Any]:
         "repo_local_knowledge": list,
         "cross_repo_impact": list,
     }
-    for key, expected in required_types.items():
+    for key, expected_type in expected.items():
         if key not in payload:
-            raise RuntimeError(f"child agent result missing field: {key}")
-        if not isinstance(payload[key], expected):
-            raise RuntimeError(f"child agent result has invalid field type: {key}")
+            raise RuntimeError(f"child final result missing field: {key}")
+        if not isinstance(payload[key], expected_type):
+            raise RuntimeError(f"child final result has invalid field type: {key}")
 
     if payload["outcome"] not in {"completed", "blocked"}:
-        raise RuntimeError("child agent result has invalid outcome")
+        raise RuntimeError("child final result has invalid outcome")
     return payload
 
 
@@ -193,13 +178,11 @@ async def delegate_repo_task(
     model: str | None = None,
     reasoning_effort: Literal["low", "medium", "high", "xhigh"] | None = None,
 ) -> dict[str, Any]:
-    """Run one repo-local Codex task synchronously and return only its final result.
+    """Execute one repo-local Codex task synchronously and return its final result.
 
-    Use this for all repository investigation, implementation, Git inspection, and
-    verification. `repository` is the exact repository name from repos.yaml.
-    `model` and `reasoning_effort`, when provided, must come from
-    instructions/model-routing.md. This call intentionally exposes no progress,
-    status, transcript, wait, or resume operation.
+    `repository` must be the exact name from repos.yaml. Use this tool for all
+    repo-local investigation, implementation, Git inspection, and verification.
+    Optional model settings must come from instructions/model-routing.md.
     """
     repository = repository.strip()
     task = task.strip()
@@ -212,7 +195,7 @@ async def delegate_repo_task(
 
     if _delegate_lock.locked():
         raise RuntimeError(
-            "another delegated task is already active; do not poll or queue another task"
+            "another delegation is active; do not poll, queue, or start another task"
         )
 
     async with _delegate_lock:
@@ -222,80 +205,81 @@ async def delegate_repo_task(
             raise RuntimeError(f"missing Codex CLI executable: {codex_bin}")
 
         run_id = f"{int(time.time())}-{uuid.uuid4().hex[:8]}"
-        run_dir = _state_dir(run_id)
-        schema_path = run_dir / "result.schema.json"
-        result_path = run_dir / "result.json"
-        transcript_path = run_dir / "transcript.log"
-        schema_path.write_text(
-            json.dumps(RESULT_SCHEMA, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-
-        command = [
-            codex_bin,
-            "exec",
-            "--ephemeral",
-            "--sandbox",
-            "workspace-write",
-            "--ask-for-approval",
-            "never",
-            "--ignore-user-config",
-            "-C",
-            str(repo),
-            "-c",
-            "mcp_servers.qiqi_delegate.enabled=false",
-            "--output-schema",
-            str(schema_path),
-            "--output-last-message",
-            str(result_path),
-        ]
-        if model:
-            command.extend(["--model", model.strip()])
-        if reasoning_effort:
-            command.extend(["-c", f'model_reasoning_effort="{reasoning_effort}"'])
-        command.append("-")
-
-        prompt = _build_prompt(task)
         started = time.monotonic()
 
-        with transcript_path.open("wb") as transcript:
-            proc = await asyncio.create_subprocess_exec(
-                *command,
-                cwd=str(repo),
-                stdin=asyncio.subprocess.PIPE,
-                stdout=transcript,
-                stderr=asyncio.subprocess.STDOUT,
+        with tempfile.TemporaryDirectory(prefix="qiqi-delegate-") as temp_dir:
+            temp = Path(temp_dir)
+            schema_path = temp / "result.schema.json"
+            result_path = temp / "result.json"
+            transcript_path = temp / "transcript.log"
+            schema_path.write_text(
+                json.dumps(RESULT_SCHEMA, ensure_ascii=False, indent=2),
+                encoding="utf-8",
             )
+
+            command = [
+                codex_bin,
+                "exec",
+                "--ephemeral",
+                "--sandbox",
+                "workspace-write",
+                "--ask-for-approval",
+                "never",
+                "--ignore-user-config",
+                "-C",
+                str(repo),
+                "-c",
+                "mcp_servers.qiqi_delegate.enabled=false",
+                "--output-schema",
+                str(schema_path),
+                "--output-last-message",
+                str(result_path),
+            ]
+            if model:
+                command.extend(["--model", model.strip()])
+            if reasoning_effort:
+                command.extend(
+                    ["-c", f'model_reasoning_effort="{reasoning_effort}"']
+                )
+            command.append("-")
+
+            with transcript_path.open("wb") as transcript:
+                proc = await asyncio.create_subprocess_exec(
+                    *command,
+                    cwd=str(repo),
+                    stdin=asyncio.subprocess.PIPE,
+                    stdout=transcript,
+                    stderr=asyncio.subprocess.STDOUT,
+                )
+                try:
+                    await proc.communicate(_build_prompt(task).encode("utf-8"))
+                except asyncio.CancelledError:
+                    await _terminate(proc)
+                    raise
+
+            if proc.returncode != 0:
+                raise RuntimeError(
+                    f"child Codex run failed (run_id={run_id}, exit={proc.returncode}); "
+                    "child transcript was discarded"
+                )
+            if not result_path.is_file():
+                raise RuntimeError(
+                    f"child Codex run produced no final result (run_id={run_id})"
+                )
+
             try:
-                await proc.communicate(prompt.encode("utf-8"))
-            except asyncio.CancelledError:
-                await _terminate(proc)
-                raise
+                payload = json.loads(result_path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError as exc:
+                raise RuntimeError(
+                    f"child Codex final result is invalid JSON (run_id={run_id})"
+                ) from exc
 
-        duration = round(time.monotonic() - started, 2)
+            result = _validate_result(payload)
 
-        if proc.returncode != 0:
-            raise RuntimeError(
-                f"child Codex run failed (run_id={run_id}, exit={proc.returncode}); "
-                "no transcript is exposed to QiQi"
-            )
-        if not result_path.is_file():
-            raise RuntimeError(
-                f"child Codex run produced no final result (run_id={run_id})"
-            )
-
-        try:
-            payload = json.loads(result_path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError as exc:
-            raise RuntimeError(
-                f"child Codex final result is invalid JSON (run_id={run_id})"
-            ) from exc
-
-        result = _validate_result(payload)
         return {
             "run_id": run_id,
             "repository": repository,
-            "duration_seconds": duration,
+            "duration_seconds": round(time.monotonic() - started, 2),
             **result,
         }
 
