@@ -74,7 +74,19 @@ case "$mode" in
       printf 'ERROR: prompt must not be empty\n' >&2
       exit 64
     fi
-    herdr agent prompt "$agent" "$prompt" --wait
+
+    prompt_output=""
+    if prompt_output="$(herdr agent prompt "$agent" "$prompt" --wait 2>&1)"; then
+      [[ -z "$prompt_output" ]] || printf '%s\n' "$prompt_output"
+    else
+      prompt_rc=$?
+      [[ -z "$prompt_output" ]] || printf '%s\n' "$prompt_output" >&2
+      if [[ "$prompt_output" =~ \"code\"[[:space:]]*:[[:space:]]*\"agent_prompt_stalled\" ]]; then
+        herdr agent prompt "$agent" "$prompt" --wait
+      else
+        exit "$prompt_rc"
+      fi
+    fi
     ;;
   wait)
     herdr agent wait "$agent"
