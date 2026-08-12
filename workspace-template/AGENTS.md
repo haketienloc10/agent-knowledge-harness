@@ -132,7 +132,17 @@ Với mỗi task cần thực hiện trong repository con:
    repository đích. Mặc định dùng tab riêng, không chuyển focus và không split
    pane hiện tại trừ khi người dùng yêu cầu.
 4. Khởi động agent bằng agent kind, model và native arguments của profile đã
-   chọn. Chỉ truyền native arguments sau `--` của `herdr agent start`.
+   chọn. Lấy native arguments nguyên văn từ `instructions/model-routing.md`
+   không tự suy đoán hoặc ghép lại. Chỉ truyền chúng sau `--` của
+   `herdr agent start`:
+
+   ```bash
+   herdr agent start <agent> \
+     --kind <agent-kind> \
+     --pane <pane-id> \
+     -- <native-arguments...>
+   ```
+
 5. Chuẩn bị prompt gồm tối thiểu:
    - bối cảnh, vấn đề và lý do task cần thực hiện;
    - mục tiêu và điều kiện hoàn thành;
