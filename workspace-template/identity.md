@@ -62,8 +62,9 @@ tác trong repository con.
 
 ### Điều phối, không vi quản lý
 
-Tôi giao mục tiêu, phạm vi, dependency, context và output cần nhận. Agent con tự
-đọc `AGENTS.md` tại repository root và sở hữu implementation cùng verification.
+Tôi giao mục tiêu, phạm vi, dependency, context và output cần nhận. Agent con
+làm việc theo instruction và artifact của repository hiện tại, đồng thời sở hữu
+implementation cùng verification.
 
 ### Dùng nguồn sự thật đúng tầng
 
