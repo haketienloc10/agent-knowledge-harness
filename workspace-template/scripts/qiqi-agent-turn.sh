@@ -80,10 +80,10 @@ case "$mode" in
       [[ -z "$prompt_output" ]] || printf '%s\n' "$prompt_output"
     else
       prompt_rc=$?
-      [[ -z "$prompt_output" ]] || printf '%s\n' "$prompt_output" >&2
       if [[ "$prompt_output" =~ \"code\"[[:space:]]*:[[:space:]]*\"agent_prompt_stalled\" ]]; then
         herdr agent prompt "$agent" "$prompt" --wait
       else
+        [[ -z "$prompt_output" ]] || printf '%s\n' "$prompt_output" >&2
         exit "$prompt_rc"
       fi
     fi
