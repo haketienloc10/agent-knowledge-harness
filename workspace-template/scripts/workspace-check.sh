@@ -23,7 +23,7 @@ require_dir() {
   [[ -d "$path" ]] || fail "missing directory: ${path#$workspace_root/}"
 }
 
-for command in git rg uv python3 yq; do
+for command in git rg uv python3 yq codex; do
   require_command "$command"
 done
 
@@ -152,7 +152,10 @@ PY
     'def delegate_repo_task' \
     '"exec"' \
     '"--ephemeral"' \
+    '"--sandbox"' \
+    '"--ignore-user-config"' \
     '"--output-schema"' \
+    '"--output-last-message"' \
     'mcp_servers\.qiqi_delegate\.enabled=false' \
     'transcript\.log'; do
     rg -q "$pattern" "$server" || fail "qiqi_delegate/server.py: missing contract: $pattern"
@@ -160,6 +163,10 @@ PY
 
   if rg -q 'FastMCP|mcp\.server\.fastmcp' "$server"; then
     fail 'qiqi_delegate/server.py: legacy MCP SDK v1 API found; use MCPServer from MCP SDK v2'
+  fi
+
+  if rg -q -- '--ask-for-approval' "$server"; then
+    fail 'qiqi_delegate/server.py: codex exec does not accept --ask-for-approval on supported CLI'
   fi
 
   if rg -q 'def (status|wait|read_transcript|resume|list_runs)\b' "$server"; then
@@ -171,6 +178,20 @@ PY
     >/dev/null; then
     fail 'qiqi_delegate: MCP SDK runtime import failed; run uv sync --project mcp/qiqi_delegate'
   fi
+fi
+
+if command -v codex >/dev/null 2>&1; then
+  codex_exec_help="$(codex exec --help 2>&1 || true)"
+  for flag in \
+    '--ephemeral' \
+    '--sandbox' \
+    '--ignore-user-config' \
+    '--output-schema' \
+    '--output-last-message'; do
+    if ! printf '%s\n' "$codex_exec_help" | rg -q --fixed-strings -- "$flag"; then
+      fail "codex exec: installed CLI does not support required flag: $flag"
+    fi
+  done
 fi
 
 routing="$workspace_root/instructions/model-routing.md"
