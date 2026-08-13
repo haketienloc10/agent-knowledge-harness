@@ -10,9 +10,7 @@ hợp.
 
 ## Profiles
 
-Trong setup, thay placeholder bằng route thực sự tồn tại trong
-`instructions/agent-routing.yaml`. Một route có thể dùng Codex, Claude Code hoặc
-agent adapter khác được MCP hỗ trợ.
+Một route có thể dùng Codex, Claude Code hoặc agent adapter khác được MCP hỗ trợ.
 
 | Profile | Route | Dùng khi | Evidence khả dụng |
 |---|---|---|---|
@@ -63,6 +61,10 @@ Các placeholder runtime khác được MCP sở hữu: `{model}`, `{session_id}
 Không dùng shell interpolation; MCP build argv trực tiếp và không chạy
 `shell=True`.
 
+Flag phụ thuộc model phải nằm ở route tương ứng. Ví dụ Claude model không hỗ trợ
+`--permission-mode auto` dùng route không có flag đó; model đã xác nhận hỗ trợ có
+thể dùng route thêm flag trong `args`.
+
 ## Resume
 
 Native session ID được giữ nguyên, không bọc bằng continuation token:
@@ -74,5 +76,22 @@ MCP chỉ coi resume thành công khi invocation trả lại đúng native sessi
 yêu cầu. Nếu CLI fallback sang session mới hoặc không tìm thấy session, tool phải
 fail thay vì âm thầm coi là resume thành công.
 
-Policy vẫn chỉ cho một active `delegate_repo_task` tại một thời điểm và không có
-status/polling workflow.
+Không chạy đồng thời hai RESUME dùng cùng native `session_id`.
+
+## Concurrency không thuộc Model Routing
+
+Route chỉ trả lời **dùng agent/model/flags nào**. Route không quyết định task có
+được chạy đồng thời hay không.
+
+QiQi có thể đặt các task vào cùng delegation wave khi chúng:
+
+- thuộc các resolved Git root khác nhau;
+- không phụ thuộc output/decision chưa có của nhau;
+- không cùng thao tác shared mutable resource;
+- không dùng cùng native `session_id`.
+
+MCP hard-reject concurrent calls trên cùng resolved Git root hoặc cùng native
+session. Khi dependency/conflict không rõ, QiQi chạy tuần tự.
+
+Trong lúc một delegation wave đang in-flight, QiQi áp dụng **Delegation Silence**:
+không phát user-visible progress commentary và không poll trạng thái child.
