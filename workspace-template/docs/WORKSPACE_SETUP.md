@@ -18,8 +18,8 @@ Sau setup:
 - MCP server chỉ expose `delegate_repo_task`;
 - mỗi delegation chạy đúng một non-interactive START hoặc RESUME invocation;
 - các repo task độc lập có thể chạy đồng thời;
-- MCP hard-reject concurrent calls trên cùng resolved Git root hoặc cùng native
-  `session_id`;
+- trong cùng MCP server process, concurrent calls trên cùng resolved Git root
+  hoặc cùng native `session_id` bị reject;
 - terminal result trả native Codex/Claude `session_id` cùng structured result;
 - `bash scripts/workspace-check.sh` trả `PASS`.
 
@@ -72,12 +72,13 @@ khi gom chúng vào cùng delegation wave.
 `instructions/agent-routing.yaml` là machine-readable execution registry.
 Template ban đầu có hai adapter:
 
-- `codex`: non-interactive `codex exec`, `--yolo`, JSON event stream để lấy native
-  thread/session ID, structured result file và native `exec resume`;
+- `codex`: non-interactive `codex exec`, bypass approvals/sandbox theo flag hiện
+  được cấu hình trong registry, JSON event stream để lấy native thread/session ID,
+  structured result file và native `exec resume`;
 - `claude`: non-interactive `claude -p`, `--output-format json`, lấy `session_id`
   từ JSON envelope và native `--resume`.
 
-Xác nhận CLI local trước khi thay placeholder:
+Xác nhận CLI local trước khi thay route/model/flag:
 
 ```bash
 codex exec --help
@@ -205,7 +206,7 @@ QiQi có thể dispatch nhiều repo task trong cùng wave khi tất cả điề
 Task phải sang wave sau nếu consumer cần producer result, cùng Git root, cùng
 shared mutable resource hoặc chưa đủ evidence để xác nhận độc lập.
 
-MCP hard guard chỉ bảo vệ resource mà server biết chắc:
+MCP hard guard trong một server process bảo vệ resource mà server biết chắc:
 
 - cùng resolved Git root → reject concurrent call;
 - cùng native `session_id` → reject concurrent resume.
@@ -301,8 +302,10 @@ Mở Codex mới tại workspace root và kiểm tra:
 6. RESUME ID đó bằng route Claude phù hợp giữ đúng native ID.
 7. Hai read-only task trên hai Git root độc lập có thể được dispatch trong cùng
    delegation wave nếu host hỗ trợ concurrent MCP calls.
-8. Hai call cùng Git root bị MCP reject khi call đầu còn active.
-9. Hai RESUME dùng cùng native `session_id` bị MCP reject khi call đầu còn active.
+8. Hai call cùng Git root bị MCP reject khi call đầu còn active trong cùng server
+   process.
+9. Hai RESUME dùng cùng native `session_id` bị MCP reject khi call đầu còn active
+   trong cùng server process.
 10. Trong wave không có user-visible progress commentary từ QiQi theo policy.
 11. Tool return chỉ chứa terminal structured result, không working transcript.
 12. Nếu MCP/CLI lỗi, QiQi báo blocker thay vì gọi child agent bằng shell.
