@@ -67,12 +67,14 @@ routes:
       - -c
       - 'model_reasoning_effort="medium"'
 
-  # Safe route for Claude models such as Haiku that do not support
-  # --permission-mode auto.
   claude-haiku:
     agent: claude
     model: haiku
-    args: []
+    args:
+      - --permission-mode
+      - acceptEdits
+      - --effort
+      - medium
 
   claude-balanced:
     agent: claude
