@@ -120,7 +120,7 @@ Runtime placeholders:
 {route_args}
 ```
 
-`start_args` không chứa `{session_id}`; `resume_args` phải chứa `{session_id}`. Registry dùng interactive CLI, không dùng `codex exec`, `claude -p`, JSON output schema hoặc output envelope làm execution transport.
+`start_args` không chứa `{session_id}`; `resume_args` phải chứa `{session_id}`. Registry chỉ dùng interactive agent invocation; các transport batch/JSON-output cũ không còn thuộc execution contract.
 
 QiQi chỉ chọn route; không truyền raw model/CLI flags qua MCP public API.
 
