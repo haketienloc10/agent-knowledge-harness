@@ -23,11 +23,15 @@ working transcript hoặc progress polling.
 
 ## Delegation đã hoàn tất
 
-| Repository | Run ID | Model/profile | Outcome | Verification chính |
-|---|---|---|---|---|
+| Repository | Agent | Route | Native session ID | Outcome | Verification chính |
+|---|---|---|---|---|---|
 
-Chỉ ghi delegation sau khi MCP tool đã return terminal result. Không có session
-ID, waiter, progress state hoặc resume lifecycle.
+Chỉ ghi delegation sau khi MCP tool đã return terminal result. `Native session
+ID` là ID thật do Codex/Claude Code trả về và chỉ dùng làm argument `session_id`
+cho một RESUME sau đó. Không ghi waiter, process state, transcript hoặc progress.
+
+Nếu chuyển sang agent khác, tạo START mới và ghi row mới; không tái sử dụng native
+session ID của agent cũ.
 
 ## Blocker hoặc câu hỏi mở
 
