@@ -56,10 +56,10 @@ QiQi không quản lý pane/process hoặc polling. Repo-local work chỉ đi qu
 invocation, giữ stdout/stderr ngoài QiQi context và chỉ trả terminal structured
 result cùng native agent `session_id`.
 
-Các call nhắm tới resolved Git root độc lập có thể active đồng thời. MCP từ chối
-concurrent invocation trên cùng resolved Git root hoặc cùng native `session_id`.
-Dependency và shared mutable resource vẫn do QiQi lập kế hoạch theo delegation
-wave.
+Các call nhắm tới resolved Git root độc lập có thể active đồng thời. Trong cùng
+`qiqi_delegate` server process, MCP từ chối concurrent invocation trên cùng
+resolved Git root hoặc cùng native `session_id`. Dependency và shared mutable
+resource vẫn do QiQi lập kế hoạch theo delegation wave.
 
 Trong lúc một wave in-flight, QiQi áp dụng **Delegation Silence**: không phát
 user-visible progress commentary và không poll trạng thái child.
@@ -165,5 +165,6 @@ architecture, verification và final result contract.
 Harness cố ý không có status polling, watcher, daemon, transcript API hoặc session
 manager riêng. Resumability chỉ là native session ID đi qua cùng MCP tool.
 Concurrency được giới hạn theo resource: independent Git roots có thể chạy đồng
-thời; cùng Git root hoặc cùng native session bị chặn cứng. Dependency/shared
-resource được QiQi điều phối bằng delegation waves.
+thời; trong cùng `qiqi_delegate` server process, cùng Git root hoặc cùng native
+session bị chặn cứng. Dependency/shared resource được QiQi điều phối bằng
+delegation waves.
