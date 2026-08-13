@@ -4,6 +4,10 @@
 # QiQi selects a route. The MCP server owns CLI construction, START/RESUME,
 # native session-id extraction, result normalization and serialization.
 # Flags belong here, not in QiQi prompts or MCP tool arguments.
+#
+# Agent-level args must be valid for every model using that agent. Put flags
+# whose support varies by model (for example Claude permission modes) in the
+# route's args instead.
 
 version: 1
 
@@ -56,8 +60,6 @@ agents:
 
     start_args:
       - -p
-      - --permission-mode
-      - auto
       - --output-format
       - json
       - --model
@@ -68,8 +70,6 @@ agents:
       - -p
       - --resume
       - "{session_id}"
-      - --permission-mode
-      - auto
       - --output-format
       - json
       - --model
@@ -84,7 +84,18 @@ routes:
       - -c
       - 'model_reasoning_effort="{{CODEX_REASONING_EFFORT}}"'
 
-  claude-balanced:
+  # Safe route for Claude models such as Haiku that do not support
+  # --permission-mode auto.
+  claude-haiku:
     agent: claude
-    model: "{{CLAUDE_MODEL_ID}}"
+    model: "{{CLAUDE_HAIKU_MODEL_ID}}"
     args: []
+
+  # Use this shape only for Claude models confirmed to support auto permission
+  # mode (for example Sonnet 5+ in the target environment).
+  claude-auto:
+    agent: claude
+    model: "{{CLAUDE_AUTO_MODEL_ID}}"
+    args:
+      - --permission-mode
+      - auto
