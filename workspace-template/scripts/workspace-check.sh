@@ -119,8 +119,16 @@ if [[ -f "$agents_md" ]]; then
   done
   rg -q 'progress commentary' "$agents_md" || \
     fail 'AGENTS.md: missing delegation-silence communication invariant'
+  rg -q 'Trong cùng `qiqi_delegate` server process' "$agents_md" || \
+    fail 'AGENTS.md: conflict guard must be scoped to one qiqi_delegate server process'
   rg -q 'cùng resolved Git root hoặc cùng native `session_id`' "$agents_md" || \
     fail 'AGENTS.md: missing repo/session conflict invariant'
+  rg -q 'poll `status`, process, PID, transcript hoặc session state' "$agents_md" || \
+    fail 'AGENTS.md: missing no-polling child-state invariant'
+  rg -q 'QiQi không trực tiếp gọi `codex`, `claude` hoặc coding-agent CLI khác' "$agents_md" || \
+    fail 'AGENTS.md: missing direct-agent-CLI bypass prohibition'
+  rg -q 'Không fallback sang shell-based `codex`, `claude`' "$agents_md" || \
+    fail 'AGENTS.md: missing MCP-failure shell fallback prohibition'
 fi
 
 codex_config="$workspace_root/.codex/config.toml"
