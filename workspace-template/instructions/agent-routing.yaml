@@ -1,0 +1,90 @@
+# Machine-readable execution registry for qiqi_delegate.
+# Fill every {{...}} placeholder during workspace setup.
+#
+# QiQi selects a route. The MCP server owns CLI construction, START/RESUME,
+# native session-id extraction, result normalization and serialization.
+# Flags belong here, not in QiQi prompts or MCP tool arguments.
+
+version: 1
+
+agents:
+  codex:
+    command: codex
+    adapter: codex
+    prompt_transport: stdin
+    prompt_arg: "-"
+
+    # {route_args} expands to the selected route's args list.
+    # Other supported placeholders: {model}, {session_id}, {schema_path},
+    # {result_path}.
+    start_args:
+      - exec
+      - --yolo
+      - --json
+      - --ignore-user-config
+      - -c
+      - mcp_servers.qiqi_delegate.enabled=false
+      - --model
+      - "{model}"
+      - "{route_args}"
+      - --output-schema
+      - "{schema_path}"
+      - --output-last-message
+      - "{result_path}"
+
+    resume_args:
+      - exec
+      - --yolo
+      - --json
+      - --ignore-user-config
+      - -c
+      - mcp_servers.qiqi_delegate.enabled=false
+      - --model
+      - "{model}"
+      - "{route_args}"
+      - --output-schema
+      - "{schema_path}"
+      - --output-last-message
+      - "{result_path}"
+      - resume
+      - "{session_id}"
+
+  claude:
+    command: claude
+    adapter: claude
+    prompt_transport: argument
+
+    start_args:
+      - -p
+      - --permission-mode
+      - auto
+      - --output-format
+      - json
+      - --model
+      - "{model}"
+      - "{route_args}"
+
+    resume_args:
+      - -p
+      - --resume
+      - "{session_id}"
+      - --permission-mode
+      - auto
+      - --output-format
+      - json
+      - --model
+      - "{model}"
+      - "{route_args}"
+
+routes:
+  codex-balanced:
+    agent: codex
+    model: "{{CODEX_MODEL_ID}}"
+    args:
+      - -c
+      - 'model_reasoning_effort="{{CODEX_REASONING_EFFORT}}"'
+
+  claude-balanced:
+    agent: claude
+    model: "{{CLAUDE_MODEL_ID}}"
+    args: []
