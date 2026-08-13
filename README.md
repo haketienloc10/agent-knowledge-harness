@@ -11,11 +11,11 @@ Người dùng
   ↓ yêu cầu và quyết định
 QiQi tại workspace
   ↓ synchronous MCP delegate_repo_task
-Execution agent tại repository con
+Codex / Claude Code tại repository con
   ↓ implementation + verification
-  ↓ terminal structured result
+  ↓ terminal structured result + native session_id
 QiQi
-  ↓ task context / cross-repo knowledge khi cần
+  ↓ task context / native resume / cross-repo knowledge khi cần
 Người dùng
 ```
 
@@ -24,7 +24,7 @@ Người dùng
 ### `workspace-template/`
 
 Đặt tại workspace root. Nó sở hữu QiQi, repository registry, topology, task
-context, model routing, MCP delegation và tri thức cross-repo.
+context, agent/model routing, MCP delegation và tri thức cross-repo.
 
 ```text
 workspace-template/
@@ -35,7 +35,9 @@ workspace-template/
 ├── SYSTEM_MAP.md
 ├── KNOWLEDGE.md
 ├── README.md
-├── instructions/model-routing.md
+├── instructions/
+│   ├── agent-routing.yaml
+│   └── model-routing.md
 ├── mcp/qiqi_delegate/
 │   ├── pyproject.toml
 │   └── server.py
@@ -47,9 +49,15 @@ workspace-template/
     └── workspace-check.sh
 ```
 
-QiQi không quản lý child session/pane/process. Repo-local work chỉ đi qua MCP tool
-`delegate_repo_task`. Tool tự chạy one-shot Codex, giữ transcript ngoài QiQi
-context và chỉ trả structured terminal result.
+QiQi không quản lý pane/process hoặc polling. Repo-local work chỉ đi qua MCP tool
+`delegate_repo_task`. Tool chạy đúng một non-interactive START hoặc RESUME
+invocation, giữ stdout/stderr ngoài QiQi context và chỉ trả terminal structured
+result cùng native agent `session_id`.
+
+`instructions/agent-routing.yaml` tách execution mechanics khỏi QiQi: mỗi agent
+định nghĩa command/start_args/resume_args; mỗi route định nghĩa agent/model/flags.
+Template hiện có adapter Codex và Claude Code. Public MCP schema không đổi khi
+model hoặc native flags thay đổi.
 
 ### `repo-template/`
 
@@ -77,10 +85,27 @@ repo-template/
 | Repository và đường dẫn local | Workspace `repos.yaml` |
 | Topology/dependency liên repo | Workspace `SYSTEM_MAP.md` |
 | Contract/decision cross-repo có evidence | Workspace `knowledge/` |
-| Yêu cầu, blocker và terminal outcome cần giữ | Workspace `.qiqi/tasks/` |
-| Model/reasoning effort | Workspace `instructions/model-routing.md` |
+| Yêu cầu, blocker, terminal outcome và native session ID cần giữ | Workspace `.qiqi/tasks/` |
+| Agent/model/native flags + START/RESUME argv | Workspace `instructions/agent-routing.yaml` |
+| Policy chọn route | Workspace `instructions/model-routing.md` |
 | Repo execution | MCP `delegate_repo_task` |
 | Architecture, implementation, verification nội bộ | Repository con |
+
+## START và RESUME
+
+Public tool giữ một contract:
+
+```text
+delegate_repo_task(repository, task, route, session_id?)
+```
+
+- không có `session_id` → START native session mới;
+- có `session_id` → RESUME native session đó bằng route đã chọn;
+- tool trả native ID thật của Codex/Claude Code;
+- resume chỉ thành công nếu invocation trả lại đúng ID được yêu cầu;
+- đổi agent nghĩa là START mới + handoff context, không resume chéo ID.
+
+Không có status/wait/transcript/separate-resume tool.
 
 ## Áp dụng vào Workspace
 
@@ -94,8 +119,8 @@ bash scripts/workspace-check.sh
 Sau đó khởi động Codex tại workspace root. Project-scoped `.codex/config.toml`
 đăng ký STDIO MCP server `qiqi_delegate` và chỉ enable `delegate_repo_task`.
 
-Xem `docs/WORKSPACE_SETUP.md` để điền registry/model routing và chạy fresh-session
-test.
+Xem `docs/WORKSPACE_SETUP.md` để điền repo registry, agent/model routing và chạy
+START/RESUME smoke test.
 
 ## Áp dụng vào Repository con
 
@@ -112,6 +137,6 @@ architecture, verification và final result contract.
 
 ## Thiết kế Cố ý
 
-Harness cố ý không có child-session manager, status polling, watcher, daemon,
-resume workflow hoặc transcript API. Nếu sau này cần concurrency hay resumability,
-chỉ thêm sau khi có use case thực tế và không làm bẩn QiQi orchestration context.
+Harness cố ý không có status polling, watcher, daemon, transcript API hoặc session
+manager riêng. Resumability chỉ là native session ID đi qua cùng synchronous MCP
+tool; lifecycle vẫn là một active delegation tại một thời điểm.
