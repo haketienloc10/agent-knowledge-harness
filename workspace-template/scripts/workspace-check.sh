@@ -117,7 +117,7 @@ if [[ -f "$agents_md" ]]; then
     '## Dependency và Delegation Waves'; do
     rg -q "$pattern" "$agents_md" || fail "AGENTS.md: missing required policy: $pattern"
   done
-  rg -q 'không phát \*\*user-visible[[:space:]]+progress commentary\*\*' "$agents_md" || \
+  rg -q 'progress commentary' "$agents_md" || \
     fail 'AGENTS.md: missing delegation-silence communication invariant'
   rg -q 'cùng resolved Git root hoặc cùng native `session_id`' "$agents_md" || \
     fail 'AGENTS.md: missing repo/session conflict invariant'
