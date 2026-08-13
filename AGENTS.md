@@ -2,8 +2,8 @@
 
 Repo này phát triển hai template phối hợp trong multi-repository workspace:
 
-- `workspace-template/`: QiQi Chief of Staff control plane, synchronous MCP
-  delegation, task continuity và cross-repo knowledge;
+- `workspace-template/`: QiQi Chief of Staff control plane, synchronous Herdr-backed
+  MCP delegation, task continuity và cross-repo knowledge;
 - `repo-template/`: workflow tối thiểu cho execution agent trong từng Git
   repository con.
 
@@ -13,76 +13,112 @@ Repo không chứa tri thức nghiệp vụ thật của một workspace cụ th
 
 - QiQi là Chief of Staff/coordinator, không phải coding agent của repo con.
 - Mọi repo-local work từ QiQi đi qua đúng một MCP tool: `delegate_repo_task`.
-- Mỗi tool call chỉ trả terminal structured result cùng native agent session ID;
-  không expose progress, status, wait hoặc transcript.
-- START và RESUME dùng cùng `delegate_repo_task`; native `session_id` là argument
-  optional, không có separate resume tool.
-- Agent/model/native flags và START/RESUME argv thuộc
-  `workspace-template/instructions/agent-routing.yaml`, không hard-code trong QiQi
-  prompt hoặc public MCP API.
-- Các task độc lập trên resolved Git root khác nhau có thể được dispatch trong
-  cùng delegation wave; trong cùng `qiqi_delegate` server process, cùng Git root
-  hoặc cùng native session bị MCP chặn cứng.
-- Dependency và shared mutable resource do QiQi lập kế hoạch; khi không chắc có
-  conflict thì chạy tuần tự.
-- Trong lúc delegation wave in-flight, QiQi áp dụng Delegation Silence: không phát
-  user-visible progress commentary và không poll child state.
-- Repository con sở hữu architecture, domain rule, implementation và
-  verification nội bộ.
-- Workspace sở hữu registry, topology, task context và tri thức cross-repo.
-- Agent repo con không sửa workspace knowledge; nó chỉ trả cross-repo impact cho
-  QiQi xử lý.
+- Public tool signature là `delegate_repo_task(repository, task, route, session_id?)`.
+- `task` semantics và execution prompt thuộc QiQi; MCP không reinterpret task.
+- MCP chỉ append result-handoff protocol cần cho durable Markdown artifact.
+- Success return chỉ gồm native `session_id` và workspace-relative `result_path`.
+- QiQi phải đọc `result_path` trước khi quyết định bước tiếp; không RESUME chỉ để
+  yêu cầu agent lặp lại report.
+- START và RESUME dùng cùng tool; native `session_id` là optional argument, không
+  có separate resume tool.
+- Agent/model/native flags + START/RESUME argv thuộc
+  `workspace-template/instructions/agent-routing.yaml`.
+- MCP chạy real interactive Codex/Claude qua Herdr; Herdr lifecycle là internal
+  implementation detail, không phải public orchestration API của QiQi.
+- Không expose progress/status/wait/read/transcript/list-runs tool.
+- Independent Git roots có thể chạy đồng thời; trong cùng `qiqi_delegate` server
+  process, cùng resolved Git root hoặc cùng native session bị reject.
+- Dependency/shared mutable resource do QiQi lập kế hoạch; khi không chắc conflict
+  thì chạy tuần tự.
+- Trong delegation wave, QiQi áp dụng Delegation Silence và không poll child state.
+- Repository con sở hữu architecture/domain/implementation/verification nội bộ.
+- Workspace sở hữu registry/topology/task context/result handoff/cross-repo knowledge.
+- Repo agent không promote workspace knowledge trực tiếp; nó chỉ báo cross-repo
+  impact trong result artifact.
 - Ưu tiên artifact nhỏ, source of truth rõ và evidence có thể kiểm tra.
-- Không thêm daemon, watcher, status service hoặc observability primitive khi
-  chưa có nhu cầu thực tế.
+
+## Contract Result Artifact
+
+Mỗi native session có một durable artifact:
+
+```text
+.qiqi/runs/<repo>-<initial-task-slug>-<native-session-id>.md
+```
+
+START tạo pending artifact rồi promote sau khi native identity có sẵn. RESUME
+append `Task N / Result N` vào exact artifact của session.
+
+Newest result bắt buộc có headings theo thứ tự:
+
+```text
+### Outcome
+### Changes
+### Verification
+### Git State
+### Blockers
+### Repo-local Knowledge
+### Cross-repo Impact
+```
+
+`Outcome` là `completed` hoặc `blocked`.
+
+Tool return không duplicate nội dung report; caller đọc `result_path` để reconcile.
 
 ## Khi thay đổi Workspace Template
 
-1. Giữ `AGENTS.md`, `identity.md`, agent routing, MCP server, setup guide, checker
-   và README đồng bộ cùng execution contract.
-2. Không thêm đường delegation thứ hai bằng shell hoặc session manager.
-3. Không thêm `status`, `wait`, `read_transcript`, `list_runs` hoặc separate
-   `resume` tool.
-4. Child invocation phải non-interactive, không recursive delegation và không
-   stream transcript về QiQi.
-5. Repository phải được resolve từ `repos.yaml` và path phải là exact Git root.
-6. Không cho nhiều registry entry cùng resolve về một Git root.
-7. Route config sở hữu command/model/flags; MCP chỉ build argv, START/RESUME,
-   extract native session ID và normalize result.
-8. Native resume phải kiểm tra identity: session ID trả về phải khớp ID yêu cầu.
-9. Concurrency guard phải resource-scoped trong một `qiqi_delegate` server process:
-   cùng resolved Git root hoặc cùng native session bị reject; không dùng global
-   delegation lock.
-10. Tool result contract phải đủ cho QiQi reconcile mà không tự vào repo kiểm tra.
-11. Nếu thay đổi artifact bắt buộc, cập nhật checker và tài liệu setup cùng lúc.
+1. Giữ `AGENTS.md`, `identity.md`, `README.md`, setup guide, model routing, agent
+   routing, MCP server và checker đồng bộ cùng execution contract.
+2. Giữ đúng một public MCP tool; không thêm delegation path thứ hai bằng shell,
+   daemon hoặc session manager.
+3. Không thêm public `status`, `wait`, `read`, `read_transcript`, `list_runs` hay
+   separate `resume` tool.
+4. Giữ full interactive agent TUI bên trong Herdr; không thay bằng hidden child
+   runner chỉ để lấy output máy đọc.
+5. QiQi phải sở hữu task semantics; MCP footer chỉ sở hữu result handoff.
+6. Repository phải resolve từ `repos.yaml` và path phải là exact Git root.
+7. Không cho nhiều registry entry cùng resolve về một Git root.
+8. Route registry sở hữu command/model/flags; runtime placeholders hiện tại là
+   `{model}`, `{session_id}`, `{result_dir}`, `{route_args}`.
+9. Native resume phải kiểm tra identity: ID report lại phải khớp ID yêu cầu.
+10. Concurrency guard phải resource-scoped trong một `qiqi_delegate` server
+    process: same Git root hoặc same native session bị reject ngay; không global
+    delegation lock và không silently queue same-repo calls.
+11. Tool success chỉ trả `session_id` + `result_path`; QiQi đọc artifact thay vì
+    mở RESUME turn chỉ để lấy report.
+12. Nếu thay đổi artifact/runtime bắt buộc, cập nhật checker + docs trong cùng PR.
+13. Herdr integration install là setup concern; MCP chỉ preflight selected adapter
+    ở trạng thái `current`.
+14. Không thêm lại Codex hook-trust bypass nếu không có quyết định mới rõ ràng.
 
 ## Khi thay đổi Repository Template
 
 1. Giữ template tối thiểu và không tạo artifact optional rỗng.
-2. Không đưa workspace orchestration, MCP server hoặc cross-repo knowledge store
-   xuống repo con.
+2. Không đưa workspace orchestration, Herdr control plane hoặc cross-repo knowledge
+   store xuống repo con.
 3. Bảo vệ Git-root boundary và cấm agent sửa repository anh em.
-4. Repo-local knowledge phải cập nhật tại source of truth của repo sở hữu.
-5. Cross-repo impact được trả về QiQi; repo agent không promote workspace
-   knowledge trực tiếp.
-6. Final result contract phải tương thích với `delegate_repo_task`.
+4. Cho phép đúng một exception ngoài Git root: exact `.qiqi/runs/...md` result
+   artifact được MCP handoff trong prompt của turn hiện tại.
+5. Repo-local knowledge cập nhật tại source of truth của repo sở hữu.
+6. Cross-repo impact được báo qua result artifact; repo agent không promote
+   workspace knowledge trực tiếp.
+7. Final result contract phải dùng Markdown headings mà MCP validator yêu cầu.
 
-## Kiểm tra
+## Review tối thiểu
 
-Review tối thiểu phải xác nhận:
+Review phải xác nhận:
 
-- workspace template chỉ expose `delegate_repo_task` cho repo-local execution;
-- `instructions/agent-routing.yaml` định nghĩa agent/route/start/resume mà không
-  cần sửa public tool schema;
-- Codex và Claude adapter đều normalize về cùng final result contract;
-- native session ID được trả về và resume identity được kiểm tra;
-- independent Git roots có thể active đồng thời;
-- same Git root và same native session conflict đều bị reject trong cùng
-  `qiqi_delegate` server process;
-- không còn global `_delegate_lock`;
-- Delegation Silence có trong workspace policy;
+- workspace template chỉ expose `delegate_repo_task`;
+- public signature không đổi ngoài quyết định có chủ đích;
+- QiQi-owned prompt + MCP-owned result footer boundary được giữ;
+- Codex/Claude đều chạy interactive qua Herdr;
+- native session ID được lấy qua Herdr integration và RESUME identity được kiểm tra;
+- START/RESUME dùng durable session artifact và RESUME append cùng path;
+- success return chỉ có `session_id` + `result_path`;
+- caller policy yêu cầu đọc artifact và cấm report-only RESUME;
+- same Git root/native session conflict bị reject trong cùng server process;
+- different independent Git roots vẫn có thể active đồng thời;
+- Claude stalled-prompt recovery không paste prompt lần hai;
 - transcript không trở thành tool result;
-- checker chỉ kiểm tra harness/CLI contract, không chạy test hoặc sửa source sản
-  phẩm;
-- ranh giới workspace/repo-local knowledge không bị phá vỡ;
-- README phản ánh đúng cách cài cả workspace và repo template.
+- checker kiểm đúng contract hiện tại, không giữ assertion của architecture cũ;
+- README/setup/examples phản ánh đúng routing và Herdr requirements;
+- workspace/repo-local knowledge boundary không bị phá vỡ.
