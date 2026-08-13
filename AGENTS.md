@@ -21,7 +21,8 @@ Repo không chứa tri thức nghiệp vụ thật của một workspace cụ th
   `workspace-template/instructions/agent-routing.yaml`, không hard-code trong QiQi
   prompt hoặc public MCP API.
 - Các task độc lập trên resolved Git root khác nhau có thể được dispatch trong
-  cùng delegation wave; cùng Git root hoặc cùng native session bị MCP chặn cứng.
+  cùng delegation wave; trong cùng `qiqi_delegate` server process, cùng Git root
+  hoặc cùng native session bị MCP chặn cứng.
 - Dependency và shared mutable resource do QiQi lập kế hoạch; khi không chắc có
   conflict thì chạy tuần tự.
 - Trong lúc delegation wave in-flight, QiQi áp dụng Delegation Silence: không phát
@@ -49,8 +50,9 @@ Repo không chứa tri thức nghiệp vụ thật của một workspace cụ th
 7. Route config sở hữu command/model/flags; MCP chỉ build argv, START/RESUME,
    extract native session ID và normalize result.
 8. Native resume phải kiểm tra identity: session ID trả về phải khớp ID yêu cầu.
-9. Concurrency guard phải resource-scoped: cùng resolved Git root hoặc cùng native
-   session bị reject; không dùng global delegation lock.
+9. Concurrency guard phải resource-scoped trong một `qiqi_delegate` server process:
+   cùng resolved Git root hoặc cùng native session bị reject; không dùng global
+   delegation lock.
 10. Tool result contract phải đủ cho QiQi reconcile mà không tự vào repo kiểm tra.
 11. Nếu thay đổi artifact bắt buộc, cập nhật checker và tài liệu setup cùng lúc.
 
@@ -75,7 +77,8 @@ Review tối thiểu phải xác nhận:
 - Codex và Claude adapter đều normalize về cùng final result contract;
 - native session ID được trả về và resume identity được kiểm tra;
 - independent Git roots có thể active đồng thời;
-- same Git root và same native session conflict đều bị reject;
+- same Git root và same native session conflict đều bị reject trong cùng
+  `qiqi_delegate` server process;
 - không còn global `_delegate_lock`;
 - Delegation Silence có trong workspace policy;
 - transcript không trở thành tool result;
