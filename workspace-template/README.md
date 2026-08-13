@@ -50,8 +50,8 @@ chúng nhắm tới **các resolved Git root khác nhau**, không dùng cùng na
 và không có dependency/shared-resource conflict.
 
 MCP server hard-reject concurrent calls trên cùng resolved Git root hoặc cùng
-native `session_id`. Dependency và external/shared-resource conflict do QiQi lập
-kế hoạch ở workspace level.
+native `session_id` trong cùng server process. Dependency và external/shared-
+resource conflict do QiQi lập kế hoạch ở workspace level.
 
 Không có tool `status`, `wait`, `read`, separate `resume` hay transcript.
 
@@ -71,7 +71,8 @@ grammar (`command`, `start_args`, `resume_args`, prompt transport); route entry
 
 Template có adapter Codex và Claude Code:
 
-- Codex agent dùng `codex exec --yolo`, JSON event stream và native `exec resume`;
+- Codex agent dùng non-interactive `codex exec`, bypass approvals/sandbox theo
+  flag được cấu hình trong registry, JSON event stream và native `exec resume`;
 - Claude agent dùng `claude -p`, `--output-format json` và native `--resume`;
 - flag phụ thuộc model như `--permission-mode auto` phải nằm ở route tương ứng,
   không đặt ở agent base args nếu không phải mọi model đều hỗ trợ.
@@ -115,7 +116,7 @@ song song hoặc tuần tự; correctness không phụ thuộc khả năng paral
 - Child stdout/stderr không được đưa vào QiQi context.
 - MCP failure không được fallback sang shell-based child agent.
 - Concurrency chỉ được phép giữa các resource độc lập; cùng Git root/session bị
-  MCP chặn cứng.
+  MCP chặn trong cùng server process.
 
 ## Sử dụng
 
