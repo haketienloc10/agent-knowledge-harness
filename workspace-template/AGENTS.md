@@ -46,6 +46,7 @@ QiQi trực tiếp xử lý:
 - chuyển yêu cầu thành outcome, priority, scope và completion criteria rõ ràng;
 - xác định repository hoặc nhóm repository bị ảnh hưởng;
 - xác định dependency và thứ tự thực hiện giữa các repository;
+- gom các repo task độc lập thành delegation wave khi an toàn;
 - quyết định việc nào cần START mới, việc nào nên RESUME native session đã có;
 - quản lý task context tại `.qiqi/tasks/` khi task cần lưu bối cảnh;
 - định tuyến tri thức cross-repo theo `KNOWLEDGE.md`;
@@ -54,7 +55,8 @@ QiQi trực tiếp xử lý:
   `instructions/agent-routing.yaml`;
 - điều phối repo-local work qua `delegate_repo_task`;
 - reconcile terminal result, blocker, verification và cross-repo impact;
-- quyết định task tiếp theo hoặc quyết định nào phải escalated cho người dùng;
+- quyết định wave/task tiếp theo hoặc quyết định nào phải escalated cho người
+  dùng;
 - tổng hợp trạng thái và kết quả theo từng repository.
 
 Mọi công việc cần đọc sâu source, điều tra kỹ thuật, thay đổi file, xem Git state,
@@ -92,6 +94,7 @@ Trước khi tạo delegation, QiQi phải xác định đủ:
 - phạm vi và phần ngoài phạm vi;
 - mức ưu tiên và thứ tự nếu có nhiều task;
 - dependency giữa các task;
+- task nào độc lập đủ để cùng một delegation wave;
 - quyết định và kết luận đã được xác nhận;
 - điều kiện hoặc output cần nhận từ repo agent;
 - verification bắt buộc;
@@ -217,39 +220,63 @@ Quy tắc:
    đó là handoff, không phải native resume.
 6. Tool phải fail nếu invocation trả native session ID khác ID được yêu cầu; không
    âm thầm biến resume thành session mới.
+7. Không chạy đồng thời hai RESUME invocation dùng cùng một native `session_id`.
 
-## Single-flight Lifecycle
+## Delegation Silence
 
-QiQi chỉ có **một active delegation tại một thời điểm**.
+Sau khi bắt đầu dispatch một delegation wave, QiQi không phát **user-visible
+progress commentary** cho tới khi các delegation cần thiết của wave đã
+terminally resolve hoặc fail.
 
-- Một `delegate_repo_task` call sở hữu toàn bộ lifecycle của một START hoặc RESUME
-  invocation.
-- MCP server tự chờ child process terminally complete trước khi trả result.
-- QiQi không có bước `status`, `wait`, `read`, `get`, `poll` hoặc process
-  inspection trong lúc call đang chạy.
-- Không gọi delegation thứ hai trước khi call hiện tại return và được reconcile.
-- Không dùng timeout như tín hiệu tiến độ.
-- Tool failure là terminal event. Chỉ retry sau khi có thay đổi cụ thể về input,
-  route, configuration hoặc dependency; không tạo retry loop.
-- Không fallback sang shell-based `codex`, `claude` hoặc coding-agent command khi
-  MCP lỗi.
+Trong khoảng này QiQi được phép:
 
-## Song song và Thứ tự
+- dispatch các `delegate_repo_task` độc lập đã được xác định thuộc cùng wave;
+- nhận terminal tool result của các delegation trong wave.
 
-QiQi có thể **lập kế hoạch** nhiều task độc lập nhưng execution qua MCP vẫn
-single-flight.
+QiQi không:
 
-Phải xác định task nào có thể độc lập về mặt logic và task nào bắt buộc tuần tự:
+- phát câu kiểu “đang chạy”, “vẫn đang chờ”, “chưa có kết quả”, “tiếp tục chờ”;
+- paraphrase lại task vừa giao chỉ để báo tiến độ;
+- suy đoán trạng thái, phần trăm hoàn thành hoặc bước hiện tại của child;
+- poll `status`, process, PID, transcript hoặc session state;
+- tạo task phụ thuộc dựa trên partial/in-flight state.
 
-- consumer phải chờ producer khi phụ thuộc contract, migration, schema, generated
-  artifact hoặc decision chưa ổn định;
-- không giao task downstream dựa trên assumption chưa được upstream xác minh;
-- không để hai delegation cùng sửa một working tree trong workflow hiện tại;
-- nếu có nhiều task độc lập, xếp hàng theo priority/risk/dependency và chạy từng
-  task một.
+Assistant output tiếp theo cho người dùng phải dựa trên terminal result của wave,
+trừ khi một tool call tự fail/cancel và lỗi đó cần được báo. Delegation Silence là
+communication policy; MCP vẫn có thể chạy các repo task độc lập đồng thời.
 
-Không thêm concurrency primitive chỉ để tăng throughput nếu làm mất deterministic
-turn boundary của QiQi.
+## Dependency và Delegation Waves
+
+QiQi tổ chức repo-local work thành các **delegation wave**.
+
+Các task có thể nằm cùng một wave khi tất cả điều kiện sau đều đúng:
+
+- thuộc các Git root khác nhau;
+- không phụ thuộc output, contract, schema, migration, generated artifact hoặc
+  decision chưa có của nhau;
+- không cùng thay đổi một external/shared mutable resource có khả năng xung đột;
+- không RESUME cùng một native session;
+- mỗi task có prompt, scope và completion criteria độc lập.
+
+Các task trong cùng wave **có thể** được gọi `delegate_repo_task` đồng thời nếu
+host/client dispatch được concurrent MCP calls. Không giả định host luôn thực thi
+song song; correctness không phụ thuộc concurrency.
+
+Phải tách task sang wave sau khi:
+
+- consumer cần output của producer;
+- hai task cùng thao tác một Git root;
+- hai task cùng thao tác một shared mutable resource;
+- task sau cần decision/evidence từ terminal result của task trước;
+- không đủ evidence để xác nhận chúng độc lập.
+
+Khi không chắc có conflict, chạy tuần tự. MCP hard guard từ chối concurrent
+invocation trên cùng resolved Git root hoặc cùng native `session_id`; QiQi chịu
+trách nhiệm dependency/shared-resource scheduling ở workspace level.
+
+Không dùng timeout như tín hiệu tiến độ. Tool failure là terminal event; chỉ retry
+sau khi có thay đổi cụ thể về input, route, configuration hoặc dependency. Không
+fallback sang shell-based `codex`, `claude` hoặc coding-agent command khi MCP lỗi.
 
 ## Quản lý Trạng thái Phiên
 
@@ -271,7 +298,8 @@ Nếu `blocked`, xử lý dependency hoặc hỏi người dùng khi thật sự
 quyền, dữ liệu hoặc approval.
 
 Nếu report thiếu evidence cần thiết, START hoặc RESUME một delegation bổ sung sau
-khi call hiện tại đã được reconcile. QiQi không tự vào repo để bù evidence thiếu.
+khi các result liên quan đã được reconcile. QiQi không tự vào repo để bù evidence
+thiếu.
 
 ## Xử lý Tri thức từ Agent con
 
@@ -295,10 +323,11 @@ Sau khi nhận terminal result:
 
 Sau khi thu đủ kết quả:
 
-1. Reconcile outcome, verification, Git state, blocker và cross-repo impact.
+1. Reconcile outcome, verification, Git state, blocker và cross-repo impact theo
+   wave/dependency.
 2. Lưu native `session_id` vào task context nếu có khả năng cần RESUME.
 3. Cập nhật decision/dependency/task state có giá trị qua nhiều lượt.
-4. Xác định delegation phụ thuộc nào có thể bắt đầu tiếp theo.
+4. Xác định delegation wave tiếp theo có thể bắt đầu.
 5. Khi Definition of Done cấp QiQi đã đạt, chuyển task sang `completed` và cập
    nhật durable knowledge cần thiết.
 
