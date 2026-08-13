@@ -90,8 +90,9 @@ QiQi có thể đặt các task vào cùng delegation wave khi chúng:
 - không cùng thao tác shared mutable resource;
 - không dùng cùng native `session_id`.
 
-MCP hard-reject concurrent calls trên cùng resolved Git root hoặc cùng native
-session. Khi dependency/conflict không rõ, QiQi chạy tuần tự.
+Trong cùng `qiqi_delegate` server process, MCP hard-reject concurrent calls trên
+cùng resolved Git root hoặc cùng native session. Khi dependency/conflict không rõ,
+QiQi chạy tuần tự.
 
 Trong lúc một delegation wave đang in-flight, QiQi áp dụng **Delegation Silence**:
 không phát user-visible progress commentary và không poll trạng thái child.
