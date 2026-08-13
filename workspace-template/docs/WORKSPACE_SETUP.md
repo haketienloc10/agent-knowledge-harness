@@ -179,8 +179,8 @@ delegate_repo_task(repository, task, route, session_id?)
 ```text
 session_id absent
 → resolve exact repository + route
-→ claim resolved Git root
 → ensure Herdr server + current adapter integration
+→ claim resolved Git root
 → create Herdr workspace at exact repo root
 → start real interactive agent using start_args + route args
 → create pending result artifact
@@ -198,6 +198,8 @@ session_id absent
 
 ```text
 session_id present
+→ resolve exact repository + route
+→ ensure Herdr server + current adapter integration
 → claim resolved Git root + native session_id
 → resolve exact existing result artifact
 → create Herdr workspace
