@@ -287,13 +287,48 @@ else
 
     if ! AGENT_NAME="$route_agent" yq -e '.agents | has(env(AGENT_NAME))' "$routing" >/dev/null; then
       fail "agent-routing.yaml: ${route_name}: unknown agent: $route_agent"
+      continue
     fi
     [[ -n "$route_model" && "$route_model" != "null" ]] || \
       fail "agent-routing.yaml: ${route_name}: model must be non-empty"
     if ! ROUTE_NAME="$route_name" yq -e \
       '.routes[env(ROUTE_NAME)].args | type == "!!seq"' "$routing" >/dev/null; then
       fail "agent-routing.yaml: ${route_name}: args must be a list"
+      continue
     fi
+
+    route_arg_count="$(ROUTE_NAME="$route_name" yq -r '.routes[env(ROUTE_NAME)].args | length' "$routing")"
+    if [[ "$route_arg_count" -gt 0 ]]; then
+      for lifecycle in start_args resume_args; do
+        if ! AGENT_NAME="$route_agent" LIFECYCLE="$lifecycle" yq -r \
+          '.agents[env(AGENT_NAME)][env(LIFECYCLE)][]' "$routing" | rg -qx '\{route_args\}'; then
+          fail "agent-routing.yaml: ${route_name}: ${route_agent}.${lifecycle} missing {route_args}"
+        fi
+      done
+    fi
+
+    route_command_name="$(AGENT_NAME="$route_agent" yq -r '.agents[env(AGENT_NAME)].command' "$routing")"
+    route_adapter="$(AGENT_NAME="$route_agent" yq -r '.agents[env(AGENT_NAME)].adapter' "$routing")"
+    if ! command -v "$route_command_name" >/dev/null 2>&1; then
+      continue
+    fi
+
+    if [[ "$route_adapter" == "codex" ]]; then
+      route_help_text="$($route_command_name exec --help 2>&1 || true)"
+    else
+      route_help_text="$($route_command_name --help 2>&1 || true)"
+    fi
+
+    mapfile -t route_flags < <(
+      ROUTE_NAME="$route_name" yq -r \
+        '.routes[env(ROUTE_NAME)].args[] | select(startswith("--"))' \
+        "$routing" | sort -u
+    )
+    for flag in "${route_flags[@]}"; do
+      if ! printf '%s\n' "$route_help_text" | rg -q --fixed-strings -- "$flag"; then
+        fail "agent-routing.yaml: ${route_name}: installed ${route_agent} CLI help does not advertise route flag: $flag"
+      fi
+    done
   done
 fi
 
