@@ -23,7 +23,7 @@ require_dir() {
   [[ -d "$path" ]] || fail "missing directory: ${path#$workspace_root/}"
 }
 
-for command in git rg uv python3 yq codex; do
+for command in git rg uv python3 yq; do
   require_command "$command"
 done
 
@@ -37,6 +37,7 @@ required_files=(
   knowledge/glossary.md
   knowledge/proposals/TEMPLATE.md
   .qiqi/tasks/TEMPLATE.md
+  instructions/agent-routing.yaml
   instructions/model-routing.md
   .codex/config.toml
   mcp/qiqi_delegate/pyproject.toml
@@ -66,6 +67,7 @@ done
 managed_files=(
   "$workspace_root/repos.yaml"
   "$workspace_root/SYSTEM_MAP.md"
+  "$workspace_root/instructions/agent-routing.yaml"
   "$workspace_root/instructions/model-routing.md"
 )
 
@@ -97,21 +99,23 @@ if ((${#existing_policy_files[@]} > 0)) && \
   fail 'legacy Herdr/session orchestration reference found in MCP-only policy'
 fi
 
-agents="$workspace_root/AGENTS.md"
-if [[ -f "$agents" ]]; then
+agents_md="$workspace_root/AGENTS.md"
+if [[ -f "$agents_md" ]]; then
   for pattern in \
     '`identity\.md`' \
     '`repos\.yaml`' \
     '`SYSTEM_MAP\.md`' \
     '`KNOWLEDGE\.md`' \
+    '`instructions/agent-routing\.yaml`' \
     '`instructions/model-routing\.md`' \
     '`delegate_repo_task`' \
+    '`session_id`' \
     '`\.qiqi/tasks/'; do
-    rg -q "$pattern" "$agents" || fail "AGENTS.md: missing required route: $pattern"
+    rg -q "$pattern" "$agents_md" || fail "AGENTS.md: missing required route: $pattern"
   done
-  rg -q 'Không có polling workflow' "$agents" || \
+  rg -q 'Không có polling workflow' "$agents_md" || \
     fail 'AGENTS.md: missing no-polling invariant'
-  rg -q 'Không có đường vòng' "$agents" || \
+  rg -q 'Không có đường vòng' "$agents_md" || \
     fail 'AGENTS.md: missing no-bypass invariant'
 fi
 
@@ -149,15 +153,14 @@ PY
   for pattern in \
     'MCPServer' \
     'asyncio\.Lock' \
+    'agent-routing\.yaml' \
     'def delegate_repo_task' \
-    '"exec"' \
-    '"--ephemeral"' \
-    '"--sandbox"' \
-    '"--ignore-user-config"' \
-    '"--output-schema"' \
-    '"--output-last-message"' \
-    'mcp_servers\.qiqi_delegate\.enabled=false' \
-    'transcript\.log'; do
+    'route: str' \
+    'session_id: str \| None' \
+    '_parse_codex_result' \
+    '_parse_claude_result' \
+    'resume identity mismatch' \
+    'transcript|stdout\.log'; do
     rg -q "$pattern" "$server" || fail "qiqi_delegate/server.py: missing contract: $pattern"
   done
 
@@ -165,12 +168,8 @@ PY
     fail 'qiqi_delegate/server.py: legacy MCP SDK v1 API found; use MCPServer from MCP SDK v2'
   fi
 
-  if rg -q -- '--ask-for-approval' "$server"; then
-    fail 'qiqi_delegate/server.py: codex exec does not accept --ask-for-approval on supported CLI'
-  fi
-
   if rg -q 'def (status|wait|read_transcript|resume|list_runs)\b' "$server"; then
-    fail 'qiqi_delegate/server.py: progress/session tool must not exist'
+    fail 'qiqi_delegate/server.py: separate progress/session tool must not exist'
   fi
 
   if ! uv run --project "$mcp_project" python -c \
@@ -178,29 +177,6 @@ PY
     >/dev/null; then
     fail 'qiqi_delegate: MCP SDK runtime import failed; run uv sync --project mcp/qiqi_delegate'
   fi
-fi
-
-if command -v codex >/dev/null 2>&1; then
-  codex_exec_help="$(codex exec --help 2>&1 || true)"
-  for flag in \
-    '--ephemeral' \
-    '--sandbox' \
-    '--ignore-user-config' \
-    '--output-schema' \
-    '--output-last-message'; do
-    if ! printf '%s\n' "$codex_exec_help" | rg -q --fixed-strings -- "$flag"; then
-      fail "codex exec: installed CLI does not support required flag: $flag"
-    fi
-  done
-fi
-
-routing="$workspace_root/instructions/model-routing.md"
-if [[ -f "$routing" ]]; then
-  rg -q 'Model ID' "$routing" || fail 'model-routing.md: missing Model ID'
-  rg -q 'Reasoning effort' "$routing" || fail 'model-routing.md: missing reasoning effort'
-  for profile in fast balanced deep verifier; do
-    rg -q "\`$profile\`" "$routing" || fail "model-routing.md: missing $profile profile"
-  done
 fi
 
 if ! yq --version 2>&1 | rg -q 'version v?4\.'; then
@@ -241,6 +217,92 @@ else
     duplicate_names="$(printf '%s\n' "${repository_names[@]}" | sort | uniq -d)"
     [[ -z "$duplicate_names" ]] || fail "repos.yaml: duplicate repository name(s): $duplicate_names"
   fi
+
+  routing="$workspace_root/instructions/agent-routing.yaml"
+  if ! yq -e '.version == 1' "$routing" >/dev/null; then
+    fail 'agent-routing.yaml: version must be 1'
+  fi
+  if ! yq -e '.agents | type == "!!map" and length > 0' "$routing" >/dev/null; then
+    fail 'agent-routing.yaml: agents must be a non-empty map'
+  fi
+  if ! yq -e '.routes | type == "!!map" and length > 0' "$routing" >/dev/null; then
+    fail 'agent-routing.yaml: routes must be a non-empty map'
+  fi
+
+  mapfile -t agent_names < <(yq -r '.agents | keys | .[]' "$routing" 2>/dev/null || true)
+  for agent_name in "${agent_names[@]}"; do
+    command_name="$(AGENT_NAME="$agent_name" yq -r '.agents[env(AGENT_NAME)].command' "$routing")"
+    adapter="$(AGENT_NAME="$agent_name" yq -r '.agents[env(AGENT_NAME)].adapter' "$routing")"
+    transport="$(AGENT_NAME="$agent_name" yq -r '.agents[env(AGENT_NAME)].prompt_transport' "$routing")"
+
+    [[ -n "$command_name" && "$command_name" != "null" ]] || \
+      fail "agent-routing.yaml: ${agent_name}: missing command"
+    [[ "$adapter" == "codex" || "$adapter" == "claude" ]] || \
+      fail "agent-routing.yaml: ${agent_name}: adapter must be codex or claude"
+    [[ "$transport" == "stdin" || "$transport" == "argument" ]] || \
+      fail "agent-routing.yaml: ${agent_name}: invalid prompt_transport"
+
+    if ! AGENT_NAME="$agent_name" yq -e \
+      '.agents[env(AGENT_NAME)].start_args | type == "!!seq" and length > 0' \
+      "$routing" >/dev/null; then
+      fail "agent-routing.yaml: ${agent_name}: start_args must be non-empty"
+    fi
+    if ! AGENT_NAME="$agent_name" yq -e \
+      '.agents[env(AGENT_NAME)].resume_args | type == "!!seq" and length > 0' \
+      "$routing" >/dev/null; then
+      fail "agent-routing.yaml: ${agent_name}: resume_args must be non-empty"
+    fi
+    if ! AGENT_NAME="$agent_name" yq -r \
+      '.agents[env(AGENT_NAME)].resume_args[]' "$routing" | rg -q '\{session_id\}'; then
+      fail "agent-routing.yaml: ${agent_name}: resume_args missing {session_id}"
+    fi
+
+    if ! command -v "$command_name" >/dev/null 2>&1; then
+      fail "agent-routing.yaml: ${agent_name}: missing command: $command_name"
+      continue
+    fi
+
+    if [[ "$adapter" == "codex" ]]; then
+      help_text="$($command_name exec --help 2>&1 || true)"
+    else
+      help_text="$($command_name --help 2>&1 || true)"
+    fi
+
+    mapfile -t configured_flags < <(
+      AGENT_NAME="$agent_name" yq -r \
+        '.agents[env(AGENT_NAME)].start_args[], .agents[env(AGENT_NAME)].resume_args[] | select(startswith("--"))' \
+        "$routing" | sort -u
+    )
+    for flag in "${configured_flags[@]}"; do
+      if ! printf '%s\n' "$help_text" | rg -q --fixed-strings -- "$flag"; then
+        fail "agent-routing.yaml: ${agent_name}: installed CLI help does not advertise configured flag: $flag"
+      fi
+    done
+  done
+
+  mapfile -t route_names < <(yq -r '.routes | keys | .[]' "$routing" 2>/dev/null || true)
+  for route_name in "${route_names[@]}"; do
+    route_agent="$(ROUTE_NAME="$route_name" yq -r '.routes[env(ROUTE_NAME)].agent' "$routing")"
+    route_model="$(ROUTE_NAME="$route_name" yq -r '.routes[env(ROUTE_NAME)].model' "$routing")"
+
+    if ! AGENT_NAME="$route_agent" yq -e '.agents | has(env(AGENT_NAME))' "$routing" >/dev/null; then
+      fail "agent-routing.yaml: ${route_name}: unknown agent: $route_agent"
+    fi
+    [[ -n "$route_model" && "$route_model" != "null" ]] || \
+      fail "agent-routing.yaml: ${route_name}: model must be non-empty"
+    if ! ROUTE_NAME="$route_name" yq -e \
+      '.routes[env(ROUTE_NAME)].args | type == "!!seq"' "$routing" >/dev/null; then
+      fail "agent-routing.yaml: ${route_name}: args must be a list"
+    fi
+  done
+fi
+
+model_routing="$workspace_root/instructions/model-routing.md"
+if [[ -f "$model_routing" ]]; then
+  rg -q 'Route' "$model_routing" || fail 'model-routing.md: missing Route column'
+  for profile in fast balanced deep verifier; do
+    rg -q "\`$profile\`" "$model_routing" || fail "model-routing.md: missing $profile profile"
+  done
 fi
 
 if [[ "$errors" -gt 0 ]]; then
