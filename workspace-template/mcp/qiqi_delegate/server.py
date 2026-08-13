@@ -30,6 +30,7 @@ HERDR_SESSION = (
     os.environ.get("QIQI_HERDR_SESSION", "qiqi-delegate").strip() or "qiqi-delegate"
 )
 HERDR_AGENT_START_TIMEOUT_MS = 60_000
+HERDR_SHELL_READY_TIMEOUT_SECONDS = 10.0
 NATIVE_SESSION_WAIT_SECONDS = 15.0
 SUPPORTED_ADAPTERS = {"codex", "claude"}
 PLACEHOLDER_RE = re.compile(r"\{[a-z_][a-z0-9_]*\}")
@@ -714,6 +715,16 @@ def _agent_from_payload(payload: dict[str, Any], context: str) -> dict[str, Any]
     return agent
 
 
+def _herdr_error_code(payload: Any) -> str | None:
+    if not isinstance(payload, dict):
+        return None
+    error = payload.get("error")
+    if not isinstance(error, dict):
+        return None
+    code = error.get("code")
+    return code if isinstance(code, str) else None
+
+
 async def _start_interactive_agent(
     pane_id: str,
     adapter: str,
@@ -733,8 +744,44 @@ async def _start_interactive_agent(
     ]
     if agent_args:
         command.extend(["--", *agent_args])
-    payload = await _run_herdr_json(*command)
-    return name, _agent_from_payload(payload, "agent start")
+
+    deadline = time.monotonic() + HERDR_SHELL_READY_TIMEOUT_SECONDS
+    last_detail = ""
+    while True:
+        returncode, stdout, stderr = await _run_herdr(*command, check=False)
+        detail = (stderr or stdout).strip()
+        last_detail = detail or last_detail
+
+        try:
+            payload = json.loads(stdout)
+        except json.JSONDecodeError:
+            payload = None
+
+        if returncode == 0:
+            if not isinstance(payload, dict):
+                raise RuntimeError(
+                    f"Herdr agent start returned invalid JSON: {' '.join(command)}"
+                )
+            return name, _agent_from_payload(payload, "agent start")
+
+        if _herdr_error_code(payload) != "agent_pane_busy":
+            if len(detail) > 3000:
+                detail = detail[-3000:]
+            raise RuntimeError(
+                f"Herdr command failed (exit={returncode}): "
+                f"{' '.join(command)}{f'; {detail}' if detail else ''}"
+            )
+
+        if time.monotonic() >= deadline:
+            if len(last_detail) > 2000:
+                last_detail = last_detail[-2000:]
+            raise RuntimeError(
+                f"Herdr root pane {pane_id} did not become an available shell "
+                f"within {HERDR_SHELL_READY_TIMEOUT_SECONDS:g}s"
+                f"{f'; last error: {last_detail}' if last_detail else ''}"
+            )
+
+        await asyncio.sleep(0.1)
 
 
 async def _get_agent(name: str) -> dict[str, Any]:
