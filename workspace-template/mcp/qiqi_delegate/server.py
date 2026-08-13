@@ -5,8 +5,10 @@ import asyncio
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 import uuid
@@ -20,6 +22,8 @@ WORKSPACE_ROOT = Path(
     os.environ.get("QIQI_WORKSPACE_ROOT", Path(__file__).resolve().parents[2])
 ).resolve()
 ROUTING_PATH = WORKSPACE_ROOT / "instructions" / "agent-routing.yaml"
+HERDR_BIN = os.environ.get("QIQI_HERDR_BIN", "herdr")
+HERDR_SESSION = os.environ.get("QIQI_HERDR_SESSION", "qiqi-delegate").strip() or "qiqi-delegate"
 SUPPORTED_ADAPTERS = {"codex", "claude"}
 PLACEHOLDER_RE = re.compile(r"\{(?:model|session_id|schema_path|result_path|route_args)\}")
 
@@ -49,16 +53,19 @@ RESULT_SCHEMA: dict[str, Any] = {
 mcp = MCPServer(
     "QiQi Delegate",
     instructions=(
-        "Synchronous execution boundary for QiQi. Use delegate_repo_task for every "
-        "repo-local investigation, edit, Git inspection, and verification. Select "
-        "an execution route from instructions/agent-routing.yaml. Omit session_id "
-        "to START; pass the native Codex/Claude session_id returned by a previous "
-        "terminal result to RESUME. There are intentionally no status, wait, read, "
-        "list-runs, transcript, or separate resume tools."
+        "Synchronous Herdr-backed execution boundary for QiQi. Use "
+        "delegate_repo_task for repo-local work. QiQi selects a route and may "
+        "optionally pass the native Codex/Claude session_id to RESUME; omitting "
+        "session_id always STARTs a new native session. The MCP server owns "
+        "Herdr workspace lifecycle, CLI construction, waiting, native session-id "
+        "extraction, result normalization, and cleanup. There are intentionally "
+        "no status, wait, read, list-runs, transcript, or separate resume tools."
     ),
 )
 
-_delegate_lock = asyncio.Lock()
+_herdr_server_lock = asyncio.Lock()
+_managed_herdr_server: asyncio.subprocess.Process | None = None
+_repo_locks: dict[str, asyncio.Lock] = {}
 
 
 def _load_repo_registry() -> dict[str, Path]:
@@ -257,7 +264,7 @@ Operating contract:
 - Final task result must be exactly one JSON object matching this schema: {schema}
 - Do not wrap the final JSON object in Markdown fences or add prose around it.
 - Use [] for empty list fields.
-- If a user/product decision or unavailable dependency prevents completion, set outcome to \"blocked\" and explain it in blockers.
+- If a user/product decision or unavailable dependency prevents completion, set outcome to "blocked" and explain it in blockers.
 
 Task:
 {task}
@@ -380,6 +387,263 @@ async def _terminate(proc: asyncio.subprocess.Process) -> None:
         await proc.wait()
 
 
+async def _communicate(
+    proc: asyncio.subprocess.Process,
+    input_data: bytes | None = None,
+) -> tuple[bytes, bytes]:
+    try:
+        return await proc.communicate(input_data)
+    except asyncio.CancelledError:
+        await _terminate(proc)
+        raise
+
+
+def _herdr_argv(*args: str) -> list[str]:
+    return [HERDR_BIN, "--session", HERDR_SESSION, *args]
+
+
+async def _run_herdr(*args: str, check: bool = True) -> tuple[int, str, str]:
+    proc = await asyncio.create_subprocess_exec(
+        *_herdr_argv(*args),
+        stdin=asyncio.subprocess.DEVNULL,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await _communicate(proc)
+    out_text = stdout.decode("utf-8", errors="replace")
+    err_text = stderr.decode("utf-8", errors="replace")
+    if check and proc.returncode != 0:
+        detail = (err_text or out_text).strip()
+        if len(detail) > 2000:
+            detail = detail[-2000:]
+        raise RuntimeError(
+            f"Herdr command failed (exit={proc.returncode}): "
+            f"{' '.join(args)}{f'; {detail}' if detail else ''}"
+        )
+    return proc.returncode or 0, out_text, err_text
+
+
+async def _run_herdr_json(*args: str) -> dict[str, Any]:
+    _, stdout, _ = await _run_herdr(*args)
+    try:
+        payload = json.loads(stdout)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(
+            f"Herdr command returned invalid JSON: {' '.join(args)}"
+        ) from exc
+    if not isinstance(payload, dict):
+        raise RuntimeError(f"Herdr command returned non-object JSON: {' '.join(args)}")
+    return payload
+
+
+async def _herdr_server_running() -> bool:
+    returncode, _, _ = await _run_herdr("status", "server", check=False)
+    return returncode == 0
+
+
+async def _ensure_herdr_server() -> None:
+    global _managed_herdr_server
+
+    if shutil.which(HERDR_BIN) is None:
+        raise RuntimeError(f"missing Herdr CLI: {HERDR_BIN}")
+
+    if await _herdr_server_running():
+        return
+
+    async with _herdr_server_lock:
+        if await _herdr_server_running():
+            return
+
+        _managed_herdr_server = await asyncio.create_subprocess_exec(
+            *_herdr_argv("server"),
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            if await _herdr_server_running():
+                return
+            if _managed_herdr_server.returncode is not None:
+                break
+            await asyncio.sleep(0.1)
+
+        if _managed_herdr_server.returncode is None:
+            await _terminate(_managed_herdr_server)
+        raise RuntimeError(
+            f"failed to start Herdr named session {HERDR_SESSION!r}"
+        )
+
+
+async def _create_herdr_workspace(repo: Path, label: str) -> tuple[str, str]:
+    payload = await _run_herdr_json(
+        "workspace",
+        "create",
+        "--cwd",
+        str(repo),
+        "--label",
+        label,
+        "--no-focus",
+    )
+    result = payload.get("result")
+    if not isinstance(result, dict):
+        raise RuntimeError("Herdr workspace create returned no result")
+    workspace = result.get("workspace")
+    root_pane = result.get("root_pane")
+    if not isinstance(workspace, dict) or not isinstance(root_pane, dict):
+        raise RuntimeError("Herdr workspace create returned incomplete topology")
+
+    workspace_id = workspace.get("workspace_id")
+    pane_id = root_pane.get("pane_id")
+    if not isinstance(workspace_id, str) or not workspace_id:
+        raise RuntimeError("Herdr workspace create returned no workspace_id")
+    if not isinstance(pane_id, str) or not pane_id:
+        raise RuntimeError("Herdr workspace create returned no root pane_id")
+    return workspace_id, pane_id
+
+
+async def _close_herdr_workspace(workspace_id: str) -> None:
+    try:
+        await _run_herdr("workspace", "close", workspace_id)
+    except Exception:
+        # Cleanup must not replace the delegation result/error.
+        pass
+
+
+def _write_runner(
+    run_dir: Path,
+    command: list[str],
+    prompt: str,
+    prompt_transport: str,
+    repo: Path,
+    stdout_path: Path,
+    stderr_path: Path,
+    exit_path: Path,
+    sentinel: str,
+) -> Path:
+    command_path = run_dir / "command.json"
+    prompt_path = run_dir / "prompt.txt"
+    spec_path = run_dir / "runner-spec.json"
+    runner_path = run_dir / "runner.py"
+
+    command_path.write_text(
+        json.dumps(command, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    prompt_path.write_text(prompt, encoding="utf-8")
+    spec_path.write_text(
+        json.dumps(
+            {
+                "command_path": str(command_path),
+                "prompt_path": str(prompt_path),
+                "prompt_transport": prompt_transport,
+                "cwd": str(repo),
+                "stdout_path": str(stdout_path),
+                "stderr_path": str(stderr_path),
+                "exit_path": str(exit_path),
+                "sentinel": sentinel,
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    runner_path.write_text(
+        """#!/usr/bin/env python3
+import json
+import subprocess
+from pathlib import Path
+
+root = Path(__file__).resolve().parent
+spec = json.loads((root / "runner-spec.json").read_text(encoding="utf-8"))
+argv = json.loads(Path(spec["command_path"]).read_text(encoding="utf-8"))
+prompt = Path(spec["prompt_path"]).read_bytes()
+
+returncode = 127
+runner_error = None
+try:
+    with open(spec["stdout_path"], "wb") as stdout, open(spec["stderr_path"], "wb") as stderr:
+        if spec["prompt_transport"] == "stdin":
+            completed = subprocess.run(
+                argv,
+                cwd=spec["cwd"],
+                input=prompt,
+                stdout=stdout,
+                stderr=stderr,
+                check=False,
+            )
+        else:
+            completed = subprocess.run(
+                argv,
+                cwd=spec["cwd"],
+                stdin=subprocess.DEVNULL,
+                stdout=stdout,
+                stderr=stderr,
+                check=False,
+            )
+    returncode = completed.returncode
+except BaseException as exc:
+    runner_error = f"{type(exc).__name__}: {exc}"
+finally:
+    Path(spec["exit_path"]).write_text(
+        json.dumps({"returncode": returncode, "runner_error": runner_error}),
+        encoding="utf-8",
+    )
+    print(spec["sentinel"], flush=True)
+""",
+        encoding="utf-8",
+    )
+    return runner_path
+
+
+async def _run_in_herdr(
+    pane_id: str,
+    runner_path: Path,
+    sentinel: str,
+) -> None:
+    launcher = shlex.join([sys.executable, "-u", str(runner_path)])
+    await _run_herdr("pane", "run", pane_id, launcher)
+    await _run_herdr(
+        "pane",
+        "wait-output",
+        pane_id,
+        "--match",
+        sentinel,
+        "--source",
+        "recent-unwrapped",
+        "--lines",
+        "80",
+    )
+
+
+def _read_runner_exit(exit_path: Path) -> tuple[int, str | None]:
+    if not exit_path.is_file():
+        raise RuntimeError("Herdr runner produced no exit metadata")
+    try:
+        payload = json.loads(exit_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("Herdr runner exit metadata is invalid JSON") from exc
+    if not isinstance(payload, dict):
+        raise RuntimeError("Herdr runner exit metadata is invalid")
+    returncode = payload.get("returncode")
+    runner_error = payload.get("runner_error")
+    if not isinstance(returncode, int):
+        raise RuntimeError("Herdr runner exit metadata has no return code")
+    if runner_error is not None and not isinstance(runner_error, str):
+        runner_error = str(runner_error)
+    return returncode, runner_error
+
+
+def _repo_lock(repo: Path) -> asyncio.Lock:
+    key = str(repo)
+    lock = _repo_locks.get(key)
+    if lock is None:
+        lock = asyncio.Lock()
+        _repo_locks[key] = lock
+    return lock
+
+
 @mcp.tool()
 async def delegate_repo_task(
     repository: str,
@@ -387,12 +651,13 @@ async def delegate_repo_task(
     route: str,
     session_id: str | None = None,
 ) -> dict[str, Any]:
-    """Execute one repo-local task synchronously using a configured route.
+    """Execute one repo-local task synchronously through Herdr.
 
     `repository` is the exact name from repos.yaml. `route` is the exact route
     name from instructions/agent-routing.yaml. Omit `session_id` to START a new
     native session. Pass a native session id previously returned by this tool to
-    RESUME through the selected route. There is no progress/status API.
+    RESUME through the selected route. The call stays open until the child run
+    completes or fails; there is no progress/status API.
     """
     repository = repository.strip()
     task = task.strip()
@@ -410,27 +675,26 @@ async def delegate_repo_task(
     if len(task) > 100_000:
         raise ValueError("task is too large")
 
-    if _delegate_lock.locked():
-        raise RuntimeError(
-            "another delegation is active; do not poll, queue, or start another task"
-        )
+    repo = _resolve_repo(repository)
+    agent_name, agent, route_config = _resolve_route(route)
 
-    async with _delegate_lock:
-        repo = _resolve_repo(repository)
-        agent_name, agent, route_config = _resolve_route(route)
-        command_name = agent["command"]
-        if shutil.which(command_name) is None:
-            raise RuntimeError(f"missing execution agent CLI: {command_name}")
+    command_name = agent["command"]
+    if shutil.which(command_name) is None:
+        raise RuntimeError(f"missing execution agent CLI: {command_name}")
 
+    await _ensure_herdr_server()
+
+    async with _repo_lock(repo):
         run_id = f"{int(time.time())}-{uuid.uuid4().hex[:8]}"
-        started = time.monotonic()
+        run_dir = Path(tempfile.mkdtemp(prefix=f"qiqi-delegate-{run_id}-"))
+        workspace_id: str | None = None
 
-        with tempfile.TemporaryDirectory(prefix="qiqi-delegate-") as temp_dir:
-            temp = Path(temp_dir)
-            schema_path = temp / "result.schema.json"
-            result_path = temp / "result.json"
-            stdout_path = temp / "stdout.log"
-            stderr_path = temp / "stderr.log"
+        try:
+            schema_path = run_dir / "result.schema.json"
+            result_path = run_dir / "result.json"
+            stdout_path = run_dir / "stdout.log"
+            stderr_path = run_dir / "stderr.log"
+            exit_path = run_dir / "exit.json"
             schema_path.write_text(
                 json.dumps(RESULT_SCHEMA, ensure_ascii=False, indent=2),
                 encoding="utf-8",
@@ -443,40 +707,39 @@ async def delegate_repo_task(
             prompt_transport = agent["prompt_transport"]
             if prompt_transport == "stdin":
                 command.append(agent["prompt_arg"])
-                stdin_mode = asyncio.subprocess.PIPE
-                stdin_payload: bytes | None = prompt.encode("utf-8")
             else:
                 command.append(prompt)
-                stdin_mode = asyncio.subprocess.DEVNULL
-                stdin_payload = None
 
-            with stdout_path.open("wb") as stdout, stderr_path.open("wb") as stderr:
-                proc = await asyncio.create_subprocess_exec(
-                    *command,
-                    cwd=str(repo),
-                    stdin=stdin_mode,
-                    stdout=stdout,
-                    stderr=stderr,
-                )
-                try:
-                    if stdin_payload is None:
-                        await proc.wait()
-                    else:
-                        await proc.communicate(stdin_payload)
-                except asyncio.CancelledError:
-                    await _terminate(proc)
-                    raise
+            label = f"qiqi:{repository}:{run_id[-8:]}"
+            workspace_id, pane_id = await _create_herdr_workspace(repo, label)
 
-            if proc.returncode != 0:
+            sentinel = f"__QIQI_DELEGATE_DONE_{uuid.uuid4().hex}__"
+            runner_path = _write_runner(
+                run_dir=run_dir,
+                command=command,
+                prompt=prompt,
+                prompt_transport=prompt_transport,
+                repo=repo,
+                stdout_path=stdout_path,
+                stderr_path=stderr_path,
+                exit_path=exit_path,
+                sentinel=sentinel,
+            )
+
+            await _run_in_herdr(pane_id, runner_path, sentinel)
+
+            returncode, runner_error = _read_runner_exit(exit_path)
+            if returncode != 0:
                 diagnostic = _safe_runner_diagnostic(stderr_path, stdout_path)
                 detail = (
                     f"; runner diagnostic: {diagnostic}"
                     if diagnostic
                     else "; child output is intentionally not exposed to QiQi"
                 )
+                if runner_error:
+                    detail += f"; runner error: {runner_error[:1000]}"
                 raise RuntimeError(
-                    f"child {agent_name} run failed (run_id={run_id}, "
-                    f"exit={proc.returncode}){detail}"
+                    f"child {agent_name} run failed (exit={returncode}){detail}"
                 )
 
             adapter = agent["adapter"]
@@ -495,17 +758,14 @@ async def delegate_repo_task(
                     f"native session id {session_id!r}"
                 )
 
-        duration = round(time.monotonic() - started, 2)
-        return {
-            "run_id": run_id,
-            "repository": repository,
-            "agent": agent_name,
-            "route": route,
-            "model": route_config["model"],
-            "session_id": native_session_id,
-            "duration_seconds": duration,
-            **result,
-        }
+            return {
+                "session_id": native_session_id,
+                **result,
+            }
+        finally:
+            if workspace_id:
+                await _close_herdr_workspace(workspace_id)
+            shutil.rmtree(run_dir, ignore_errors=True)
 
 
 if __name__ == "__main__":
