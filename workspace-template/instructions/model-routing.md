@@ -16,10 +16,10 @@ agent adapter khác được MCP hỗ trợ.
 
 | Profile | Route | Dùng khi | Evidence khả dụng |
 |---|---|---|---|
-| `fast` | `{{FAST_ROUTE}}` | Task cơ học, phạm vi nhỏ, yêu cầu rõ, verification trực tiếp. | `{{FAST_EVIDENCE}}` |
-| `balanced` | `{{BALANCED_ROUTE}}` | Implementation thông thường, bug vừa phải, test hoặc tài liệu kỹ thuật. | `{{BALANCED_EVIDENCE}}` |
-| `deep` | `{{DEEP_ROUTE}}` | Kiến trúc, migration, contract phức tạp hoặc bug khó. | `{{DEEP_EVIDENCE}}` |
-| `verifier` | `{{VERIFIER_ROUTE}}` | Review độc lập, đối chiếu spec, rủi ro và chất lượng evidence. | `{{VERIFIER_EVIDENCE}}` |
+| `fast` | `claude-haiku` | Task cơ học, phạm vi nhỏ, yêu cầu rõ, verification trực tiếp. | Dùng Claude Code model `haiku`. |
+| `balanced` | `claude-balanced` | Implementation thông thường, bug vừa phải, test hoặc tài liệu kỹ thuật. | Dùng Claude Code model `sonnet` với `--effort medium`. |
+| `deep` | `claude-deep` | Kiến trúc, migration, contract phức tạp hoặc bug khó. | Dùng Claude Code model `sonnet` với `--effort high` và `--permission-mode auto`. |
+| `verifier` | `claude-verifier` | Review độc lập, đối chiếu spec, rủi ro và chất lượng evidence. | Dùng Claude Code model `sonnet` với `--effort xhigh`. |
 
 ## Quy tắc Chọn
 

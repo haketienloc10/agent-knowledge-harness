@@ -1,0 +1,67 @@
+# Mẫu registry chỉ dùng Codex cho qiqi_delegate.
+# Đổi model hoặc route args tại đây, không truyền CLI flags qua MCP tool.
+version: 1
+
+agents:
+  codex:
+    command: codex
+    adapter: codex
+    prompt_transport: stdin
+    prompt_arg: "-"
+
+    start_args:
+      - exec
+      - --dangerously-bypass-approvals-and-sandbox
+      - --json
+      - --ignore-user-config
+      - --model
+      - "{model}"
+      - "{route_args}"
+      - --output-schema
+      - "{schema_path}"
+      - --output-last-message
+      - "{result_path}"
+
+    resume_args:
+      - exec
+      - --dangerously-bypass-approvals-and-sandbox
+      - --json
+      - --ignore-user-config
+      - --model
+      - "{model}"
+      - "{route_args}"
+      - --output-schema
+      - "{schema_path}"
+      - --output-last-message
+      - "{result_path}"
+      - resume
+      - "{session_id}"
+
+routes:
+  codex-fast:
+    agent: codex
+    model: gpt-5.4
+    args:
+      - -c
+      - 'model_reasoning_effort="low"'
+
+  codex-balanced:
+    agent: codex
+    model: gpt-5.4
+    args:
+      - -c
+      - 'model_reasoning_effort="medium"'
+
+  codex-deep:
+    agent: codex
+    model: gpt-5.4
+    args:
+      - -c
+      - 'model_reasoning_effort="high"'
+
+  codex-verifier:
+    agent: codex
+    model: gpt-5.4
+    args:
+      - -c
+      - 'model_reasoning_effort="xhigh"'

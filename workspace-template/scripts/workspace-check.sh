@@ -270,7 +270,7 @@ else
 
     mapfile -t configured_flags < <(
       AGENT_NAME="$agent_name" yq -r \
-        '(.agents[env(AGENT_NAME)].start_args[], .agents[env(AGENT_NAME)].resume_args[]) | select(startswith("--"))' \
+        '(.agents[env(AGENT_NAME)].start_args[], .agents[env(AGENT_NAME)].resume_args[]) | select(test("^--"))' \
         "$routing" | sort -u
     )
     for flag in "${configured_flags[@]}"; do
@@ -321,7 +321,7 @@ else
 
     mapfile -t route_flags < <(
       ROUTE_NAME="$route_name" yq -r \
-        '.routes[env(ROUTE_NAME)].args[] | select(startswith("--"))' \
+        '.routes[env(ROUTE_NAME)].args[] | select(test("^--"))' \
         "$routing" | sort -u
     )
     for flag in "${route_flags[@]}"; do

@@ -1,6 +1,4 @@
 # Machine-readable execution registry for qiqi_delegate.
-# Fill every {{...}} placeholder during workspace setup.
-#
 # QiQi selects a route. The MCP server owns CLI construction, START/RESUME,
 # native session-id extraction, result normalization and serialization.
 # Flags belong here, not in QiQi prompts or MCP tool arguments.
@@ -23,11 +21,9 @@ agents:
     # {result_path}.
     start_args:
       - exec
-      - --yolo
+      - --dangerously-bypass-approvals-and-sandbox
       - --json
       - --ignore-user-config
-      - -c
-      - mcp_servers.qiqi_delegate.enabled=false
       - --model
       - "{model}"
       - "{route_args}"
@@ -38,11 +34,9 @@ agents:
 
     resume_args:
       - exec
-      - --yolo
+      - --dangerously-bypass-approvals-and-sandbox
       - --json
       - --ignore-user-config
-      - -c
-      - mcp_servers.qiqi_delegate.enabled=false
       - --model
       - "{model}"
       - "{route_args}"
@@ -79,23 +73,41 @@ agents:
 routes:
   codex-balanced:
     agent: codex
-    model: "{{CODEX_MODEL_ID}}"
+    model: gpt-5.4
     args:
       - -c
-      - 'model_reasoning_effort="{{CODEX_REASONING_EFFORT}}"'
+      - 'model_reasoning_effort="medium"'
 
   # Safe route for Claude models such as Haiku that do not support
   # --permission-mode auto.
   claude-haiku:
     agent: claude
-    model: "{{CLAUDE_HAIKU_MODEL_ID}}"
+    model: haiku
     args: []
 
-  # Use this shape only for Claude models confirmed to support auto permission
-  # mode (for example Sonnet 5+ in the target environment).
-  claude-auto:
+  claude-balanced:
     agent: claude
-    model: "{{CLAUDE_AUTO_MODEL_ID}}"
+    model: sonnet
     args:
       - --permission-mode
       - auto
+      - --effort
+      - medium
+
+  claude-deep:
+    agent: claude
+    model: sonnet
+    args:
+      - --permission-mode
+      - auto
+      - --effort
+      - high
+
+  claude-verifier:
+    agent: claude
+    model: sonnet
+    args:
+      - --permission-mode
+      - auto
+      - --effort
+      - xhigh

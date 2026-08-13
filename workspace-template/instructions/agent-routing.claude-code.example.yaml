@@ -1,0 +1,61 @@
+# Mẫu registry chỉ dùng Claude Code cho qiqi_delegate.
+# Đổi model hoặc route args tại đây, không truyền CLI flags qua MCP tool.
+version: 1
+
+agents:
+  claude:
+    command: claude
+    adapter: claude
+    prompt_transport: argument
+
+    start_args:
+      - -p
+      - --output-format
+      - json
+      - --model
+      - "{model}"
+      - "{route_args}"
+
+    resume_args:
+      - -p
+      - --resume
+      - "{session_id}"
+      - --output-format
+      - json
+      - --model
+      - "{model}"
+      - "{route_args}"
+
+routes:
+  # Dùng khi Claude CLI/model không hỗ trợ --permission-mode auto.
+  claude-haiku:
+    agent: claude
+    model: haiku
+    args: []
+
+  claude-balanced:
+    agent: claude
+    model: sonnet
+    args:
+      - --permission-mode
+      - auto
+      - --effort
+      - medium
+
+  claude-deep:
+    agent: claude
+    model: sonnet
+    args:
+      - --permission-mode
+      - auto
+      - --effort
+      - high
+
+  claude-verifier:
+    agent: claude
+    model: sonnet
+    args:
+      - --permission-mode
+      - auto
+      - --effort
+      - xhigh
