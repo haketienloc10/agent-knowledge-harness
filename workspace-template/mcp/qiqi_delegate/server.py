@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import yaml
-from mcp.server.fastmcp import FastMCP
+from mcp.server import MCPServer
 
 WORKSPACE_ROOT = Path(
     os.environ.get("QIQI_WORKSPACE_ROOT", Path(__file__).resolve().parents[2])
@@ -42,7 +42,7 @@ RESULT_SCHEMA: dict[str, Any] = {
     "additionalProperties": False,
 }
 
-mcp = FastMCP(
+mcp = MCPServer(
     "QiQi Delegate",
     instructions=(
         "Synchronous execution boundary for QiQi. Use delegate_repo_task for every "
@@ -260,7 +260,7 @@ async def delegate_repo_task(
             if proc.returncode != 0:
                 raise RuntimeError(
                     f"child Codex run failed (run_id={run_id}, exit={proc.returncode}); "
-                    "child transcript was discarded"
+                    "child output is intentionally not exposed to QiQi"
                 )
             if not result_path.is_file():
                 raise RuntimeError(
@@ -276,10 +276,11 @@ async def delegate_repo_task(
 
             result = _validate_result(payload)
 
+        duration = round(time.monotonic() - started, 2)
         return {
             "run_id": run_id,
             "repository": repository,
-            "duration_seconds": round(time.monotonic() - started, 2),
+            "duration_seconds": duration,
             **result,
         }
 
