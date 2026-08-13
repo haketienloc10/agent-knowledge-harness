@@ -715,6 +715,20 @@ def _agent_from_payload(payload: dict[str, Any], context: str) -> dict[str, Any]
     return agent
 
 
+def _herdr_json_payload(stdout: str, stderr: str) -> dict[str, Any] | None:
+    for text in (stdout, stderr):
+        stripped = text.strip()
+        if not stripped:
+            continue
+        try:
+            payload = json.loads(stripped)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, dict):
+            return payload
+    return None
+
+
 def _herdr_error_code(payload: Any) -> str | None:
     if not isinstance(payload, dict):
         return None
@@ -751,14 +765,10 @@ async def _start_interactive_agent(
         returncode, stdout, stderr = await _run_herdr(*command, check=False)
         detail = (stderr or stdout).strip()
         last_detail = detail or last_detail
-
-        try:
-            payload = json.loads(stdout)
-        except json.JSONDecodeError:
-            payload = None
+        payload = _herdr_json_payload(stdout, stderr)
 
         if returncode == 0:
-            if not isinstance(payload, dict):
+            if payload is None:
                 raise RuntimeError(
                     f"Herdr agent start returned invalid JSON: {' '.join(command)}"
                 )
