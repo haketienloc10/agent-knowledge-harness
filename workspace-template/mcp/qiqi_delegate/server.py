@@ -450,36 +450,25 @@ def _append_task_section(path: Path, task: str) -> tuple[str, str]:
 
 
 def _build_prompt(task: str, result_path: Path, marker: str) -> str:
-    return f"""You are the execution agent for exactly one Git repository.
+    return f"""{task}
 
-Operating contract:
-- Work only inside the current Git repository.
-- Read and follow the repository's AGENTS.md and repo-local instructions.
-- Do not inspect, edit, or operate on sibling repositories or workspace control files.
-- The only path outside the repository that you may edit is the exact result artifact below.
-- Do not spawn or delegate to another coding agent.
-- Complete the task independently, including appropriate verification.
-- Keep intermediate reasoning and progress in this interactive agent session; do not write chain-of-thought to the result artifact.
-- Keep the interactive agent process alive and ready for another prompt after this turn.
-
-Result artifact contract:
+---
+QiQi MCP result handoff protocol:
+- The task above is owned by QiQi. This footer only defines result handoff and does not change task semantics.
 - Result artifact: {result_path}
 - Preserve all existing content in that Markdown file.
-- Find this exact pending marker under the newest Result section:
+- Replace exactly this pending marker under the newest Result section:
   {marker}
-- Before this turn settles, replace that marker with concise Markdown containing:
-  `### Outcome` with `completed` or `blocked`;
+- Before this turn settles, replace the marker with concise Markdown containing these headings in exactly this order:
+  `### Outcome`;
   `### Changes`;
   `### Verification`;
   `### Git State`;
   `### Blockers`;
   `### Repo-local Knowledge`;
   `### Cross-repo Impact`.
-- Use `None.` for an empty prose section or a short bullet list when appropriate.
-- If a user/product decision or unavailable dependency prevents completion, write the blocker to the artifact with Outcome `blocked` before presenting the interactive question/blocker.
-
-Task:
-{task}
+- Under `### Outcome`, write exactly `completed` or `blocked`.
+- If the turn is blocked, finalize this result section with Outcome `blocked` before presenting the interactive blocker or question.
 """
 
 
