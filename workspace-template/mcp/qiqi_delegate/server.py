@@ -160,6 +160,28 @@ def _validate_result(payload: Any) -> dict[str, Any]:
     return payload
 
 
+def _safe_runner_diagnostic(path: Path) -> str | None:
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+
+    startup_markers = (
+        "unexpected argument",
+        "usage: codex exec",
+        "error loading config.toml",
+        "error parsing -c overrides",
+    )
+    lowered = text.lower()
+    if not any(marker in lowered for marker in startup_markers):
+        return None
+
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if not lines:
+        return None
+    return " | ".join(lines[-8:])[:2000]
+
+
 async def _terminate(proc: asyncio.subprocess.Process) -> None:
     if proc.returncode is not None:
         return
@@ -223,11 +245,7 @@ async def delegate_repo_task(
                 "--ephemeral",
                 "--sandbox",
                 "workspace-write",
-                "--ask-for-approval",
-                "never",
                 "--ignore-user-config",
-                "-C",
-                str(repo),
                 "-c",
                 "mcp_servers.qiqi_delegate.enabled=false",
                 "--output-schema",
@@ -258,9 +276,15 @@ async def delegate_repo_task(
                     raise
 
             if proc.returncode != 0:
+                diagnostic = _safe_runner_diagnostic(transcript_path)
+                detail = (
+                    f"; runner diagnostic: {diagnostic}"
+                    if diagnostic
+                    else "; child output is intentionally not exposed to QiQi"
+                )
                 raise RuntimeError(
-                    f"child Codex run failed (run_id={run_id}, exit={proc.returncode}); "
-                    "child output is intentionally not exposed to QiQi"
+                    f"child Codex run failed (run_id={run_id}, exit={proc.returncode})"
+                    f"{detail}"
                 )
             if not result_path.is_file():
                 raise RuntimeError(
