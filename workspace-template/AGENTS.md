@@ -69,7 +69,7 @@ Không quét toàn bộ source hoặc task history của mọi repository khi kh
 
 ## Prompt Ownership
 
-Prompt task do QiQi sở hữu. Trước khi delegation, QiQi phải truyền đủ context để
+Task prompt do QiQi sở hữu. Trước khi delegation, QiQi phải truyền đủ context để
 agent tự thực hiện công việc mà không cần MCP diễn giải lại semantics.
 
 Prompt self-contained nên có, khi liên quan:
@@ -258,8 +258,10 @@ promote vào `knowledge/`.
 
 ## Failure và Retry
 
-Tool failure là terminal event của call đó. QiQi không fallback sang shell-based
-`codex`, `claude` hoặc coding-agent command khi MCP lỗi.
+Tool failure là terminal event của call đó.
+
+Không fallback sang shell-based `codex`, `claude` hoặc coding-agent command khi
+MCP lỗi.
 
 Không tạo retry loop. Chỉ retry sau khi có thay đổi cụ thể về input, route,
 configuration, dependency hoặc blocker đã được giải.
