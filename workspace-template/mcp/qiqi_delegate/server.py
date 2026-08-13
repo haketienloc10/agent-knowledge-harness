@@ -153,7 +153,6 @@ def _load_execution_config() -> tuple[dict[str, Any], dict[str, Any]]:
     for name, config in agents.items():
         if not isinstance(name, str) or not isinstance(config, dict):
             raise RuntimeError("agent-routing.yaml: invalid agent entry")
-
         command = config.get("command")
         adapter = config.get("adapter")
         if not isinstance(command, str) or not command.strip():
@@ -224,7 +223,6 @@ def _build_interactive_args(
     template_key = "resume_args" if session_id else "start_args"
     template = agent[template_key]
     route_args = route.get("args", [])
-
     if route_args and "{route_args}" not in template:
         raise RuntimeError(f"{template_key} does not contain {{route_args}}")
 
@@ -279,36 +277,86 @@ def _task_slug(task: str) -> str:
     return _ascii_slug(first_line, max_length=48, fallback="task")
 
 
-def _new_result_artifact(
+def _artifact_header(
     repository: str,
     agent_name: str,
-    session_id: str,
+    session_id: str | None,
     task: str,
-) -> Path:
-    repo_part = _repo_filename_component(repository)
-    session_part = _session_filename_component(session_id)
-    path = RUNS_DIR / f"{repo_part}-{_task_slug(task)}-{session_part}.md"
-    if path.exists():
-        raise RuntimeError(
-            f"new native session would overwrite existing result artifact: {path}"
-        )
-
+) -> str:
     metadata = {
         "repository": repository,
         "agent": agent_name,
         "session_id": session_id,
     }
-    title = next((line.strip() for line in task.splitlines() if line.strip()), "Task")
-    title = title[:120]
-    path.write_text(
+    title = next((line.strip() for line in task.splitlines() if line.strip()), "Task")[:120]
+    session_display = session_id or "pending"
+    return (
         f"{META_PREFIX}{json.dumps(metadata, ensure_ascii=False)}{META_SUFFIX}\n"
         f"# {title}\n\n"
         f"- Repository: `{repository}`\n"
         f"- Agent: `{agent_name}`\n"
-        f"- Native session: `{session_id}`\n",
+        f"- Native session: `{session_display}`\n"
+    )
+
+
+def _create_pending_result_artifact(
+    repository: str,
+    agent_name: str,
+    task: str,
+) -> Path:
+    RUNS_DIR.mkdir(parents=True, exist_ok=True)
+    path = RUNS_DIR / (
+        f".pending-{_repo_filename_component(repository)}-{_task_slug(task)}-"
+        f"{uuid.uuid4().hex[:12]}.md"
+    )
+    path.write_text(
+        _artifact_header(repository, agent_name, None, task),
         encoding="utf-8",
     )
     return path
+
+
+def _final_result_path(repository: str, task: str, session_id: str) -> Path:
+    return RUNS_DIR / (
+        f"{_repo_filename_component(repository)}-{_task_slug(task)}-"
+        f"{_session_filename_component(session_id)}.md"
+    )
+
+
+def _promote_start_artifact(
+    path: Path,
+    repository: str,
+    agent_name: str,
+    task: str,
+    session_id: str,
+) -> Path:
+    destination = _final_result_path(repository, task, session_id)
+    if destination.exists():
+        raise RuntimeError(
+            f"new native session would overwrite existing result artifact: {destination}"
+        )
+
+    text = path.read_text(encoding="utf-8")
+    lines = text.splitlines(keepends=True)
+    if not lines:
+        raise RuntimeError(f"pending result artifact is empty: {path}")
+    lines[0] = (
+        f"{META_PREFIX}"
+        f"{json.dumps({'repository': repository, 'agent': agent_name, 'session_id': session_id}, ensure_ascii=False)}"
+        f"{META_SUFFIX}\n"
+    )
+
+    native_line = None
+    for index, line in enumerate(lines):
+        if line.startswith("- Native session: "):
+            native_line = index
+            break
+    if native_line is None:
+        raise RuntimeError(f"pending result artifact lost native-session header: {path}")
+    lines[native_line] = f"- Native session: `{session_id}`\n"
+    path.write_text("".join(lines), encoding="utf-8")
+    path.replace(destination)
+    return destination
 
 
 def _artifact_metadata(path: Path) -> dict[str, Any]:
@@ -343,6 +391,7 @@ def _find_resume_artifact(
         path
         for path in RUNS_DIR.iterdir()
         if path.is_file()
+        and not path.name.startswith(".pending-")
         and path.name.startswith(prefix)
         and path.name.endswith(suffix)
     )
@@ -492,7 +541,9 @@ def _validate_result_section(text: str, expected_prefix: str, status: str) -> No
     )
     if outcome_match is None:
         raise RuntimeError("interactive agent result has no Outcome value")
-    outcome_lines = [line.strip() for line in outcome_match.group(1).splitlines() if line.strip()]
+    outcome_lines = [
+        line.strip() for line in outcome_match.group(1).splitlines() if line.strip()
+    ]
     if not outcome_lines:
         raise RuntimeError("interactive agent result has an empty Outcome value")
     outcome = outcome_lines[0].strip("`").lower()
@@ -629,7 +680,6 @@ async def _ensure_herdr_server() -> None:
 
     if shutil.which(HERDR_BIN) is None:
         raise RuntimeError(f"missing Herdr CLI: {HERDR_BIN}")
-
     if await _herdr_server_running():
         return
 
@@ -643,7 +693,6 @@ async def _ensure_herdr_server() -> None:
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.DEVNULL,
         )
-
         deadline = time.monotonic() + 10
         while time.monotonic() < deadline:
             if await _herdr_server_running():
@@ -654,9 +703,7 @@ async def _ensure_herdr_server() -> None:
 
         if _managed_herdr_server.returncode is None:
             await _terminate(_managed_herdr_server)
-        raise RuntimeError(
-            f"failed to start Herdr named session {HERDR_SESSION!r}"
-        )
+        raise RuntimeError(f"failed to start Herdr named session {HERDR_SESSION!r}")
 
 
 async def _require_current_integration(adapter: str) -> None:
@@ -701,7 +748,6 @@ async def _close_herdr_workspace(workspace_id: str) -> None:
     try:
         await _run_herdr("workspace", "close", workspace_id)
     except Exception:
-        # Cleanup must not replace the delegation result/error.
         pass
 
 
@@ -790,7 +836,6 @@ async def _start_interactive_agent(
                 f"within {HERDR_SHELL_READY_TIMEOUT_SECONDS:g}s"
                 f"{f'; last error: {last_detail}' if last_detail else ''}"
             )
-
         await asyncio.sleep(0.1)
 
 
@@ -799,15 +844,10 @@ async def _get_agent(name: str) -> dict[str, Any]:
     return _agent_from_payload(payload, "agent get")
 
 
-def _extract_native_session(
-    agent: dict[str, Any],
-    adapter: str,
-) -> str | None:
+def _extract_native_session(agent: dict[str, Any], adapter: str) -> str | None:
     detected = agent.get("agent")
     if detected is not None and detected != adapter:
-        raise RuntimeError(
-            f"Herdr detected agent {detected!r}, expected {adapter!r}"
-        )
+        raise RuntimeError(f"Herdr detected agent {detected!r}, expected {adapter!r}")
 
     session = agent.get("agent_session")
     if session is None:
@@ -829,6 +869,24 @@ def _extract_native_session(
     return value
 
 
+def _validate_reported_session_if_present(
+    agent: dict[str, Any],
+    adapter: str,
+    expected_session_id: str | None,
+) -> str | None:
+    native_session_id = _extract_native_session(agent, adapter)
+    if (
+        native_session_id is not None
+        and expected_session_id is not None
+        and native_session_id != expected_session_id
+    ):
+        raise RuntimeError(
+            "resume identity mismatch: interactive agent reported "
+            f"{native_session_id!r}, requested {expected_session_id!r}"
+        )
+    return native_session_id
+
+
 async def _wait_for_native_session(
     name: str,
     adapter: str,
@@ -837,27 +895,25 @@ async def _wait_for_native_session(
 ) -> str:
     agent = initial_agent
     deadline = time.monotonic() + NATIVE_SESSION_WAIT_SECONDS
-
     while True:
-        native_session_id = _extract_native_session(agent, adapter)
+        native_session_id = _validate_reported_session_if_present(
+            agent,
+            adapter,
+            expected_session_id,
+        )
         if native_session_id:
-            if expected_session_id and native_session_id != expected_session_id:
-                raise RuntimeError(
-                    "resume identity mismatch: interactive agent reported "
-                    f"{native_session_id!r}, requested {expected_session_id!r}"
-                )
             return native_session_id
-
         if time.monotonic() >= deadline:
             raise RuntimeError(
-                f"Herdr did not receive native {adapter} session identity; "
-                f"verify `herdr integration install {adapter}` is current and loaded"
+                f"Herdr did not receive native {adapter} session identity after "
+                "the interactive turn started; verify the current Herdr integration "
+                "is loaded by the agent process"
             )
         await asyncio.sleep(0.1)
         agent = await _get_agent(name)
 
 
-async def _prompt_and_wait(name: str, prompt: str) -> str:
+async def _prompt_and_wait(name: str, prompt: str) -> tuple[str, dict[str, Any]]:
     payload = await _run_herdr_json(
         "agent",
         "prompt",
@@ -871,7 +927,7 @@ async def _prompt_and_wait(name: str, prompt: str) -> str:
         raise RuntimeError(
             f"Herdr agent prompt settled with unexpected status: {status!r}"
         )
-    return status
+    return status, agent
 
 
 def _repo_lock(repo: Path) -> asyncio.Lock:
@@ -932,17 +988,16 @@ async def delegate_repo_task(
     await _require_current_integration(adapter)
 
     async with _repo_lock(repo):
+        starting_new = session_id is None
         result_path: Path | None = None
         if session_id:
-            result_path = _find_resume_artifact(
-                repository,
-                agent_name,
-                session_id,
-            )
+            result_path = _find_resume_artifact(repository, agent_name, session_id)
 
         workspace_id: str | None = None
         marker: str | None = None
         expected_prefix: str | None = None
+        pending_start_path: Path | None = None
+        promoted_start = False
         try:
             label = f"qiqi:{repository}:{uuid.uuid4().hex[:8]}"
             workspace_id, pane_id = await _create_herdr_workspace(repo, label)
@@ -957,30 +1012,54 @@ async def delegate_repo_task(
                 adapter,
                 interactive_args,
             )
-            native_session_id = await _wait_for_native_session(
-                managed_name,
-                adapter,
+            _validate_reported_session_if_present(
                 started_agent,
+                adapter,
                 session_id,
             )
 
-            if result_path is None:
-                result_path = _new_result_artifact(
+            if starting_new:
+                pending_start_path = _create_pending_result_artifact(
                     repository,
                     agent_name,
-                    native_session_id,
                     task,
                 )
+                result_path = pending_start_path
+
+            if result_path is None:
+                raise RuntimeError("delegation result artifact was not resolved")
 
             marker, expected_prefix = _append_task_section(result_path, task)
             prompt = _build_prompt(task, result_path, marker)
-            status = await _prompt_and_wait(managed_name, prompt)
+
+            # SessionStart hooks for interactive agents can be dispatched only once
+            # a real turn begins. Therefore START must prompt first, then read the
+            # native session identity. RESUME follows the same post-turn validation
+            # while still launching the exact requested native session.
+            status, prompted_agent = await _prompt_and_wait(managed_name, prompt)
+            native_session_id = await _wait_for_native_session(
+                managed_name,
+                adapter,
+                prompted_agent,
+                session_id,
+            )
+
             _finalize_artifact_after_wait(
                 result_path,
                 marker,
                 expected_prefix,
                 status,
             )
+
+            if starting_new:
+                result_path = _promote_start_artifact(
+                    result_path,
+                    repository,
+                    agent_name,
+                    task,
+                    native_session_id,
+                )
+                promoted_start = True
 
             return {
                 "session_id": native_session_id,
@@ -997,6 +1076,16 @@ async def delegate_repo_task(
         finally:
             if workspace_id:
                 await _close_herdr_workspace(workspace_id)
+            if (
+                starting_new
+                and not promoted_start
+                and pending_start_path is not None
+                and pending_start_path.exists()
+            ):
+                try:
+                    pending_start_path.unlink()
+                except OSError:
+                    pass
 
 
 if __name__ == "__main__":
