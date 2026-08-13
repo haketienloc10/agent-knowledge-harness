@@ -1,37 +1,37 @@
 # Mẫu registry chỉ dùng Claude Code cho qiqi_delegate.
-# Đổi model hoặc route args tại đây, không truyền CLI flags qua MCP tool.
+# MCP chạy Claude interactive bên trong Herdr; QiQi chỉ chọn route.
 version: 1
 
 agents:
   claude:
     command: claude
     adapter: claude
-    prompt_transport: argument
 
     start_args:
-      - -p
-      - --output-format
-      - json
       - --model
       - "{model}"
+      - --add-dir
+      - "{result_dir}"
       - "{route_args}"
 
     resume_args:
-      - -p
       - --resume
       - "{session_id}"
-      - --output-format
-      - json
       - --model
       - "{model}"
+      - --add-dir
+      - "{result_dir}"
       - "{route_args}"
 
 routes:
-  # Dùng khi Claude CLI/model không hỗ trợ --permission-mode auto.
   claude-haiku:
     agent: claude
     model: haiku
-    args: []
+    args:
+      - --permission-mode
+      - acceptEdits
+      - --effort
+      - medium
 
   claude-balanced:
     agent: claude
