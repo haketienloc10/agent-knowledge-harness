@@ -19,7 +19,6 @@ agents:
 
     start_args:
       - --dangerously-bypass-approvals-and-sandbox
-      - --dangerously-bypass-hook-trust
       - --model
       - "{model}"
       - --add-dir
@@ -33,7 +32,6 @@ agents:
       - resume
       - "{session_id}"
       - --dangerously-bypass-approvals-and-sandbox
-      - --dangerously-bypass-hook-trust
       - --model
       - "{model}"
       - --add-dir
