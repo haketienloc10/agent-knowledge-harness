@@ -52,21 +52,25 @@ mcp = MCPServer(
     "QiQi Delegate",
     instructions=(
         "Synchronous Herdr-backed interactive execution boundary for QiQi. Use "
-        "delegate_repo_task for repo-local work. QiQi selects a route and may "
-        "optionally pass the native Codex/Claude session_id to RESUME; omitting "
-        "session_id always STARTs a new native session. The MCP server owns the "
-        "Herdr workspace and interactive agent lifecycle, route argument "
-        "construction, prompt/wait, native session identity, and the durable "
-        ".qiqi/runs Markdown result artifact. START creates one result artifact; "
-        "RESUME appends to the exact artifact for that native session. The call "
-        "returns only after the interactive turn settles. There are intentionally "
-        "no status, wait, read, list-runs, transcript, or separate resume tools."
+        "delegate_repo_task for repo-local work. QiQi owns the task semantics and "
+        "selects a route; the MCP appends only the result-handoff protocol required "
+        "for its durable Markdown artifact. Omit session_id to START a new native "
+        "Codex/Claude session; pass a previously returned native session_id to "
+        "RESUME exactly that session. The MCP owns Herdr workspace/agent lifecycle, "
+        "route argument construction, synchronous prompt/wait, native session "
+        "identity, result artifact validation, and cleanup. A successful call "
+        "returns only session_id and result_path. QiQi must read that result_path "
+        "before deciding the next step and must not RESUME merely to ask the agent "
+        "to repeat or restate its report. There are intentionally no status, wait, "
+        "read, list-runs, transcript, or separate resume tools."
     ),
 )
 
 _herdr_server_lock = asyncio.Lock()
 _managed_herdr_server: asyncio.subprocess.Process | None = None
-_repo_locks: dict[str, asyncio.Lock] = {}
+_state_lock = asyncio.Lock()
+_active_repositories: set[Path] = set()
+_active_sessions: set[str] = set()
 
 
 def _load_repo_registry() -> dict[str, Path]:
@@ -600,6 +604,26 @@ def _result_relative_path(path: Path) -> str:
         raise RuntimeError(f"result artifact escaped workspace root: {path}") from exc
 
 
+async def _claim_resources(repo: Path, session_id: str | None) -> None:
+    async with _state_lock:
+        if repo in _active_repositories:
+            raise RuntimeError(f"repository already has an active delegation: {repo}")
+        if session_id and session_id in _active_sessions:
+            raise RuntimeError(
+                f"native session already has an active delegation: {session_id}"
+            )
+        _active_repositories.add(repo)
+        if session_id:
+            _active_sessions.add(session_id)
+
+
+async def _release_resources(repo: Path, session_id: str | None) -> None:
+    async with _state_lock:
+        _active_repositories.discard(repo)
+        if session_id:
+            _active_sessions.discard(session_id)
+
+
 async def _terminate(proc: asyncio.subprocess.Process) -> None:
     if proc.returncode is not None:
         return
@@ -967,8 +991,6 @@ async def _prompt_and_wait(
             stalled_agent = await _get_agent(name)
             stalled_status = stalled_agent.get("agent_status")
 
-            # The 5-second Herdr activity gate can race with Claude beginning the
-            # turn. Do not press Enter if the agent has already started or settled.
             if stalled_status == "working":
                 return await _wait_for_agent_settled(name, stalled_agent)
             if stalled_status in {"done", "blocked"}:
@@ -979,9 +1001,6 @@ async def _prompt_and_wait(
                     f"{stalled_status!r}"
                 )
 
-            # Claude can leave a large bracketed-paste prompt in its composer
-            # without accepting the Enter that Herdr appended. Recover exactly
-            # once by sending only Enter; never paste the prompt a second time.
             await _run_herdr("agent", "send-keys", name, "enter")
             return await _wait_for_claude_enter_recovery(name, stalled_agent)
 
@@ -1006,15 +1025,6 @@ async def _prompt_and_wait(
     return status, agent
 
 
-def _repo_lock(repo: Path) -> asyncio.Lock:
-    key = str(repo)
-    lock = _repo_locks.get(key)
-    if lock is None:
-        lock = asyncio.Lock()
-        _repo_locks[key] = lock
-    return lock
-
-
 @mcp.tool()
 async def delegate_repo_task(
     repository: str,
@@ -1022,15 +1032,21 @@ async def delegate_repo_task(
     route: str,
     session_id: str | None = None,
 ) -> dict[str, Any]:
-    """Execute one repo-local task synchronously in a Herdr interactive agent.
+    """Execute one QiQi-owned repo task synchronously in a Herdr interactive agent.
 
     `repository` is the exact name from repos.yaml. `route` is the exact route
-    name from instructions/agent-routing.yaml. Omit `session_id` to START a new
-    native interactive session. Pass a native session id previously returned by
-    this tool to RESUME exactly that session. Each native session owns one
-    `.qiqi/runs/<repo>-<task-slug>-<session-id>.md` result artifact; RESUME
-    appends the next task/result section to the same file. The call stays open
-    until Herdr reports the interactive turn as idle, done, or blocked.
+    name from instructions/agent-routing.yaml. `task` is the execution prompt
+    owned by QiQi; the MCP does not reinterpret its semantics and only appends the
+    result-handoff protocol needed for the Markdown artifact. Omit `session_id` to
+    START a new native interactive session. Pass a native session id previously
+    returned by this tool to RESUME exactly that session.
+
+    A native session owns one `.qiqi/runs/<repo>-<task-slug>-<session-id>.md`
+    result artifact. RESUME appends the next task/result section to that same file.
+    The call stays open until Herdr reports the turn as idle, done, or blocked,
+    then returns exactly `session_id` and workspace-relative `result_path`. Read
+    `result_path` before deciding whether more work is needed; do not RESUME only
+    to request a repeated report.
     """
     repository = repository.strip()
     task = task.strip()
@@ -1062,8 +1078,9 @@ async def delegate_repo_task(
 
     await _ensure_herdr_server()
     await _require_current_integration(adapter)
+    await _claim_resources(repo, session_id)
 
-    async with _repo_lock(repo):
+    try:
         starting_new = session_id is None
         result_path: Path | None = None
         if session_id:
@@ -1108,10 +1125,6 @@ async def delegate_repo_task(
             marker, expected_prefix = _append_task_section(result_path, task)
             prompt = _build_prompt(task, result_path, marker)
 
-            # SessionStart hooks for interactive agents can be dispatched only once
-            # a real turn begins. Therefore START must prompt first, then read the
-            # native session identity. RESUME follows the same post-turn validation
-            # while still launching the exact requested native session.
             status, prompted_agent = await _prompt_and_wait(
                 managed_name,
                 prompt,
@@ -1166,6 +1179,8 @@ async def delegate_repo_task(
                     pending_start_path.unlink()
                 except OSError:
                     pass
+    finally:
+        await _release_resources(repo, session_id)
 
 
 if __name__ == "__main__":
