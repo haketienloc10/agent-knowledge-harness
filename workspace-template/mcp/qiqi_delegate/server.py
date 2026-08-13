@@ -54,9 +54,10 @@ mcp = MCPServer(
         "an execution route from instructions/agent-routing.yaml. Omit session_id "
         "to START; pass the native Codex/Claude session_id returned by a previous "
         "terminal result to RESUME. Independent repositories may execute "
-        "concurrently; the server rejects concurrent calls targeting the same "
-        "resolved Git root or native session. There are intentionally no status, "
-        "wait, read, list-runs, transcript, or separate resume tools."
+        "concurrently; within this server process, concurrent calls targeting the "
+        "same resolved Git root or native session are rejected. There are "
+        "intentionally no status, wait, read, list-runs, transcript, or separate "
+        "resume tools."
     ),
 )
 
@@ -420,8 +421,8 @@ async def delegate_repo_task(
     name from instructions/agent-routing.yaml. Omit `session_id` to START a new
     native session. Pass a native session id previously returned by this tool to
     RESUME through the selected route. Independent Git roots may execute
-    concurrently; the same Git root or native session may not. There is no
-    progress/status API.
+    concurrently; within this server process, concurrent calls targeting the same
+    Git root or native session are rejected. There is no progress/status API.
     """
     repository = repository.strip()
     task = task.strip()
