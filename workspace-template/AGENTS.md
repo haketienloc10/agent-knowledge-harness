@@ -270,9 +270,10 @@ Phải tách task sang wave sau khi:
 - task sau cần decision/evidence từ terminal result của task trước;
 - không đủ evidence để xác nhận chúng độc lập.
 
-Khi không chắc có conflict, chạy tuần tự. MCP hard guard từ chối concurrent
-invocation trên cùng resolved Git root hoặc cùng native `session_id`; QiQi chịu
-trách nhiệm dependency/shared-resource scheduling ở workspace level.
+Khi không chắc có conflict, chạy tuần tự. Trong cùng `qiqi_delegate` server process,
+MCP hard guard từ chối concurrent invocation trên cùng resolved Git root hoặc cùng
+native `session_id`; QiQi chịu trách nhiệm dependency/shared-resource scheduling ở
+workspace level.
 
 Không dùng timeout như tín hiệu tiến độ. Tool failure là terminal event; chỉ retry
 sau khi có thay đổi cụ thể về input, route, configuration hoặc dependency. Không
