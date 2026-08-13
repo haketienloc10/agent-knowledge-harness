@@ -53,12 +53,17 @@ mcp = MCPServer(
         "repo-local investigation, edit, Git inspection, and verification. Select "
         "an execution route from instructions/agent-routing.yaml. Omit session_id "
         "to START; pass the native Codex/Claude session_id returned by a previous "
-        "terminal result to RESUME. There are intentionally no status, wait, read, "
-        "list-runs, transcript, or separate resume tools."
+        "terminal result to RESUME. Independent repositories may execute "
+        "concurrently; within this server process, concurrent calls targeting the "
+        "same resolved Git root or native session are rejected. There are "
+        "intentionally no status, wait, read, list-runs, transcript, or separate "
+        "resume tools."
     ),
 )
 
-_delegate_lock = asyncio.Lock()
+_state_lock = asyncio.Lock()
+_active_repositories: set[Path] = set()
+_active_sessions: set[str] = set()
 
 
 def _load_repo_registry() -> dict[str, Path]:
@@ -369,6 +374,29 @@ def _safe_runner_diagnostic(*paths: Path) -> str | None:
     return None
 
 
+async def _claim_resources(repo: Path, session_id: str | None) -> None:
+    async with _state_lock:
+        if repo in _active_repositories:
+            raise RuntimeError(
+                f"repository already has an active delegation: {repo}"
+            )
+        if session_id and session_id in _active_sessions:
+            raise RuntimeError(
+                f"native session already has an active delegation: {session_id}"
+            )
+
+        _active_repositories.add(repo)
+        if session_id:
+            _active_sessions.add(session_id)
+
+
+async def _release_resources(repo: Path, session_id: str | None) -> None:
+    async with _state_lock:
+        _active_repositories.discard(repo)
+        if session_id:
+            _active_sessions.discard(session_id)
+
+
 async def _terminate(proc: asyncio.subprocess.Process) -> None:
     if proc.returncode is not None:
         return
@@ -392,7 +420,9 @@ async def delegate_repo_task(
     `repository` is the exact name from repos.yaml. `route` is the exact route
     name from instructions/agent-routing.yaml. Omit `session_id` to START a new
     native session. Pass a native session id previously returned by this tool to
-    RESUME through the selected route. There is no progress/status API.
+    RESUME through the selected route. Independent Git roots may execute
+    concurrently; within this server process, concurrent calls targeting the same
+    Git root or native session are rejected. There is no progress/status API.
     """
     repository = repository.strip()
     task = task.strip()
@@ -410,18 +440,14 @@ async def delegate_repo_task(
     if len(task) > 100_000:
         raise ValueError("task is too large")
 
-    if _delegate_lock.locked():
-        raise RuntimeError(
-            "another delegation is active; do not poll, queue, or start another task"
-        )
+    repo = _resolve_repo(repository)
+    agent_name, agent, route_config = _resolve_route(route)
+    command_name = agent["command"]
+    if shutil.which(command_name) is None:
+        raise RuntimeError(f"missing execution agent CLI: {command_name}")
 
-    async with _delegate_lock:
-        repo = _resolve_repo(repository)
-        agent_name, agent, route_config = _resolve_route(route)
-        command_name = agent["command"]
-        if shutil.which(command_name) is None:
-            raise RuntimeError(f"missing execution agent CLI: {command_name}")
-
+    await _claim_resources(repo, session_id)
+    try:
         run_id = f"{int(time.time())}-{uuid.uuid4().hex[:8]}"
         started = time.monotonic()
 
@@ -506,6 +532,8 @@ async def delegate_repo_task(
             "duration_seconds": duration,
             **result,
         }
+    finally:
+        await _release_resources(repo, session_id)
 
 
 if __name__ == "__main__":

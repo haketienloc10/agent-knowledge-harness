@@ -102,21 +102,33 @@ fi
 agents_md="$workspace_root/AGENTS.md"
 if [[ -f "$agents_md" ]]; then
   for pattern in \
+    'Chief of Staff' \
     '`identity\.md`' \
     '`repos\.yaml`' \
     '`SYSTEM_MAP\.md`' \
     '`KNOWLEDGE\.md`' \
     '`instructions/agent-routing\.yaml`' \
     '`instructions/model-routing\.md`' \
+    '`scripts/qiqi-mcp-server\.sh`' \
     '`delegate_repo_task`' \
     '`session_id`' \
-    '`\.qiqi/tasks/'; do
-    rg -q "$pattern" "$agents_md" || fail "AGENTS.md: missing required route: $pattern"
+    '`\.qiqi/tasks/' \
+    '## Delegation Silence' \
+    '## Dependency và Delegation Waves'; do
+    rg -q "$pattern" "$agents_md" || fail "AGENTS.md: missing required policy: $pattern"
   done
-  rg -q 'Không có polling workflow' "$agents_md" || \
-    fail 'AGENTS.md: missing no-polling invariant'
-  rg -q 'Không có đường vòng' "$agents_md" || \
-    fail 'AGENTS.md: missing no-bypass invariant'
+  rg -q 'progress commentary' "$agents_md" || \
+    fail 'AGENTS.md: missing delegation-silence communication invariant'
+  rg -q 'Trong cùng `qiqi_delegate` server process' "$agents_md" || \
+    fail 'AGENTS.md: conflict guard must be scoped to one qiqi_delegate server process'
+  rg -q 'cùng resolved Git root hoặc cùng native `session_id`' "$agents_md" || \
+    fail 'AGENTS.md: missing repo/session conflict invariant'
+  rg -q 'poll `status`, process, PID, transcript hoặc session state' "$agents_md" || \
+    fail 'AGENTS.md: missing no-polling child-state invariant'
+  rg -q 'QiQi không trực tiếp gọi `codex`, `claude` hoặc coding-agent CLI khác' "$agents_md" || \
+    fail 'AGENTS.md: missing direct-agent-CLI bypass prohibition'
+  rg -U -q 'Không[[:space:]]+fallback sang shell-based `codex`, `claude`' "$agents_md" || \
+    fail 'AGENTS.md: missing MCP-failure shell fallback prohibition'
 fi
 
 codex_config="$workspace_root/.codex/config.toml"
@@ -152,7 +164,13 @@ PY
 
   for pattern in \
     'MCPServer' \
-    'asyncio\.Lock' \
+    '_state_lock = asyncio\.Lock' \
+    '_active_repositories' \
+    '_active_sessions' \
+    'def _claim_resources' \
+    'def _release_resources' \
+    'repository already has an active delegation' \
+    'native session already has an active delegation' \
     'agent-routing\.yaml' \
     'def delegate_repo_task' \
     'route: str' \
@@ -163,6 +181,10 @@ PY
     'transcript|stdout\.log'; do
     rg -q "$pattern" "$server" || fail "qiqi_delegate/server.py: missing contract: $pattern"
   done
+
+  if rg -q '_delegate_lock' "$server"; then
+    fail 'qiqi_delegate/server.py: legacy global delegation lock found; concurrency must be repo/session scoped'
+  fi
 
   if rg -q 'FastMCP|mcp\.server\.fastmcp' "$server"; then
     fail 'qiqi_delegate/server.py: legacy MCP SDK v1 API found; use MCPServer from MCP SDK v2'
@@ -193,6 +215,7 @@ else
   else
     mapfile -t repository_names < <(yq -r '.repositories[].name' "$workspace_root/repos.yaml")
     mapfile -t repository_paths < <(yq -r '.repositories[].path' "$workspace_root/repos.yaml")
+    repository_git_roots=()
 
     for index in "${!repository_names[@]}"; do
       name="${repository_names[$index]}"
@@ -212,10 +235,15 @@ else
       git_root="$(git -C "$module_root" rev-parse --show-toplevel)"
       [[ "$git_root" == "$module_root" ]] || \
         fail "repos.yaml: ${name}: path must be the Git root: $path"
+      repository_git_roots+=("$git_root")
     done
 
     duplicate_names="$(printf '%s\n' "${repository_names[@]}" | sort | uniq -d)"
     [[ -z "$duplicate_names" ]] || fail "repos.yaml: duplicate repository name(s): $duplicate_names"
+
+    duplicate_git_roots="$(printf '%s\n' "${repository_git_roots[@]}" | sort | uniq -d)"
+    [[ -z "$duplicate_git_roots" ]] || \
+      fail "repos.yaml: multiple entries resolve to the same Git root(s): $duplicate_git_roots"
   fi
 
   routing="$workspace_root/instructions/agent-routing.yaml"
@@ -338,6 +366,9 @@ if [[ -f "$model_routing" ]]; then
   for profile in fast balanced deep verifier; do
     rg -q "\`$profile\`" "$model_routing" || fail "model-routing.md: missing $profile profile"
   done
+  if rg -q 'one active|một active|single-flight' "$model_routing"; then
+    fail 'model-routing.md: legacy global single-flight policy found'
+  fi
 fi
 
 if [[ "$errors" -gt 0 ]]; then
