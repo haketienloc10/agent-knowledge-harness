@@ -32,6 +32,7 @@ HERDR_SESSION = (
 HERDR_AGENT_START_TIMEOUT_MS = 60_000
 HERDR_SHELL_READY_TIMEOUT_SECONDS = 10.0
 NATIVE_SESSION_WAIT_SECONDS = 15.0
+CLAUDE_PROMPT_RETRY_EFFECT_SECONDS = 5.0
 SUPPORTED_ADAPTERS = {"codex", "claude"}
 PLACEHOLDER_RE = re.compile(r"\{[a-z_][a-z0-9_]*\}")
 TURN_MARKER_RE = re.compile(r"<!-- qiqi-turn:(\d+) -->")
@@ -913,14 +914,100 @@ async def _wait_for_native_session(
         agent = await _get_agent(name)
 
 
-async def _prompt_and_wait(name: str, prompt: str) -> tuple[str, dict[str, Any]]:
-    payload = await _run_herdr_json(
-        "agent",
-        "prompt",
-        name,
-        prompt,
-        "--wait",
-    )
+async def _wait_for_claude_enter_recovery(
+    name: str,
+    baseline_agent: dict[str, Any],
+) -> tuple[str, dict[str, Any]]:
+    baseline_status = baseline_agent.get("agent_status")
+    baseline_seq = baseline_agent.get("state_change_seq")
+    activity_deadline = time.monotonic() + CLAUDE_PROMPT_RETRY_EFFECT_SECONDS
+    saw_activity = False
+
+    while True:
+        agent = await _get_agent(name)
+        status = agent.get("agent_status")
+        state_change_seq = agent.get("state_change_seq")
+
+        if not saw_activity:
+            seq_advanced = (
+                isinstance(baseline_seq, int)
+                and isinstance(state_change_seq, int)
+                and state_change_seq > baseline_seq
+            )
+            saw_activity = (
+                status == "working"
+                or status != baseline_status
+                or seq_advanced
+            )
+            if not saw_activity and time.monotonic() >= activity_deadline:
+                raise RuntimeError(
+                    "Claude prompt remained stalled after one Enter recovery; "
+                    "the prompt was not submitted"
+                )
+
+        if saw_activity and status in {"idle", "done", "blocked"}:
+            return status, agent
+        await asyncio.sleep(0.1)
+
+
+async def _wait_for_agent_settled(
+    name: str,
+    initial_agent: dict[str, Any],
+) -> tuple[str, dict[str, Any]]:
+    agent = initial_agent
+    while True:
+        status = agent.get("agent_status")
+        if status in {"idle", "done", "blocked"}:
+            return status, agent
+        await asyncio.sleep(0.1)
+        agent = await _get_agent(name)
+
+
+async def _prompt_and_wait(
+    name: str,
+    prompt: str,
+    adapter: str,
+) -> tuple[str, dict[str, Any]]:
+    command = ["agent", "prompt", name, prompt, "--wait"]
+    returncode, stdout, stderr = await _run_herdr(*command, check=False)
+    payload = _herdr_json_payload(stdout, stderr)
+
+    if returncode != 0:
+        error_code = _herdr_error_code(payload)
+        if adapter == "claude" and error_code == "agent_prompt_stalled":
+            stalled_agent = await _get_agent(name)
+            stalled_status = stalled_agent.get("agent_status")
+
+            # The 5-second Herdr activity gate can race with Claude beginning the
+            # turn. Do not press Enter if the agent has already started or settled.
+            if stalled_status == "working":
+                return await _wait_for_agent_settled(name, stalled_agent)
+            if stalled_status in {"done", "blocked"}:
+                return stalled_status, stalled_agent
+            if stalled_status != "idle":
+                raise RuntimeError(
+                    "Claude prompt stalled in an unexpected agent state: "
+                    f"{stalled_status!r}"
+                )
+
+            # Claude can leave a large bracketed-paste prompt in its composer
+            # without accepting the Enter that Herdr appended. Recover exactly
+            # once by sending only Enter; never paste the prompt a second time.
+            await _run_herdr("agent", "send-keys", name, "enter")
+            return await _wait_for_claude_enter_recovery(name, stalled_agent)
+
+        detail = (stderr or stdout).strip()
+        if len(detail) > 3000:
+            detail = detail[-3000:]
+        raise RuntimeError(
+            f"Herdr command failed (exit={returncode}): "
+            f"{' '.join(command)}{f'; {detail}' if detail else ''}"
+        )
+
+    if payload is None:
+        raise RuntimeError(
+            f"Herdr agent prompt returned invalid JSON: {' '.join(command)}"
+        )
     agent = _agent_from_payload(payload, "agent prompt")
     status = agent.get("agent_status")
     if status not in {"idle", "done", "blocked"}:
@@ -1036,7 +1123,11 @@ async def delegate_repo_task(
             # a real turn begins. Therefore START must prompt first, then read the
             # native session identity. RESUME follows the same post-turn validation
             # while still launching the exact requested native session.
-            status, prompted_agent = await _prompt_and_wait(managed_name, prompt)
+            status, prompted_agent = await _prompt_and_wait(
+                managed_name,
+                prompt,
+                adapter,
+            )
             native_session_id = await _wait_for_native_session(
                 managed_name,
                 adapter,
