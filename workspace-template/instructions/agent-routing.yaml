@@ -1,11 +1,14 @@
-# Machine-readable execution registry for qiqi_delegate.
-# QiQi selects a route. The MCP server owns CLI construction, START/RESUME,
-# native session-id extraction, result normalization and serialization.
+# Machine-readable interactive execution registry for qiqi_delegate.
+# QiQi selects a route. The MCP server owns Herdr workspace/agent lifecycle,
+# START/RESUME, native session identity, prompt/wait, and result artifact paths.
 # Flags belong here, not in QiQi prompts or MCP tool arguments.
 #
-# Agent-level args must be valid for every model using that agent. Put flags
-# whose support varies by model (for example Claude permission modes) in the
-# route's args instead.
+# `start_args` and `resume_args` are interactive agent arguments passed after
+# `herdr agent start ... --`; they must not use non-interactive modes such as
+# `codex exec` or `claude -p`.
+#
+# {route_args} expands to the selected route's args list. Scalar placeholders:
+# {model}, {session_id}, {result_dir}.
 
 version: 1
 
@@ -13,61 +16,47 @@ agents:
   codex:
     command: codex
     adapter: codex
-    prompt_transport: stdin
-    prompt_arg: "-"
 
-    # {route_args} expands to the selected route's args list.
-    # Other supported placeholders: {model}, {session_id}, {schema_path},
-    # {result_path}.
     start_args:
-      - exec
       - --dangerously-bypass-approvals-and-sandbox
-      - --json
-      - --ignore-user-config
+      - --dangerously-bypass-hook-trust
       - --model
       - "{model}"
+      - --add-dir
+      - "{result_dir}"
       - "{route_args}"
-      - --output-schema
-      - "{schema_path}"
-      - --output-last-message
-      - "{result_path}"
 
+    # Codex's `-c` config overrides are top-level CLI options, so route args
+    # intentionally precede the interactive `resume` subcommand.
     resume_args:
-      - exec
-      - --dangerously-bypass-approvals-and-sandbox
-      - --json
-      - --ignore-user-config
-      - --model
-      - "{model}"
       - "{route_args}"
-      - --output-schema
-      - "{schema_path}"
-      - --output-last-message
-      - "{result_path}"
       - resume
       - "{session_id}"
+      - --dangerously-bypass-approvals-and-sandbox
+      - --dangerously-bypass-hook-trust
+      - --model
+      - "{model}"
+      - --add-dir
+      - "{result_dir}"
 
   claude:
     command: claude
     adapter: claude
-    prompt_transport: argument
 
     start_args:
-      - -p
-      - --output-format
-      - json
       - --model
       - "{model}"
+      - --add-dir
+      - "{result_dir}"
       - "{route_args}"
 
     resume_args:
-      - -p
       - --resume
       - "{session_id}"
-      - --output-format
-      - json
       - --model
       - "{model}"
+      - --add-dir
+      - "{result_dir}"
       - "{route_args}"
 
 routes:
