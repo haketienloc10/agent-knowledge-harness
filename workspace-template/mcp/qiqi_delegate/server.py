@@ -4,13 +4,14 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
 import time
 import uuid
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
 import yaml
 from mcp.server import MCPServer
@@ -18,6 +19,9 @@ from mcp.server import MCPServer
 WORKSPACE_ROOT = Path(
     os.environ.get("QIQI_WORKSPACE_ROOT", Path(__file__).resolve().parents[2])
 ).resolve()
+ROUTING_PATH = WORKSPACE_ROOT / "instructions" / "agent-routing.yaml"
+SUPPORTED_ADAPTERS = {"codex", "claude"}
+PLACEHOLDER_RE = re.compile(r"\{(?:model|session_id|schema_path|result_path|route_args)\}")
 
 RESULT_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -46,10 +50,11 @@ mcp = MCPServer(
     "QiQi Delegate",
     instructions=(
         "Synchronous execution boundary for QiQi. Use delegate_repo_task for every "
-        "repo-local investigation, edit, Git inspection, and verification. A call "
-        "owns the full child-agent turn and returns only at terminal completion. "
-        "There are intentionally no status, wait, read, resume, list-runs, or "
-        "transcript tools. Do not replace this tool with shell-based delegation."
+        "repo-local investigation, edit, Git inspection, and verification. Select "
+        "an execution route from instructions/agent-routing.yaml. Omit session_id "
+        "to START; pass the native Codex/Claude session_id returned by a previous "
+        "terminal result to RESUME. There are intentionally no status, wait, read, "
+        "list-runs, transcript, or separate resume tools."
     ),
 )
 
@@ -117,7 +122,129 @@ def _resolve_repo(repository: str) -> Path:
     return repo
 
 
+def _require_string_list(value: Any, label: str) -> list[str]:
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        raise RuntimeError(f"{label} must be a list of strings")
+    return value
+
+
+def _load_execution_config() -> tuple[dict[str, Any], dict[str, Any]]:
+    if not ROUTING_PATH.is_file():
+        raise RuntimeError(f"missing agent routing registry: {ROUTING_PATH}")
+
+    data = yaml.safe_load(ROUTING_PATH.read_text(encoding="utf-8")) or {}
+    if data.get("version") != 1:
+        raise RuntimeError("agent-routing.yaml: version must be 1")
+
+    agents = data.get("agents")
+    routes = data.get("routes")
+    if not isinstance(agents, dict) or not agents:
+        raise RuntimeError("agent-routing.yaml: agents must be a non-empty map")
+    if not isinstance(routes, dict) or not routes:
+        raise RuntimeError("agent-routing.yaml: routes must be a non-empty map")
+
+    for name, config in agents.items():
+        if not isinstance(name, str) or not isinstance(config, dict):
+            raise RuntimeError("agent-routing.yaml: invalid agent entry")
+        command = config.get("command")
+        adapter = config.get("adapter")
+        prompt_transport = config.get("prompt_transport")
+        if not isinstance(command, str) or not command.strip():
+            raise RuntimeError(f"agent {name}: command must be a non-empty string")
+        if adapter not in SUPPORTED_ADAPTERS:
+            raise RuntimeError(
+                f"agent {name}: unsupported adapter {adapter!r}; "
+                f"supported: {', '.join(sorted(SUPPORTED_ADAPTERS))}"
+            )
+        if prompt_transport not in {"stdin", "argument"}:
+            raise RuntimeError(
+                f"agent {name}: prompt_transport must be stdin or argument"
+            )
+        _require_string_list(config.get("start_args"), f"agent {name}.start_args")
+        resume_args = config.get("resume_args")
+        if resume_args is not None:
+            _require_string_list(resume_args, f"agent {name}.resume_args")
+            if not any("{session_id}" in item for item in resume_args):
+                raise RuntimeError(
+                    f"agent {name}.resume_args must contain {{session_id}}"
+                )
+        if prompt_transport == "stdin":
+            prompt_arg = config.get("prompt_arg")
+            if not isinstance(prompt_arg, str) or not prompt_arg:
+                raise RuntimeError(
+                    f"agent {name}: stdin prompt_transport requires prompt_arg"
+                )
+
+    for name, config in routes.items():
+        if not isinstance(name, str) or not isinstance(config, dict):
+            raise RuntimeError("agent-routing.yaml: invalid route entry")
+        agent_name = config.get("agent")
+        model = config.get("model")
+        if agent_name not in agents:
+            raise RuntimeError(f"route {name}: unknown agent {agent_name!r}")
+        if not isinstance(model, str) or not model.strip() or "{{" in model:
+            raise RuntimeError(f"route {name}: model is unresolved or empty")
+        route_args = _require_string_list(config.get("args", []), f"route {name}.args")
+        if any("{{" in item for item in route_args):
+            raise RuntimeError(f"route {name}: args contain unresolved placeholder")
+
+    return agents, routes
+
+
+def _resolve_route(route: str) -> tuple[str, dict[str, Any], dict[str, Any]]:
+    agents, routes = _load_execution_config()
+    route_config = routes.get(route)
+    if route_config is None:
+        available = ", ".join(sorted(routes))
+        raise RuntimeError(f"unknown route {route!r}; available routes: {available}")
+    agent_name = route_config["agent"]
+    return agent_name, agents[agent_name], route_config
+
+
+def _expand_scalar(raw: str, values: dict[str, str]) -> str:
+    expanded = raw
+    for key, value in values.items():
+        expanded = expanded.replace(f"{{{key}}}", value)
+    if PLACEHOLDER_RE.search(expanded):
+        raise RuntimeError(f"unresolved execution placeholder in argument: {raw!r}")
+    return expanded
+
+
+def _build_command(
+    agent: dict[str, Any],
+    route: dict[str, Any],
+    session_id: str | None,
+    schema_path: Path,
+    result_path: Path,
+) -> list[str]:
+    template_key = "resume_args" if session_id else "start_args"
+    template = agent.get(template_key)
+    if template is None:
+        raise RuntimeError("selected agent does not support native resume")
+
+    route_args = route.get("args", [])
+    if route_args and "{route_args}" not in template:
+        raise RuntimeError(f"{template_key} does not contain {{route_args}}")
+
+    values = {
+        "model": route["model"],
+        "schema_path": str(schema_path),
+        "result_path": str(result_path),
+    }
+    if session_id:
+        values["session_id"] = session_id
+
+    argv: list[str] = [agent["command"]]
+    for item in template:
+        if item == "{route_args}":
+            argv.extend(_expand_scalar(arg, values) for arg in route_args)
+        else:
+            argv.append(_expand_scalar(item, values))
+    return argv
+
+
 def _build_prompt(task: str) -> str:
+    schema = json.dumps(RESULT_SCHEMA, ensure_ascii=False)
     return f"""You are the execution agent for exactly one Git repository.
 
 Operating contract:
@@ -127,7 +254,8 @@ Operating contract:
 - Do not spawn or delegate to another coding agent.
 - Complete the task independently, including appropriate verification.
 - Keep intermediate reasoning and progress inside this child run.
-- Your final response must satisfy the JSON schema supplied by the runner.
+- Final task result must be exactly one JSON object matching this schema: {schema}
+- Do not wrap the final JSON object in Markdown fences or add prose around it.
 - Use [] for empty list fields.
 - If a user/product decision or unavailable dependency prevents completion, set outcome to \"blocked\" and explain it in blockers.
 
@@ -160,26 +288,85 @@ def _validate_result(payload: Any) -> dict[str, Any]:
     return payload
 
 
-def _safe_runner_diagnostic(path: Path) -> str | None:
-    try:
-        text = path.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return None
+def _parse_codex_result(stdout_path: Path, result_path: Path) -> tuple[str, dict[str, Any]]:
+    session_id: str | None = None
+    for line in stdout_path.read_text(encoding="utf-8", errors="replace").splitlines():
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        if event.get("type") in {"thread.started", "thread_started"}:
+            candidate = event.get("thread_id") or event.get("threadId")
+            if isinstance(candidate, str) and candidate:
+                session_id = candidate
+                break
 
+    if not session_id:
+        raise RuntimeError("Codex run produced no native thread/session id")
+    if not result_path.is_file():
+        raise RuntimeError("Codex run produced no final result file")
+
+    try:
+        payload = json.loads(result_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("Codex final result is invalid JSON") from exc
+    return session_id, _validate_result(payload)
+
+
+def _parse_claude_result(stdout_path: Path) -> tuple[str, dict[str, Any]]:
+    try:
+        envelope = json.loads(stdout_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("Claude output-format json result is invalid JSON") from exc
+
+    if not isinstance(envelope, dict):
+        raise RuntimeError("Claude result envelope is not a JSON object")
+    if envelope.get("is_error") is True or envelope.get("subtype") not in {None, "success"}:
+        raise RuntimeError(
+            f"Claude run returned error result: {envelope.get('subtype', 'unknown')}"
+        )
+
+    session_id = envelope.get("session_id")
+    result_text = envelope.get("result")
+    if not isinstance(session_id, str) or not session_id:
+        raise RuntimeError("Claude run produced no native session_id")
+    if not isinstance(result_text, str):
+        raise RuntimeError("Claude run produced no final result text")
+
+    try:
+        payload = json.loads(result_text)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("Claude final result text is not the required JSON object") from exc
+    return session_id, _validate_result(payload)
+
+
+def _safe_runner_diagnostic(*paths: Path) -> str | None:
     startup_markers = (
         "unexpected argument",
-        "usage: codex exec",
-        "error loading config.toml",
-        "error parsing -c overrides",
+        "unknown argument",
+        "unknown option",
+        "unrecognized option",
+        "invalid value",
+        "permission mode",
+        "error loading config",
+        "error parsing",
+        "usage:",
     )
-    lowered = text.lower()
-    if not any(marker in lowered for marker in startup_markers):
-        return None
 
-    lines = [line.strip() for line in text.splitlines() if line.strip()]
-    if not lines:
-        return None
-    return " | ".join(lines[-8:])[:2000]
+    for path in paths:
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        lowered = text.lower()
+        if not any(marker in lowered for marker in startup_markers):
+            continue
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
+        if lines:
+            return " | ".join(lines[-8:])[:2000]
+    return None
 
 
 async def _terminate(proc: asyncio.subprocess.Process) -> None:
@@ -197,21 +384,29 @@ async def _terminate(proc: asyncio.subprocess.Process) -> None:
 async def delegate_repo_task(
     repository: str,
     task: str,
-    model: str | None = None,
-    reasoning_effort: Literal["low", "medium", "high", "xhigh"] | None = None,
+    route: str,
+    session_id: str | None = None,
 ) -> dict[str, Any]:
-    """Execute one repo-local Codex task synchronously and return its final result.
+    """Execute one repo-local task synchronously using a configured route.
 
-    `repository` must be the exact name from repos.yaml. Use this tool for all
-    repo-local investigation, implementation, Git inspection, and verification.
-    Optional model settings must come from instructions/model-routing.md.
+    `repository` is the exact name from repos.yaml. `route` is the exact route
+    name from instructions/agent-routing.yaml. Omit `session_id` to START a new
+    native session. Pass a native session id previously returned by this tool to
+    RESUME through the selected route. There is no progress/status API.
     """
     repository = repository.strip()
     task = task.strip()
+    route = route.strip()
+    session_id = session_id.strip() if isinstance(session_id, str) else None
+
     if not repository:
         raise ValueError("repository must not be empty")
     if not task:
         raise ValueError("task must not be empty")
+    if not route:
+        raise ValueError("route must not be empty")
+    if session_id == "":
+        session_id = None
     if len(task) > 100_000:
         raise ValueError("task is too large")
 
@@ -222,9 +417,10 @@ async def delegate_repo_task(
 
     async with _delegate_lock:
         repo = _resolve_repo(repository)
-        codex_bin = os.environ.get("QIQI_CODEX_BIN", "codex")
-        if shutil.which(codex_bin) is None:
-            raise RuntimeError(f"missing Codex CLI executable: {codex_bin}")
+        agent_name, agent, route_config = _resolve_route(route)
+        command_name = agent["command"]
+        if shutil.which(command_name) is None:
+            raise RuntimeError(f"missing execution agent CLI: {command_name}")
 
         run_id = f"{int(time.time())}-{uuid.uuid4().hex[:8]}"
         started = time.monotonic()
@@ -233,77 +429,80 @@ async def delegate_repo_task(
             temp = Path(temp_dir)
             schema_path = temp / "result.schema.json"
             result_path = temp / "result.json"
-            transcript_path = temp / "transcript.log"
+            stdout_path = temp / "stdout.log"
+            stderr_path = temp / "stderr.log"
             schema_path.write_text(
                 json.dumps(RESULT_SCHEMA, ensure_ascii=False, indent=2),
                 encoding="utf-8",
             )
 
-            command = [
-                codex_bin,
-                "exec",
-                "--ephemeral",
-                "--sandbox",
-                "workspace-write",
-                "--ignore-user-config",
-                "-c",
-                "mcp_servers.qiqi_delegate.enabled=false",
-                "--output-schema",
-                str(schema_path),
-                "--output-last-message",
-                str(result_path),
-            ]
-            if model:
-                command.extend(["--model", model.strip()])
-            if reasoning_effort:
-                command.extend(
-                    ["-c", f'model_reasoning_effort="{reasoning_effort}"']
-                )
-            command.append("-")
+            command = _build_command(
+                agent, route_config, session_id, schema_path, result_path
+            )
+            prompt = _build_prompt(task)
+            prompt_transport = agent["prompt_transport"]
+            if prompt_transport == "stdin":
+                command.append(agent["prompt_arg"])
+                stdin_mode = asyncio.subprocess.PIPE
+                stdin_payload: bytes | None = prompt.encode("utf-8")
+            else:
+                command.append(prompt)
+                stdin_mode = asyncio.subprocess.DEVNULL
+                stdin_payload = None
 
-            with transcript_path.open("wb") as transcript:
+            with stdout_path.open("wb") as stdout, stderr_path.open("wb") as stderr:
                 proc = await asyncio.create_subprocess_exec(
                     *command,
                     cwd=str(repo),
-                    stdin=asyncio.subprocess.PIPE,
-                    stdout=transcript,
-                    stderr=asyncio.subprocess.STDOUT,
+                    stdin=stdin_mode,
+                    stdout=stdout,
+                    stderr=stderr,
                 )
                 try:
-                    await proc.communicate(_build_prompt(task).encode("utf-8"))
+                    if stdin_payload is None:
+                        await proc.wait()
+                    else:
+                        await proc.communicate(stdin_payload)
                 except asyncio.CancelledError:
                     await _terminate(proc)
                     raise
 
             if proc.returncode != 0:
-                diagnostic = _safe_runner_diagnostic(transcript_path)
+                diagnostic = _safe_runner_diagnostic(stderr_path, stdout_path)
                 detail = (
                     f"; runner diagnostic: {diagnostic}"
                     if diagnostic
                     else "; child output is intentionally not exposed to QiQi"
                 )
                 raise RuntimeError(
-                    f"child Codex run failed (run_id={run_id}, exit={proc.returncode})"
-                    f"{detail}"
-                )
-            if not result_path.is_file():
-                raise RuntimeError(
-                    f"child Codex run produced no final result (run_id={run_id})"
+                    f"child {agent_name} run failed (run_id={run_id}, "
+                    f"exit={proc.returncode}){detail}"
                 )
 
-            try:
-                payload = json.loads(result_path.read_text(encoding="utf-8"))
-            except json.JSONDecodeError as exc:
-                raise RuntimeError(
-                    f"child Codex final result is invalid JSON (run_id={run_id})"
-                ) from exc
+            adapter = agent["adapter"]
+            if adapter == "codex":
+                native_session_id, result = _parse_codex_result(
+                    stdout_path, result_path
+                )
+            elif adapter == "claude":
+                native_session_id, result = _parse_claude_result(stdout_path)
+            else:  # guarded by config validation
+                raise RuntimeError(f"unsupported adapter: {adapter}")
 
-            result = _validate_result(payload)
+            if session_id and native_session_id != session_id:
+                raise RuntimeError(
+                    "resume identity mismatch: runner did not return the requested "
+                    f"native session id {session_id!r}"
+                )
 
         duration = round(time.monotonic() - started, 2)
         return {
             "run_id": run_id,
             "repository": repository,
+            "agent": agent_name,
+            "route": route,
+            "model": route_config["model"],
+            "session_id": native_session_id,
             "duration_seconds": duration,
             **result,
         }
