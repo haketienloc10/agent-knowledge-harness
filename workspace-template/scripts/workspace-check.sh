@@ -136,7 +136,8 @@ if [[ -f "$launcher" ]]; then
     fail 'qiqi-mcp-server.sh: must pass workspace root to MCP server'
 fi
 
-server="$workspace_root/mcp/qiqi_delegate/server.py"
+mcp_project="$workspace_root/mcp/qiqi_delegate"
+server="$mcp_project/server.py"
 if [[ -f "$server" ]]; then
   python3 - "$server" <<'PY' || fail 'qiqi_delegate/server.py: invalid Python syntax'
 import pathlib
@@ -146,7 +147,7 @@ compile(path.read_text(encoding="utf-8"), str(path), "exec")
 PY
 
   for pattern in \
-    'FastMCP' \
+    'MCPServer' \
     'asyncio\.Lock' \
     'def delegate_repo_task' \
     '"exec"' \
@@ -157,8 +158,18 @@ PY
     rg -q "$pattern" "$server" || fail "qiqi_delegate/server.py: missing contract: $pattern"
   done
 
+  if rg -q 'FastMCP|mcp\.server\.fastmcp' "$server"; then
+    fail 'qiqi_delegate/server.py: legacy MCP SDK v1 API found; use MCPServer from MCP SDK v2'
+  fi
+
   if rg -q 'def (status|wait|read_transcript|resume|list_runs)\b' "$server"; then
     fail 'qiqi_delegate/server.py: progress/session tool must not exist'
+  fi
+
+  if ! uv run --project "$mcp_project" python -c \
+    'from mcp.server import MCPServer; import yaml; print("qiqi-mcp-runtime: PASS")' \
+    >/dev/null; then
+    fail 'qiqi_delegate: MCP SDK runtime import failed; run uv sync --project mcp/qiqi_delegate'
   fi
 fi
 
