@@ -112,7 +112,8 @@ với người dùng.
 - `instructions/model-routing.md`: policy chọn route.
 - `instructions/agent-routing.yaml`: executable, model, flags và START/RESUME
   argv của route.
-- MCP `qiqi_delegate`: execution boundary và repo/session conflict guard.
+- MCP `qiqi_delegate`: execution boundary và repo/session conflict guard trong
+  server process hiện tại.
 - Artifact và Git của repo con: source of truth kỹ thuật nội bộ, do execution
   agent đọc và báo cáo lại.
 
