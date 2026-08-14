@@ -83,6 +83,32 @@ Prompt self-contained nên có, khi liên quan:
 - verification bắt buộc;
 - blocker nào phải trả về thay vì tự suy đoán.
 
+### English title cho result path
+
+Với **START** (`session_id` absent), dòng không rỗng đầu tiên của `task` phải là
+một **English task title** ngắn, dễ đọc và mô tả đúng công việc. Ưu tiên ASCII,
+khoảng 3–8 từ; đặt một dòng trống sau title rồi mới viết phần instruction chi
+tiết. Phần instruction còn lại có thể dùng ngôn ngữ phù hợp nhất cho task.
+
+MCP hiện dùng chính dòng không rỗng đầu tiên này để tạo `<english-task-slug>` theo
+kebab-case ASCII, tối đa 48 ký tự. Ví dụ:
+
+```text
+Update checkout validation
+
+Kiểm tra và sửa validation của checkout flow...
+```
+
+sẽ tạo final artifact dạng:
+
+```text
+.qiqi/runs/<repo>-update-checkout-validation-<native-session-id>.md
+```
+
+Không dùng câu tiếng Việt làm dòng title rồi dựa vào transliteration bỏ dấu để đặt
+tên file. Với **RESUME**, không cố đổi title để rename artifact; RESUME luôn append
+vào exact `result_path` đã được START tạo.
+
 MCP không thêm execution policy thay QiQi. MCP chỉ append **QiQi MCP result handoff
 protocol** để agent biết exact result artifact, pending marker và format phần
 kết quả phải ghi.
@@ -109,7 +135,7 @@ Một `delegate_repo_task` thành công chỉ trả:
 ```json
 {
   "session_id": "<native-session-id>",
-  "result_path": ".qiqi/runs/<repo>-<initial-task-slug>-<session-id>.md"
+  "result_path": ".qiqi/runs/<repo>-<english-task-slug>-<session-id>.md"
 }
 ```
 
@@ -150,7 +176,9 @@ Mỗi native session sở hữu một durable Markdown artifact dưới `.qiqi/r
 START:
 
 ```text
-MCP tạo .pending-* artifact
+QiQi đặt English task title ở dòng đầu của task
+→ MCP derive English task slug từ title đó
+→ MCP tạo .pending-* artifact
 → append Task 1 / Result 1 pending marker
 → prompt actual QiQi task
 → lấy native session identity sau khi interactive turn bắt đầu
