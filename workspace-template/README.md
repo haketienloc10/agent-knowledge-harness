@@ -10,8 +10,8 @@ identity.md                       # Danh tính và giới hạn
 repos.yaml                        # Registry repository
 SYSTEM_MAP.md                     # Quan hệ/contract liên repo
 KNOWLEDGE.md                      # Router tri thức cross-repo
-instructions/agent-routing.yaml   # Interactive agent/model/flags + START/RESUME argv
-instructions/model-routing.md     # Policy profile → route
+instructions/agent-routing.yaml   # Canonical runtime route registry
+instructions/model-routing.md     # QiQi exact-route selection policy
 .codex/config.toml                # Project-scoped MCP registration
 mcp/qiqi_delegate/
 ├── pyproject.toml                # MCP runtime dependencies
@@ -19,10 +19,16 @@ mcp/qiqi_delegate/
 knowledge/                        # Durable cross-repo knowledge
 .qiqi/tasks/                      # Working context + session/result pointers
 .qiqi/runs/                       # Durable MCP result artifacts (runtime-created)
-docs/WORKSPACE_SETUP.md           # Setup/takeover
+docs/
+├── WORKSPACE_SETUP.md            # Setup/takeover
+└── examples/                     # Documentation-only routing examples
 scripts/qiqi-mcp-server.sh        # MCP STDIO launcher
 scripts/workspace-check.sh        # Harness checker
 ```
+
+`instructions/` chỉ chứa active instructions. Hai file trong `docs/examples/` là
+tài liệu tham khảo; `qiqi_delegate` không load chúng. Muốn dùng route/example nào,
+copy hoặc adapt nó vào `instructions/agent-routing.yaml`.
 
 ## Execution Model
 
@@ -125,7 +131,12 @@ QiQi không quản lý Herdr pane/workspace/status trong normal workflow.
 
 ## Routing
 
-`instructions/agent-routing.yaml` là source of truth machine-readable. Agent entry định nghĩa `command`, `adapter`, `start_args`, `resume_args`; route entry định nghĩa `agent`, `model`, `args`.
+`instructions/model-routing.md` chỉ trả lời câu hỏi **QiQi nên chọn exact route nào**.
+Nó không duplicate model ID, permission mode, effort hoặc native CLI flags.
+
+`instructions/agent-routing.yaml` là **canonical machine-readable runtime registry**
+và là file routing duy nhất MCP load. Agent entry định nghĩa `command`, `adapter`,
+`start_args`, `resume_args`; route entry định nghĩa `agent`, `model`, `args`.
 
 Runtime placeholders:
 
@@ -138,7 +149,10 @@ Runtime placeholders:
 
 `start_args` không chứa `{session_id}`; `resume_args` phải chứa `{session_id}`. Registry chỉ dùng interactive agent invocation; các transport batch/JSON-output cũ không còn thuộc execution contract.
 
-QiQi chỉ chọn route; không truyền raw model/CLI flags qua MCP public API.
+QiQi chỉ chọn exact route; không truyền raw model/CLI flags qua MCP public API.
+
+Các file `docs/examples/agent-routing.*.yaml` chỉ minh họa cách customize registry.
+Route chỉ khả dụng khi thực sự tồn tại trong `instructions/agent-routing.yaml`.
 
 ## Concurrency
 
