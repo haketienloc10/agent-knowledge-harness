@@ -24,8 +24,12 @@ Repo không chứa tri thức nghiệp vụ thật của một workspace cụ th
   yêu cầu agent lặp lại report.
 - START và RESUME dùng cùng tool; native `session_id` là optional argument, không
   có separate resume tool.
-- Agent/model/native flags + START/RESUME argv thuộc
-  `workspace-template/instructions/agent-routing.yaml`.
+- `workspace-template/instructions/model-routing.md` chỉ sở hữu policy chọn exact
+  route; không duplicate model ID hoặc native CLI flags.
+- `workspace-template/instructions/agent-routing.yaml` là canonical runtime route
+  registry duy nhất MCP load và sở hữu agent/model/native flags + START/RESUME argv.
+- Routing examples nằm dưới `workspace-template/docs/examples/`, chỉ dùng làm tài
+  liệu tham khảo và không phải runtime input.
 - MCP chạy real interactive Codex/Claude qua Herdr; Herdr lifecycle là internal
   implementation detail, không phải public orchestration API của QiQi.
 - Không expose progress/status/wait/read/transcript/list-runs tool.
@@ -84,18 +88,23 @@ Tool return không duplicate nội dung report; caller đọc `result_path` đ�
    hoặc đổi public MCP schema chỉ để đặt filename.
 7. Repository phải resolve từ `repos.yaml` và path phải là exact Git root.
 8. Không cho nhiều registry entry cùng resolve về một Git root.
-9. Route registry sở hữu command/model/flags; runtime placeholders hiện tại là
-   `{model}`, `{session_id}`, `{result_dir}`, `{route_args}`.
-10. Native resume phải kiểm tra identity: ID report lại phải khớp ID yêu cầu.
-11. Concurrency guard phải resource-scoped trong một `qiqi_delegate` server
+9. `instructions/agent-routing.yaml` là canonical runtime registry duy nhất; route
+   registry sở hữu command/model/flags và runtime placeholders `{model}`,
+   `{session_id}`, `{result_dir}`, `{route_args}`.
+10. `instructions/model-routing.md` chỉ mô tả khi nào QiQi chọn exact route; không
+    copy machine configuration vào policy này.
+11. Routing examples phải nằm dưới `docs/examples/`, ghi rõ documentation-only và
+    không được coi là route khả dụng nếu chưa copy/adapt vào canonical registry.
+12. Native resume phải kiểm tra identity: ID report lại phải khớp ID yêu cầu.
+13. Concurrency guard phải resource-scoped trong một `qiqi_delegate` server
     process: same Git root hoặc same native session bị reject ngay; không global
     delegation lock và không silently queue same-repo calls.
-12. Tool success chỉ trả `session_id` + `result_path`; QiQi đọc artifact thay vì
+14. Tool success chỉ trả `session_id` + `result_path`; QiQi đọc artifact thay vì
     mở RESUME turn chỉ để lấy report.
-13. Nếu thay đổi artifact/runtime bắt buộc, cập nhật checker + docs trong cùng PR.
-14. Herdr integration install là setup concern; MCP chỉ preflight selected adapter
+15. Nếu thay đổi artifact/runtime bắt buộc, cập nhật checker + docs trong cùng PR.
+16. Herdr integration install là setup concern; MCP chỉ preflight selected adapter
     ở trạng thái `current`.
-15. Không thêm lại Codex hook-trust bypass nếu không có quyết định mới rõ ràng.
+17. Không thêm lại Codex hook-trust bypass nếu không có quyết định mới rõ ràng.
 
 ## Khi thay đổi Repository Template
 
@@ -118,6 +127,9 @@ Review phải xác nhận:
 - public signature không đổi ngoài quyết định có chủ đích;
 - QiQi-owned prompt + MCP-owned result footer boundary được giữ;
 - START task first line tạo readable English result slug và RESUME giữ cùng path;
+- `model-routing.md` chỉ là exact-route policy;
+- `agent-routing.yaml` là canonical runtime routing source of truth duy nhất;
+- routing examples chỉ nằm trong `docs/examples/` và không bị hiểu là active routes;
 - Codex/Claude đều chạy interactive qua Herdr;
 - native session ID được lấy qua Herdr integration và RESUME identity được kiểm tra;
 - START/RESUME dùng durable session artifact và RESUME append cùng path;
