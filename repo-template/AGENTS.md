@@ -2,10 +2,11 @@
 
 Repository hiện tại là một Git repository độc lập nằm trong workspace do QiQi
 điều phối. Agent trong repo này chịu trách nhiệm điều tra, triển khai và xác minh
-thay đổi **chỉ trong Git root hiện tại**.
+thay đổi trong **Git root hiện tại**.
 
-QiQi sở hữu context cấp workspace, quan hệ liên repository và delegation
-lifecycle. Repo này sở hữu architecture, domain rule, implementation, test và
+QiQi sở hữu context cấp workspace, dependency liên repository và task semantics.
+MCP `qiqi_delegate` sở hữu Herdr lifecycle, native session identity và result
+handoff. Repo này sở hữu architecture, domain rule, implementation, test và
 verification nội bộ.
 
 ## Bắt đầu
@@ -37,28 +38,30 @@ có. Không tạo file rỗng chỉ để hoàn thiện cấu trúc.
 
 ## Ranh giới Workspace
 
-- Chỉ đọc và sửa file trong Git root hiện tại, trừ khi prompt cho phép rõ phạm vi
-  khác.
-- Không sửa `repos.yaml`, `SYSTEM_MAP.md`, `.qiqi/tasks/` hoặc `knowledge/` ở
-  workspace root.
+- Chỉ đọc/sửa file trong Git root hiện tại, trừ **exact result artifact** mà MCP
+  handoff rõ trong prompt của turn hiện tại.
+- Result artifact hợp lệ nằm dưới workspace `.qiqi/runs/` và path cụ thể phải đến
+  từ MCP footer; không tự suy đoán hoặc tìm artifact khác.
+- Ngoài exact result artifact đó, không sửa `repos.yaml`, `SYSTEM_MAP.md`,
+  `.qiqi/tasks/`, `knowledge/` hoặc workspace control file khác.
 - Không sửa repository anh em.
 - Không spawn/delegate sang coding agent khác và không gọi MCP orchestration của
-  QiQi từ child run.
-- Context cross-repo phải đến từ prompt của QiQi hoặc source được prompt liên
-  kết; không tự coi suy đoán về repository khác là sự thật.
+  QiQi từ child turn.
+- Context cross-repo phải đến từ prompt của QiQi hoặc source được prompt liên kết;
+  không tự coi suy đoán về repository khác là sự thật.
 - Nếu context từ QiQi mâu thuẫn với source/test hiện tại, dừng phần phụ thuộc,
   ghi evidence và báo conflict.
 
 ## Hợp đồng Làm việc
 
-- Giữ đúng outcome, phạm vi và phần ngoài phạm vi trong prompt.
-- Tự khám phá chi tiết implementation nội bộ thay vì hỏi QiQi những điều repo có
-  thể trả lời.
-- Dùng evidence kiểm tra lại được: source path, test, command, spec hoặc runtime
-  output.
-- Không tuyên bố hoàn thành chỉ từ inspection.
+- Giữ đúng outcome, phạm vi và phần ngoài phạm vi trong prompt của QiQi.
+- Tự khám phá implementation detail nội bộ thay vì hỏi QiQi điều repo có thể trả lời.
+- Dùng evidence kiểm tra lại được: source path, test, command, spec hoặc runtime output.
+- Không tuyên bố hoàn thành chỉ từ inspection khi task yêu cầu thay đổi/verification.
 - Không đổi regression mới thành legacy issue để hoàn thành task.
-- Không ghi secret hoặc dữ liệu nhạy cảm vào tài liệu/báo cáo.
+- Không ghi secret hoặc dữ liệu nhạy cảm vào tài liệu/result artifact.
+- MCP result-handoff footer không thay đổi task semantics; nó chỉ quy định nơi và
+  format terminal result phải ghi.
 
 ## Tri thức Repo-local
 
@@ -81,8 +84,8 @@ hoặc decision cần QiQi điều phối:
 
 1. Không sửa workspace knowledge.
 2. Không sửa repository khác.
-3. Trả tóm tắt, scope, evidence và trạng thái verified/unverified trong
-   `cross_repo_impact` của final result.
+3. Ghi tóm tắt, scope, evidence và trạng thái verified/unverified trong
+   `### Cross-repo Impact` của result artifact.
 
 QiQi chịu trách nhiệm promote hoặc giữ candidate ở workspace level.
 
@@ -104,38 +107,58 @@ Mỗi file ghi đúng một friction:
 - Evidence:
 ```
 
-Chỉ ghi nhận friction có evidence. Không có friction đáng kể thì không tạo file.
-Nếu friction thuộc workspace/orchestration, không sửa workspace; đưa nó vào
-`cross_repo_impact` để QiQi xử lý.
+Nếu friction thuộc workspace/MCP/Herdr orchestration, không sửa workspace; ghi nó
+trong `### Cross-repo Impact` để QiQi xử lý.
 
 ## Verification
 
 Chọn command nhỏ nhất đủ chứng minh thay đổi, sau đó mở rộng theo rủi ro và
 `docs/VERIFY.md`.
 
-Final result phải nêu rõ command/check đã chạy và kết quả; command bắt buộc chưa
-chạy phải có lý do.
+Result phải nêu rõ command/check đã chạy và kết quả; command bắt buộc chưa chạy
+phải có lý do.
 
 ## Final Result Contract
 
-Caller có thể ép output bằng JSON Schema. Dù format cụ thể là JSON hay text,
-final result phải cung cấp đủ các field logic sau:
+Khi prompt có **QiQi MCP result handoff protocol**, terminal result của turn phải
+được ghi vào exact result artifact do footer chỉ định. Giữ nguyên toàn bộ history
+trước đó và chỉ finalize newest pending Result section theo marker MCP cung cấp.
 
-- `outcome`: `completed` hoặc `blocked`;
-- `changes`: thay đổi chính hoặc kết luận điều tra;
-- `verification`: command/check và kết quả;
-- `git_state`: branch/commit/working-tree state phù hợp;
-- `blockers`: blocker/decision còn lại, hoặc danh sách rỗng;
-- `repo_local_knowledge`: path/kết luận repo-local đã cập nhật, hoặc danh sách
-  rỗng;
-- `cross_repo_impact`: cross-repo candidate/friction cần QiQi xử lý, hoặc danh
-  sách rỗng.
+Newest Result section bắt buộc có các heading theo đúng thứ tự:
 
-Không kể lại từng tool call hoặc working transcript.
+```text
+### Outcome
+### Changes
+### Verification
+### Git State
+### Blockers
+### Repo-local Knowledge
+### Cross-repo Impact
+```
+
+Quy tắc:
+
+- `### Outcome`: dòng giá trị đầu tiên phải đúng `completed` hoặc `blocked`.
+- `### Changes`: thay đổi chính hoặc kết luận investigation.
+- `### Verification`: command/check và kết quả; phần chưa chạy phải có lý do.
+- `### Git State`: branch/commit/working-tree state phù hợp với task.
+- `### Blockers`: blocker/decision/dependency còn lại; dùng `None.` nếu không có.
+- `### Repo-local Knowledge`: source-of-truth path/kết luận đã cập nhật; `None.`
+  nếu không có.
+- `### Cross-repo Impact`: candidate/friction cần QiQi xử lý; `None.` nếu không có.
+- Không ghi chain-of-thought hoặc working transcript vào result artifact.
+- Nếu bị blocker cần hỏi QiQi/người dùng, finalize artifact với Outcome `blocked`
+  **trước** khi trình bày câu hỏi/blocker interactive.
+
+Nếu agent được chạy ngoài `qiqi_delegate` và không có MCP result footer, final
+response vẫn nên cung cấp cùng các thông tin logic, nhưng không tự tạo file dưới
+workspace `.qiqi/runs/`.
 
 ## Hoàn thành
 
 Task chỉ `completed` khi outcome đã đạt, verification liên quan đã chạy hoặc phần
 chưa chạy được báo rõ, không có regression mới đã biết và knowledge/friction có
-giá trị đã được xử lý đúng tầng. Nếu còn decision hoặc dependency không thể tự
-giải quyết, trả `blocked` thay vì suy đoán.
+giá trị đã được xử lý đúng tầng.
+
+Nếu còn decision hoặc dependency không thể tự giải quyết, trả `blocked` thay vì
+suy đoán.

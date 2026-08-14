@@ -1,41 +1,34 @@
-# Mẫu registry chỉ dùng Codex cho qiqi_delegate.
-# Đổi model hoặc route args tại đây, không truyền CLI flags qua MCP tool.
+# DOCUMENTATION-ONLY EXAMPLE.
+# qiqi_delegate does NOT load this file.
+# To use any route below, copy/adapt it into instructions/agent-routing.yaml,
+# which is the canonical runtime registry.
+#
+# Example registry for a Codex-only qiqi_delegate setup.
 version: 1
 
 agents:
   codex:
     command: codex
     adapter: codex
-    prompt_transport: stdin
-    prompt_arg: "-"
 
     start_args:
-      - exec
       - --dangerously-bypass-approvals-and-sandbox
-      - --json
-      - --ignore-user-config
       - --model
       - "{model}"
+      - --add-dir
+      - "{result_dir}"
       - "{route_args}"
-      - --output-schema
-      - "{schema_path}"
-      - --output-last-message
-      - "{result_path}"
 
+    # Codex top-level config overrides must precede interactive resume.
     resume_args:
-      - exec
-      - --dangerously-bypass-approvals-and-sandbox
-      - --json
-      - --ignore-user-config
-      - --model
-      - "{model}"
       - "{route_args}"
-      - --output-schema
-      - "{schema_path}"
-      - --output-last-message
-      - "{result_path}"
       - resume
       - "{session_id}"
+      - --dangerously-bypass-approvals-and-sandbox
+      - --model
+      - "{model}"
+      - --add-dir
+      - "{result_dir}"
 
 routes:
   codex-fast:

@@ -19,16 +19,22 @@ tất.
 ## Tiến độ
 
 Chỉ ghi milestone hoặc terminal outcome có giá trị qua nhiều lượt. Không ghi
-working transcript hoặc progress polling.
+working transcript, live child state hoặc progress polling.
 
 ## Delegation đã hoàn tất
 
-| Repository | Agent | Route | Native session ID | Outcome | Verification chính |
-|---|---|---|---|---|---|
+| Repository | Agent | Route | Native session ID | Result artifact | Outcome | Verification chính |
+|---|---|---|---|---|---|---|
 
-Chỉ ghi delegation sau khi MCP tool đã return terminal result. `Native session
-ID` là ID thật do Codex/Claude Code trả về và chỉ dùng làm argument `session_id`
-cho một RESUME sau đó. Không ghi waiter, process state, transcript hoặc progress.
+Chỉ ghi delegation sau khi `delegate_repo_task` đã return thành công và QiQi đã
+đọc `result_path`.
+
+- `Native session ID` là ID thật do Codex/Claude trả về và chỉ dùng làm argument
+  `session_id` cho RESUME thật sự của cùng native conversation.
+- `Result artifact` là workspace-relative `result_path` dưới `.qiqi/runs/`; đây là
+  handoff history của session và phải được đọc trước khi quyết định bước tiếp.
+- Không RESUME chỉ để yêu cầu agent lặp lại/cung cấp report đã có trong artifact.
+- Không ghi Herdr pane/workspace, process state, transcript hoặc progress.
 
 Nếu chuyển sang agent khác, tạo START mới và ghi row mới; không tái sử dụng native
 session ID của agent cũ.

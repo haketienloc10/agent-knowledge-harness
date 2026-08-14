@@ -23,7 +23,7 @@ require_dir() {
   [[ -d "$path" ]] || fail "missing directory: ${path#$workspace_root/}"
 }
 
-for command in git rg uv python3 yq; do
+for command in git rg uv python3 yq herdr; do
   require_command "$command"
 done
 
@@ -64,6 +64,25 @@ for path in "${required_dirs[@]}"; do
   require_dir "$workspace_root/$path"
 done
 
+for legacy_example in \
+  instructions/agent-routing.codex.example.yaml \
+  instructions/agent-routing.claude-code.example.yaml; do
+  if [[ -e "$workspace_root/$legacy_example" ]]; then
+    fail "$legacy_example: routing examples belong under docs/examples, not active instructions"
+  fi
+done
+
+for example in \
+  docs/examples/agent-routing.codex.yaml \
+  docs/examples/agent-routing.claude-code.yaml; do
+  if [[ -f "$workspace_root/$example" ]]; then
+    rg -q '^# DOCUMENTATION-ONLY EXAMPLE\.$' "$workspace_root/$example" || \
+      fail "$example: missing documentation-only banner"
+    rg -q 'qiqi_delegate does NOT load this file' "$workspace_root/$example" || \
+      fail "$example: must state that MCP does not load the example"
+  fi
+done
+
 managed_files=(
   "$workspace_root/repos.yaml"
   "$workspace_root/SYSTEM_MAP.md"
@@ -95,8 +114,9 @@ for path in "${policy_files[@]}"; do
 done
 
 if ((${#existing_policy_files[@]} > 0)) && \
-  rg -n 'Herdr|HERDR_ENV|qiqi-agent-turn|qiqi-agent-resume' "${existing_policy_files[@]}"; then
-  fail 'legacy Herdr/session orchestration reference found in MCP-only policy'
+  rg -n 'codex exec|claude -p|--output-format json|prompt_transport|\{schema_path\}|\{result_path\}|terminal structured result' \
+    "${existing_policy_files[@]}"; then
+  fail 'legacy non-interactive/inline-result delegation contract found in policy'
 fi
 
 agents_md="$workspace_root/AGENTS.md"
@@ -109,15 +129,22 @@ if [[ -f "$agents_md" ]]; then
     '`KNOWLEDGE\.md`' \
     '`instructions/agent-routing\.yaml`' \
     '`instructions/model-routing\.md`' \
-    '`scripts/qiqi-mcp-server\.sh`' \
     '`delegate_repo_task`' \
     '`session_id`' \
+    '`result_path`' \
+    '`\.qiqi/runs/' \
     '`\.qiqi/tasks/' \
     '## Delegation Silence' \
     '## Dependency và Delegation Waves'; do
     rg -q "$pattern" "$agents_md" || fail "AGENTS.md: missing required policy: $pattern"
   done
-  rg -q 'progress commentary' "$agents_md" || \
+  rg -q 'đọc.*`result_path`|đọc.*result artifact' "$agents_md" || \
+    fail 'AGENTS.md: QiQi must read result_path before deciding the next step'
+  rg -q 'không.*RESUME.*report|không.*RESUME.*báo cáo' "$agents_md" || \
+    fail 'AGENTS.md: missing no-report-only RESUME invariant'
+  rg -q 'prompt.*QiQi|QiQi.*prompt' "$agents_md" || \
+    fail 'AGENTS.md: missing QiQi-owned task prompt invariant'
+  rg -U -q 'progress[[:space:]]+commentary' "$agents_md" || \
     fail 'AGENTS.md: missing delegation-silence communication invariant'
   rg -q 'Trong cùng `qiqi_delegate` server process' "$agents_md" || \
     fail 'AGENTS.md: conflict guard must be scoped to one qiqi_delegate server process'
@@ -164,6 +191,9 @@ PY
 
   for pattern in \
     'MCPServer' \
+    'RUNS_DIR' \
+    'HERDR_BIN' \
+    'HERDR_SESSION' \
     '_state_lock = asyncio\.Lock' \
     '_active_repositories' \
     '_active_sessions' \
@@ -171,20 +201,36 @@ PY
     'def _release_resources' \
     'repository already has an active delegation' \
     'native session already has an active delegation' \
-    'agent-routing\.yaml' \
+    'def _ensure_herdr_server' \
+    'def _require_current_integration' \
+    'def _create_herdr_workspace' \
+    'def _start_interactive_agent' \
+    'def _prompt_and_wait' \
+    'agent_prompt_stalled' \
+    'send-keys' \
+    'def _wait_for_native_session' \
+    'def _validate_result_section' \
+    'QiQi MCP result handoff protocol' \
     'def delegate_repo_task' \
     'route: str' \
     'session_id: str \| None' \
-    '_parse_codex_result' \
-    '_parse_claude_result' \
     'resume identity mismatch' \
-    'transcript|stdout\.log'; do
+    '"result_path"'; do
     rg -q "$pattern" "$server" || fail "qiqi_delegate/server.py: missing contract: $pattern"
   done
 
-  if rg -q '_delegate_lock' "$server"; then
-    fail 'qiqi_delegate/server.py: legacy global delegation lock found; concurrency must be repo/session scoped'
-  fi
+  for forbidden in \
+    '_repo_locks' \
+    'RESULT_SCHEMA' \
+    '_parse_codex_result' \
+    '_parse_claude_result' \
+    'prompt_transport' \
+    'stdout\.log' \
+    'result\.schema\.json'; do
+    if rg -q "$forbidden" "$server"; then
+      fail "qiqi_delegate/server.py: legacy contract found: $forbidden"
+    fi
+  done
 
   if rg -q 'FastMCP|mcp\.server\.fastmcp' "$server"; then
     fail 'qiqi_delegate/server.py: legacy MCP SDK v1 API found; use MCPServer from MCP SDK v2'
@@ -193,6 +239,10 @@ PY
   if rg -q 'def (status|wait|read_transcript|resume|list_runs)\b' "$server"; then
     fail 'qiqi_delegate/server.py: separate progress/session tool must not exist'
   fi
+
+  tool_count="$(rg -c '^@mcp\.tool\(\)$' "$server" || true)"
+  [[ "$tool_count" == "1" ]] || \
+    fail "qiqi_delegate/server.py: expected exactly one public MCP tool, found $tool_count"
 
   if ! uv run --project "$mcp_project" python -c \
     'from mcp.server import MCPServer; import yaml; print("qiqi-mcp-runtime: PASS")' \
@@ -204,11 +254,6 @@ fi
 if ! yq --version 2>&1 | rg -q 'version v?4\.'; then
   fail 'unsupported yq version; install yq version 4'
 else
-  if ! yq -e '.workspace.name | type == "!!str" and length > 0' \
-    "$workspace_root/repos.yaml" >/dev/null; then
-    fail 'repos.yaml: workspace.name must be a non-empty string'
-  fi
-
   if ! yq -e '.repositories | type == "!!seq" and length > 0' \
     "$workspace_root/repos.yaml" >/dev/null; then
     fail 'repos.yaml: repositories must be a non-empty list'
@@ -257,18 +302,24 @@ else
     fail 'agent-routing.yaml: routes must be a non-empty map'
   fi
 
+  if rg -n '^\s*-\s+(exec|-p|--json|--ignore-user-config|--output-schema|--output-last-message|--output-format|--dangerously-bypass-hook-trust)\s*$' "$routing"; then
+    fail 'agent-routing.yaml: legacy/non-interactive execution flag found'
+  fi
+  if rg -q 'prompt_transport|prompt_arg|\{schema_path\}|\{result_path\}' "$routing"; then
+    fail 'agent-routing.yaml: legacy prompt/result placeholder found'
+  fi
+
+  integration_status="$(herdr integration status 2>&1 || true)"
   mapfile -t agent_names < <(yq -r '.agents | keys | .[]' "$routing" 2>/dev/null || true)
+  checked_adapters=()
   for agent_name in "${agent_names[@]}"; do
     command_name="$(AGENT_NAME="$agent_name" yq -r '.agents[env(AGENT_NAME)].command' "$routing")"
     adapter="$(AGENT_NAME="$agent_name" yq -r '.agents[env(AGENT_NAME)].adapter' "$routing")"
-    transport="$(AGENT_NAME="$agent_name" yq -r '.agents[env(AGENT_NAME)].prompt_transport' "$routing")"
 
     [[ -n "$command_name" && "$command_name" != "null" ]] || \
       fail "agent-routing.yaml: ${agent_name}: missing command"
     [[ "$adapter" == "codex" || "$adapter" == "claude" ]] || \
       fail "agent-routing.yaml: ${agent_name}: adapter must be codex or claude"
-    [[ "$transport" == "stdin" || "$transport" == "argument" ]] || \
-      fail "agent-routing.yaml: ${agent_name}: invalid prompt_transport"
 
     if ! AGENT_NAME="$agent_name" yq -e \
       '.agents[env(AGENT_NAME)].start_args | type == "!!seq" and length > 0' \
@@ -280,6 +331,10 @@ else
       "$routing" >/dev/null; then
       fail "agent-routing.yaml: ${agent_name}: resume_args must be non-empty"
     fi
+    if AGENT_NAME="$agent_name" yq -r \
+      '.agents[env(AGENT_NAME)].start_args[]' "$routing" | rg -q '\{session_id\}'; then
+      fail "agent-routing.yaml: ${agent_name}: start_args must not contain {session_id}"
+    fi
     if ! AGENT_NAME="$agent_name" yq -r \
       '.agents[env(AGENT_NAME)].resume_args[]' "$routing" | rg -q '\{session_id\}'; then
       fail "agent-routing.yaml: ${agent_name}: resume_args missing {session_id}"
@@ -290,12 +345,7 @@ else
       continue
     fi
 
-    if [[ "$adapter" == "codex" ]]; then
-      help_text="$($command_name exec --help 2>&1 || true)"
-    else
-      help_text="$($command_name --help 2>&1 || true)"
-    fi
-
+    help_text="$($command_name --help 2>&1 || true)"
     mapfile -t configured_flags < <(
       AGENT_NAME="$agent_name" yq -r \
         '(.agents[env(AGENT_NAME)].start_args[], .agents[env(AGENT_NAME)].resume_args[]) | select(test("^--"))' \
@@ -306,6 +356,13 @@ else
         fail "agent-routing.yaml: ${agent_name}: installed CLI help does not advertise configured flag: $flag"
       fi
     done
+
+    if ! printf '%s\n' "${checked_adapters[@]:-}" | rg -qx -- "$adapter"; then
+      checked_adapters+=("$adapter")
+      if ! printf '%s\n' "$integration_status" | rg -q "^${adapter}: current\\b"; then
+        fail "Herdr integration is not current for configured adapter: $adapter"
+      fi
+    fi
   done
 
   mapfile -t route_names < <(yq -r '.routes | keys | .[]' "$routing" 2>/dev/null || true)
@@ -336,17 +393,10 @@ else
     fi
 
     route_command_name="$(AGENT_NAME="$route_agent" yq -r '.agents[env(AGENT_NAME)].command' "$routing")"
-    route_adapter="$(AGENT_NAME="$route_agent" yq -r '.agents[env(AGENT_NAME)].adapter' "$routing")"
     if ! command -v "$route_command_name" >/dev/null 2>&1; then
       continue
     fi
-
-    if [[ "$route_adapter" == "codex" ]]; then
-      route_help_text="$($route_command_name exec --help 2>&1 || true)"
-    else
-      route_help_text="$($route_command_name --help 2>&1 || true)"
-    fi
-
+    route_help_text="$($route_command_name --help 2>&1 || true)"
     mapfile -t route_flags < <(
       ROUTE_NAME="$route_name" yq -r \
         '.routes[env(ROUTE_NAME)].args[] | select(test("^--"))' \
@@ -362,12 +412,18 @@ fi
 
 model_routing="$workspace_root/instructions/model-routing.md"
 if [[ -f "$model_routing" ]]; then
-  rg -q 'Route' "$model_routing" || fail 'model-routing.md: missing Route column'
-  for profile in fast balanced deep verifier; do
-    rg -q "\`$profile\`" "$model_routing" || fail "model-routing.md: missing $profile profile"
+  rg -q 'chọn exact `route`|exact route' "$model_routing" || \
+    fail 'model-routing.md: must define exact-route selection policy'
+  rg -q '`instructions/agent-routing\.yaml`|`agent-routing\.yaml`' "$model_routing" || \
+    fail 'model-routing.md: must identify agent-routing.yaml as runtime source of truth'
+  rg -q 'không truyền profile name' "$model_routing" || \
+    fail 'model-routing.md: must reject profile-name transport'
+  for route in claude-haiku claude-balanced claude-deep claude-verifier codex-balanced; do
+    rg -q "\`$route\`" "$model_routing" || \
+      fail "model-routing.md: missing route-selection guidance for $route"
   done
-  if rg -q 'one active|một active|single-flight' "$model_routing"; then
-    fail 'model-routing.md: legacy global single-flight policy found'
+  if rg -q '(^|[^a-zA-Z])Profile([^a-zA-Z]|$)|\{model\}|\{session_id\}|\{result_dir\}|\{route_args\}|--permission-mode|--effort|model_reasoning_effort|prompt_transport|schema_path|codex exec|claude -p' "$model_routing"; then
+    fail 'model-routing.md: runtime/profile details leaked into route-selection policy'
   fi
 fi
 

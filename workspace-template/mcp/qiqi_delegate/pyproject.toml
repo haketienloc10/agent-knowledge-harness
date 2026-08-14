@@ -1,7 +1,7 @@
 [project]
 name = "qiqi-delegate-mcp"
 version = "0.1.0"
-description = "One-shot synchronous repository delegation tool for QiQi"
+description = "Synchronous interactive repository delegation tool for QiQi"
 requires-python = ">=3.10"
 dependencies = [
   "mcp>=2,<3",

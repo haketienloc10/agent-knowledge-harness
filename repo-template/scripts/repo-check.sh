@@ -23,6 +23,7 @@ require_command rg
 
 required_files=(
   AGENTS.md
+  CLAUDE.md
   ARCHITECTURE.md
   docs/VERIFY.md
   docs/REPO_SETUP.md
@@ -61,19 +62,52 @@ if ((${#existing_managed_files[@]} > 0)) && \
   fail 'unresolved placeholder(s) found in required artifact'
 fi
 
+claude_md="$repo_root/CLAUDE.md"
+if [[ -f "$claude_md" ]]; then
+  rg -qx '@AGENTS\.md' "$claude_md" || \
+    fail 'CLAUDE.md: expected forwarding instruction @AGENTS.md'
+fi
+
 agents="$repo_root/AGENTS.md"
 if [[ -f "$agents" ]]; then
   rg -q '`ARCHITECTURE\.md`' "$agents" || fail 'AGENTS.md: must route to ARCHITECTURE.md'
   rg -q '`docs/VERIFY\.md`' "$agents" || fail 'AGENTS.md: must route to docs/VERIFY.md'
   rg -q 'Git root hiện tại' "$agents" || fail 'AGENTS.md: missing Git-root boundary'
   rg -q 'Không sửa repository anh em' "$agents" || fail 'AGENTS.md: missing sibling-repository boundary'
+  rg -q 'exact result artifact' "$agents" || fail 'AGENTS.md: missing exact result-artifact exception'
+  rg -q '`\.qiqi/runs/`' "$agents" || fail 'AGENTS.md: missing workspace result-artifact path'
+  rg -q 'không tự suy đoán hoặc tìm artifact khác' "$agents" || \
+    fail 'AGENTS.md: result artifact must come only from MCP handoff'
   rg -q '^## Tri thức Repo-local$' "$agents" || fail 'AGENTS.md: missing repo-local knowledge rules'
   rg -q '^## Ứng viên Tri thức Cross-repo$' "$agents" || fail 'AGENTS.md: missing cross-repo rules'
   rg -q '^## Final Result Contract$' "$agents" || fail 'AGENTS.md: missing final result contract'
 
-  for field in outcome changes verification git_state blockers repo_local_knowledge cross_repo_impact; do
-    rg -q "\`$field\`" "$agents" || fail "AGENTS.md: final result missing field $field"
+  for heading in \
+    '### Outcome' \
+    '### Changes' \
+    '### Verification' \
+    '### Git State' \
+    '### Blockers' \
+    '### Repo-local Knowledge' \
+    '### Cross-repo Impact'; do
+    rg -q --fixed-strings "$heading" "$agents" || \
+      fail "AGENTS.md: final result missing heading $heading"
   done
+
+  rg -q 'completed.*blocked|blocked.*completed' "$agents" || \
+    fail 'AGENTS.md: Outcome must define completed/blocked values'
+  rg -q 'newest pending Result section' "$agents" || \
+    fail 'AGENTS.md: missing newest Result-section finalization rule'
+  rg -q 'Giữ nguyên toàn bộ history' "$agents" || \
+    fail 'AGENTS.md: missing result-history preservation rule'
+  rg -q 'chain-of-thought|working transcript' "$agents" || \
+    fail 'AGENTS.md: missing no-reasoning/transcript result rule'
+  rg -q 'Outcome `blocked`' "$agents" || \
+    fail 'AGENTS.md: missing blocked-before-question handoff rule'
+
+  if rg -q 'Caller có thể ép output bằng JSON Schema|final result missing field|`git_state`|`repo_local_knowledge`' "$agents"; then
+    fail 'AGENTS.md: legacy logical JSON result contract found'
+  fi
 fi
 
 architecture="$repo_root/ARCHITECTURE.md"
