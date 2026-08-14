@@ -64,6 +64,25 @@ for path in "${required_dirs[@]}"; do
   require_dir "$workspace_root/$path"
 done
 
+for legacy_example in \
+  instructions/agent-routing.codex.example.yaml \
+  instructions/agent-routing.claude-code.example.yaml; do
+  if [[ -e "$workspace_root/$legacy_example" ]]; then
+    fail "$legacy_example: routing examples belong under docs/examples, not active instructions"
+  fi
+done
+
+for example in \
+  docs/examples/agent-routing.codex.yaml \
+  docs/examples/agent-routing.claude-code.yaml; do
+  if [[ -f "$workspace_root/$example" ]]; then
+    rg -q '^# DOCUMENTATION-ONLY EXAMPLE\.$' "$workspace_root/$example" || \
+      fail "$example: missing documentation-only banner"
+    rg -q 'qiqi_delegate does NOT load this file' "$workspace_root/$example" || \
+      fail "$example: must state that MCP does not load the example"
+  fi
+done
+
 managed_files=(
   "$workspace_root/repos.yaml"
   "$workspace_root/SYSTEM_MAP.md"
@@ -393,14 +412,18 @@ fi
 
 model_routing="$workspace_root/instructions/model-routing.md"
 if [[ -f "$model_routing" ]]; then
-  rg -q 'Route' "$model_routing" || fail 'model-routing.md: missing Route column'
-  for profile in fast balanced deep verifier; do
-    rg -q "\`$profile\`" "$model_routing" || fail "model-routing.md: missing $profile profile"
+  rg -q 'chọn exact `route`|exact route' "$model_routing" || \
+    fail 'model-routing.md: must define exact-route selection policy'
+  rg -q '`instructions/agent-routing\.yaml`|`agent-routing\.yaml`' "$model_routing" || \
+    fail 'model-routing.md: must identify agent-routing.yaml as runtime source of truth'
+  rg -q 'không truyền profile name' "$model_routing" || \
+    fail 'model-routing.md: must reject profile-name transport'
+  for route in claude-haiku claude-balanced claude-deep claude-verifier codex-balanced; do
+    rg -q "\`$route\`" "$model_routing" || \
+      fail "model-routing.md: missing route-selection guidance for $route"
   done
-  rg -q '\{result_dir\}' "$model_routing" || \
-    fail 'model-routing.md: missing current {result_dir} runtime placeholder'
-  if rg -q 'one active|một active|single-flight|prompt_transport|schema_path|codex exec|claude -p' "$model_routing"; then
-    fail 'model-routing.md: legacy execution contract found'
+  if rg -q '(^|[^a-zA-Z])Profile([^a-zA-Z]|$)|\{model\}|\{session_id\}|\{result_dir\}|\{route_args\}|--permission-mode|--effort|model_reasoning_effort|prompt_transport|schema_path|codex exec|claude -p' "$model_routing"; then
+    fail 'model-routing.md: runtime/profile details leaked into route-selection policy'
   fi
 fi
 
