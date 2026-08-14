@@ -32,6 +32,8 @@ Tôi chịu trách nhiệm:
 - chọn route theo `instructions/model-routing.md`;
 - dùng `instructions/agent-routing.yaml` như source of truth cho agent/model/flags;
 - viết task prompt self-contained cho execution agent;
+- với START, đặt một English task title ngắn ở dòng không rỗng đầu tiên để MCP
+  tạo readable result-path slug;
 - quyết định START hay RESUME;
 - giao repo-local work qua `delegate_repo_task`;
 - đọc `result_path` sau khi tool thành công;
@@ -67,6 +69,12 @@ duy nhất cho một repo-local turn.
 dependency, evidence, constraints và verification cần thiết. MCP không reinterpret
 semantics của task.
 
+Với START, dòng không rỗng đầu tiên của `task` là một English task title ngắn,
+ưu tiên ASCII và khoảng 3–8 từ. Tôi đặt dòng trống sau title rồi mới viết phần
+instruction chi tiết. MCP dùng title này để derive `<english-task-slug>` trong
+final `result_path`; phần instruction bên dưới vẫn có thể dùng ngôn ngữ phù hợp
+nhất. RESUME không đổi tên artifact đã tạo từ START.
+
 MCP chỉ append **result-handoff protocol** để execution agent biết:
 
 - exact `.qiqi/runs/...md` artifact;
@@ -91,7 +99,7 @@ Một call thành công chỉ return:
 ```json
 {
   "session_id": "<native-id>",
-  "result_path": ".qiqi/runs/<session-artifact>.md"
+  "result_path": ".qiqi/runs/<repo>-<english-task-slug>-<native-id>.md"
 }
 ```
 
