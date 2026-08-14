@@ -63,7 +63,7 @@ Success return chỉ gồm:
 ```json
 {
   "session_id": "<native-session-id>",
-  "result_path": ".qiqi/runs/<repo>-<initial-task-slug>-<session-id>.md"
+  "result_path": ".qiqi/runs/<repo>-<english-task-slug>-<session-id>.md"
 }
 ```
 
@@ -73,11 +73,27 @@ QiQi phải đọc `result_path` trước khi quyết định bước tiếp the
 
 Task prompt do QiQi quyết định. MCP không thêm operating policy về scope, implementation, verification hoặc repo behavior. MCP chỉ append một **result-handoff protocol footer** để agent biết exact result artifact, pending marker, required headings và `Outcome = completed|blocked`.
 
+Với START, dòng không rỗng đầu tiên của `task` phải là một English task title ngắn, ưu tiên ASCII và khoảng 3–8 từ. MCP dùng chính dòng này để derive `<english-task-slug>` theo kebab-case, tối đa 48 ký tự. Đặt một dòng trống sau title; phần instruction còn lại có thể dùng ngôn ngữ phù hợp nhất. RESUME giữ nguyên artifact/path đã được START tạo.
+
+Ví dụ:
+
+```text
+Update checkout validation
+
+Kiểm tra và sửa validation của checkout flow...
+```
+
+sẽ cho filename dạng:
+
+```text
+.qiqi/runs/<repo>-update-checkout-validation-<native-session-id>.md
+```
+
 ## Result Artifact
 
 Mỗi native session có một durable Markdown artifact dưới `.qiqi/runs/`.
 
-START tạo pending artifact trước khi native identity có sẵn, prompt actual task, sau đó validate và promote atomically sang filename chứa native session ID. RESUME resolve chính xác artifact hiện có bằng repository + native `session_id`, append `Task N / Result N`, rồi trả lại cùng `result_path`.
+START tạo pending artifact trước khi native identity có sẵn, prompt actual task, sau đó validate và promote atomically sang filename chứa English task slug + native session ID. RESUME resolve chính xác artifact hiện có bằng repository + native `session_id`, append `Task N / Result N`, rồi trả lại cùng `result_path`.
 
 Newest result có headings:
 
