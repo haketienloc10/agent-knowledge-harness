@@ -42,21 +42,25 @@ workspace-template/
 ├── KNOWLEDGE.md
 ├── README.md
 ├── instructions/
-│   ├── agent-routing.yaml
-│   ├── agent-routing.codex.example.yaml
-│   ├── agent-routing.claude-code.example.yaml
-│   └── model-routing.md
+│   ├── agent-routing.yaml          # canonical runtime registry
+│   └── model-routing.md            # QiQi exact-route selection policy
 ├── mcp/qiqi_delegate/
 │   ├── pyproject.toml
 │   └── server.py
 ├── knowledge/
 ├── .qiqi/tasks/
 ├── .qiqi/runs/                    # runtime-created result artifacts
-├── docs/WORKSPACE_SETUP.md
+├── docs/
+│   ├── WORKSPACE_SETUP.md
+│   └── examples/                  # documentation-only routing examples
 └── scripts/
     ├── qiqi-mcp-server.sh
     └── workspace-check.sh
 ```
+
+`instructions/` chỉ chứa active instructions. `qiqi_delegate` chỉ load
+`instructions/agent-routing.yaml`; các routing example dưới `docs/examples/` không
+phải runtime input.
 
 QiQi không quản lý pane/process hoặc polling. Repo-local work chỉ đi qua
 `delegate_repo_task`.
@@ -123,8 +127,9 @@ MCP chỉ append protocol footer để agent biết exact result artifact, pendi
 và required headings. Boundary này giữ policy ở đúng tầng:
 
 ```text
-QiQi                   → what/why/scope/quality
-agent-routing.yaml     → model/effort/permission/native flags
+QiQi                   → what/why/scope/quality + exact route choice
+model-routing.md       → when QiQi should choose each route
+agent-routing.yaml     → executable/model/native argv for that route
 MCP + Herdr            → lifecycle/session/result handoff
 repo agent             → investigation/implementation/verification
 ```
@@ -180,7 +185,11 @@ Codex/Claude config để install integration.
 
 ## Routing
 
-`workspace-template/instructions/agent-routing.yaml` là machine source of truth cho:
+`workspace-template/instructions/model-routing.md` là policy chỉ để QiQi chọn
+**exact route**. Nó không chứa runtime model IDs hoặc CLI flags.
+
+`workspace-template/instructions/agent-routing.yaml` là canonical machine source
+of truth và là routing file duy nhất MCP load. Nó sở hữu:
 
 - interactive agent command;
 - adapter;
@@ -198,6 +207,8 @@ Runtime placeholders:
 ```
 
 QiQi chỉ chọn route. Public MCP schema không đổi khi model/native flags thay đổi.
+Các file `workspace-template/docs/examples/agent-routing.*.yaml` chỉ là tài liệu
+tham khảo; route chỉ khả dụng khi tồn tại trong canonical registry.
 
 ## Concurrency
 
@@ -230,7 +241,8 @@ terminal result mới reconcile và giao tiếp tiếp.
 | Working task state | Workspace `.qiqi/tasks/` |
 | Terminal session/turn handoff | Workspace `.qiqi/runs/` |
 | Agent/model/native flags + START/RESUME argv | Workspace `instructions/agent-routing.yaml` |
-| Policy chọn route | Workspace `instructions/model-routing.md` |
+| Policy chọn exact route | Workspace `instructions/model-routing.md` |
+| Routing customization examples | Workspace `docs/examples/` |
 | Interactive execution/session lifecycle | MCP `delegate_repo_task` + Herdr |
 | Architecture/implementation/verification nội bộ | Repository con |
 
