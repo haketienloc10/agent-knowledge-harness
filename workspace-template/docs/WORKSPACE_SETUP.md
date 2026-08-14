@@ -10,9 +10,11 @@ Sau setup:
 
 - `repos.yaml` trỏ đúng exact Git root local và không có alias trùng Git root;
 - `SYSTEM_MAP.md` mô tả dependency/contract liên repo;
-- `instructions/agent-routing.yaml` chứa interactive agent/model/flags +
-  START/RESUME argv;
-- `instructions/model-routing.md` map profile sang route;
+- `instructions/agent-routing.yaml` là canonical runtime registry cho
+  interactive agent/model/flags + START/RESUME argv;
+- `instructions/model-routing.md` chỉ hướng dẫn QiQi chọn exact route;
+- `docs/examples/agent-routing.*.yaml` chỉ là documentation-only examples và
+  không được MCP load;
 - `.codex/config.toml` chỉ expose MCP tool `delegate_repo_task`;
 - Herdr CLI có sẵn và integration cho agent đã cấu hình ở trạng thái `current`;
 - MCP START/RESUME chạy real interactive Codex/Claude qua Herdr;
@@ -98,8 +100,8 @@ không phải progress API của QiQi.
 
 ## Bước 4: Điền Agent Routing
 
-`instructions/agent-routing.yaml` là machine-readable interactive execution
-registry.
+`instructions/agent-routing.yaml` là **canonical machine-readable interactive
+execution registry** và là file routing duy nhất MCP load.
 
 Mỗi agent entry sở hữu:
 
@@ -146,13 +148,18 @@ Registry mặc định hiện gồm:
 
 Codex hiện không ép hook-trust bypass; trust behavior thuộc local Codex config/TUI.
 
-## Bước 5: Điền Model Routing
+Hai file dưới `docs/examples/` chỉ minh họa cách cấu hình registry theo một agent
+family. MCP không đọc các file này. Muốn dùng route từ example, copy/adapt route đó
+vào `instructions/agent-routing.yaml` rồi chạy checker.
 
-`instructions/model-routing.md` chỉ là policy cho QiQi chọn route. QiQi truyền tên
-route; MCP resolve agent/model/native flags từ registry.
+## Bước 5: Điền Route Selection Policy
 
-Model routing không quyết định concurrency. Dependency, Git root, native session
-và shared resource mới quyết định delegation wave.
+`instructions/model-routing.md` chỉ giúp QiQi quyết định **exact route name** cho
+một task. File này không giữ model ID, permission mode, effort hoặc CLI flags.
+
+QiQi truyền exact route vào tool; MCP resolve agent/model/native flags từ
+`instructions/agent-routing.yaml`. Nếu một route chỉ xuất hiện trong tài liệu hoặc
+`docs/examples/` mà không tồn tại trong canonical registry, route đó không khả dụng.
 
 ## Bước 6: Chuẩn bị MCP Environment
 
@@ -341,7 +348,9 @@ Checker xác minh:
 - Claude stalled-prompt recovery;
 - QiQi policy về `result_path` và no-report-only RESUME.
 
-Checker không gọi model API và không chạy test của repository con.
+Checker không gọi model API và không chạy test của repository con. Các file trong
+`docs/examples/` cũng không phải runtime input và không được checker xem như active
+routing registry.
 
 ## Bước 14: Fresh-session Smoke Test
 
