@@ -114,6 +114,11 @@ QiQi phải đọc `result_path` trước khi quyết định bước tiếp the
 QiQi viết execution prompt: outcome, scope, dependency, evidence, constraints và
 verification. MCP không ép cách agent làm việc.
 
+Với START, dòng không rỗng đầu tiên của task là một **English task title** ngắn,
+ưu tiên ASCII và khoảng 3–8 từ. MCP đã derive filename slug từ dòng đầu này; phần
+instruction bên dưới vẫn có thể dùng ngôn ngữ phù hợp nhất. RESUME giữ nguyên
+artifact/path được tạo ở START.
+
 MCP chỉ append protocol footer để agent biết exact result artifact, pending marker
 và required headings. Boundary này giữ policy ở đúng tầng:
 
@@ -129,8 +134,12 @@ repo agent             → investigation/implementation/verification
 Mỗi native session sở hữu một durable Markdown artifact:
 
 ```text
-.qiqi/runs/<repo>-<initial-task-slug>-<native-session-id>.md
+.qiqi/runs/<repo>-<english-task-slug>-<native-session-id>.md
 ```
+
+`<english-task-slug>` được derive từ English title ở dòng không rỗng đầu tiên của
+START task, theo kebab-case ASCII, tối đa 48 ký tự. Ví dụ `Update checkout
+validation` tạo slug `update-checkout-validation`.
 
 START tạo pending artifact rồi promote sau khi native identity có sẵn. RESUME
 append `Task N / Result N` vào exact artifact đó và trả lại cùng `result_path`.
