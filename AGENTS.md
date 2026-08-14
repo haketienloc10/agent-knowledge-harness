@@ -15,6 +15,9 @@ Repo không chứa tri thức nghiệp vụ thật của một workspace cụ th
 - Mọi repo-local work từ QiQi đi qua đúng một MCP tool: `delegate_repo_task`.
 - Public tool signature là `delegate_repo_task(repository, task, route, session_id?)`.
 - `task` semantics và execution prompt thuộc QiQi; MCP không reinterpret task.
+- Với START, dòng không rỗng đầu tiên của `task` là English task title ngắn; MCP
+  derive readable `<english-task-slug>` từ dòng này cho final result filename.
+- RESUME không rename artifact; nó giữ exact `result_path` được START tạo.
 - MCP chỉ append result-handoff protocol cần cho durable Markdown artifact.
 - Success return chỉ gồm native `session_id` và workspace-relative `result_path`.
 - QiQi phải đọc `result_path` trước khi quyết định bước tiếp; không RESUME chỉ để
@@ -42,11 +45,13 @@ Repo không chứa tri thức nghiệp vụ thật của một workspace cụ th
 Mỗi native session có một durable artifact:
 
 ```text
-.qiqi/runs/<repo>-<initial-task-slug>-<native-session-id>.md
+.qiqi/runs/<repo>-<english-task-slug>-<native-session-id>.md
 ```
 
-START tạo pending artifact rồi promote sau khi native identity có sẵn. RESUME
-append `Task N / Result N` vào exact artifact của session.
+`<english-task-slug>` được derive từ dòng không rỗng đầu tiên của START `task`,
+được QiQi viết thành English title ngắn, ưu tiên ASCII. Phần instruction còn lại
+có thể dùng ngôn ngữ khác. START tạo pending artifact rồi promote sau khi native
+identity có sẵn. RESUME append `Task N / Result N` vào exact artifact của session.
 
 Newest result bắt buộc có headings theo thứ tự:
 
@@ -75,20 +80,22 @@ Tool return không duplicate nội dung report; caller đọc `result_path` đ�
 4. Giữ full interactive agent TUI bên trong Herdr; không thay bằng hidden child
    runner chỉ để lấy output máy đọc.
 5. QiQi phải sở hữu task semantics; MCP footer chỉ sở hữu result handoff.
-6. Repository phải resolve từ `repos.yaml` và path phải là exact Git root.
-7. Không cho nhiều registry entry cùng resolve về một Git root.
-8. Route registry sở hữu command/model/flags; runtime placeholders hiện tại là
+6. START task title phải giữ English result-slug convention; không thêm translator
+   hoặc đổi public MCP schema chỉ để đặt filename.
+7. Repository phải resolve từ `repos.yaml` và path phải là exact Git root.
+8. Không cho nhiều registry entry cùng resolve về một Git root.
+9. Route registry sở hữu command/model/flags; runtime placeholders hiện tại là
    `{model}`, `{session_id}`, `{result_dir}`, `{route_args}`.
-9. Native resume phải kiểm tra identity: ID report lại phải khớp ID yêu cầu.
-10. Concurrency guard phải resource-scoped trong một `qiqi_delegate` server
+10. Native resume phải kiểm tra identity: ID report lại phải khớp ID yêu cầu.
+11. Concurrency guard phải resource-scoped trong một `qiqi_delegate` server
     process: same Git root hoặc same native session bị reject ngay; không global
     delegation lock và không silently queue same-repo calls.
-11. Tool success chỉ trả `session_id` + `result_path`; QiQi đọc artifact thay vì
+12. Tool success chỉ trả `session_id` + `result_path`; QiQi đọc artifact thay vì
     mở RESUME turn chỉ để lấy report.
-12. Nếu thay đổi artifact/runtime bắt buộc, cập nhật checker + docs trong cùng PR.
-13. Herdr integration install là setup concern; MCP chỉ preflight selected adapter
+13. Nếu thay đổi artifact/runtime bắt buộc, cập nhật checker + docs trong cùng PR.
+14. Herdr integration install là setup concern; MCP chỉ preflight selected adapter
     ở trạng thái `current`.
-14. Không thêm lại Codex hook-trust bypass nếu không có quyết định mới rõ ràng.
+15. Không thêm lại Codex hook-trust bypass nếu không có quyết định mới rõ ràng.
 
 ## Khi thay đổi Repository Template
 
@@ -110,6 +117,7 @@ Review phải xác nhận:
 - workspace template chỉ expose `delegate_repo_task`;
 - public signature không đổi ngoài quyết định có chủ đích;
 - QiQi-owned prompt + MCP-owned result footer boundary được giữ;
+- START task first line tạo readable English result slug và RESUME giữ cùng path;
 - Codex/Claude đều chạy interactive qua Herdr;
 - native session ID được lấy qua Herdr integration và RESUME identity được kiểm tra;
 - START/RESUME dùng durable session artifact và RESUME append cùng path;
