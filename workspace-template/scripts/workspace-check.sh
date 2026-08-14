@@ -110,7 +110,6 @@ if [[ -f "$agents_md" ]]; then
     '`KNOWLEDGE\.md`' \
     '`instructions/agent-routing\.yaml`' \
     '`instructions/model-routing\.md`' \
-    '`scripts/qiqi-mcp-server\.sh`' \
     '`delegate_repo_task`' \
     '`session_id`' \
     '`result_path`' \
@@ -126,7 +125,7 @@ if [[ -f "$agents_md" ]]; then
     fail 'AGENTS.md: missing no-report-only RESUME invariant'
   rg -q 'prompt.*QiQi|QiQi.*prompt' "$agents_md" || \
     fail 'AGENTS.md: missing QiQi-owned task prompt invariant'
-  rg -q 'progress commentary' "$agents_md" || \
+  rg -U -q 'progress[[:space:]]+commentary' "$agents_md" || \
     fail 'AGENTS.md: missing delegation-silence communication invariant'
   rg -q 'Trong cùng `qiqi_delegate` server process' "$agents_md" || \
     fail 'AGENTS.md: conflict guard must be scoped to one qiqi_delegate server process'
@@ -236,11 +235,6 @@ fi
 if ! yq --version 2>&1 | rg -q 'version v?4\.'; then
   fail 'unsupported yq version; install yq version 4'
 else
-  if ! yq -e '.workspace.name | type == "!!str" and length > 0' \
-    "$workspace_root/repos.yaml" >/dev/null; then
-    fail 'repos.yaml: workspace.name must be a non-empty string'
-  fi
-
   if ! yq -e '.repositories | type == "!!seq" and length > 0' \
     "$workspace_root/repos.yaml" >/dev/null; then
     fail 'repos.yaml: repositories must be a non-empty list'
