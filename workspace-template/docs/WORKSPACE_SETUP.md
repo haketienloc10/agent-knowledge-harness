@@ -17,6 +17,7 @@ Sau setup:
 - Herdr CLI có sẵn và integration cho agent đã cấu hình ở trạng thái `current`;
 - MCP START/RESUME chạy real interactive Codex/Claude qua Herdr;
 - success return chỉ có native `session_id` + workspace-relative `result_path`;
+- START result path dùng readable English task slug do QiQi title quyết định;
 - QiQi đọc result artifact trước khi quyết định task tiếp theo;
 - concurrent call cùng Git root hoặc cùng native session bị reject trong cùng
   MCP server process;
@@ -183,6 +184,7 @@ session_id absent
 → claim resolved Git root
 → create Herdr workspace at exact repo root
 → start real interactive agent using start_args + route args
+→ derive English task slug từ dòng không rỗng đầu tiên của QiQi task
 → create pending result artifact
 → append Task 1 / Result 1 marker
 → send actual QiQi task + MCP result-handoff footer
@@ -220,6 +222,28 @@ MCP không infer resume từ repository và không fallback sang session mới.
 QiQi sở hữu task semantics. Prompt phải tự chứa outcome, scope, context,
 dependency, decisions/evidence và verification cần thiết.
 
+Với START, dòng không rỗng đầu tiên của `task` phải là một **English task title**
+ngắn, ưu tiên ASCII, khoảng 3–8 từ. Đặt một dòng trống sau title rồi mới viết
+instruction chi tiết. MCP dùng title này để derive `<english-task-slug>` theo
+kebab-case ASCII, tối đa 48 ký tự. Phần instruction còn lại có thể dùng tiếng Việt
+hoặc ngôn ngữ khác nếu phù hợp hơn.
+
+Ví dụ:
+
+```text
+Update checkout validation
+
+Kiểm tra và sửa validation của checkout flow. Chạy test liên quan trước khi kết thúc.
+```
+
+cho result path dạng:
+
+```text
+.qiqi/runs/<repo>-update-checkout-validation-<native-session-id>.md
+```
+
+RESUME không đổi filename; nó luôn dùng exact artifact đã tạo trong START.
+
 MCP không thêm policy về cách implementation. MCP chỉ append protocol footer để
 agent biết exact result artifact + pending marker + required headings.
 
@@ -233,7 +257,7 @@ Success return:
 ```json
 {
   "session_id": "<native-session-id>",
-  "result_path": ".qiqi/runs/<repo>-<initial-task-slug>-<session-id>.md"
+  "result_path": ".qiqi/runs/<repo>-<english-task-slug>-<session-id>.md"
 }
 ```
 
@@ -323,12 +347,13 @@ Checker không gọi model API và không chạy test của repository con.
 
 Tối thiểu:
 
-1. START route Codex → nhận `session_id` + `result_path`.
+1. START route Codex bằng task có English title ở dòng đầu → nhận `session_id` +
+   `result_path`; xác nhận filename chứa readable English slug.
 2. Đọc artifact → xác nhận Task 1 / Result 1 và required headings.
 3. RESUME cùng Codex ID với **task follow-up thật** → cùng `session_id` và cùng
    `result_path`, artifact append Task 2 / Result 2.
-4. START route Claude → nhận `session_id` + `result_path`.
-5. Đọc artifact → xác nhận result hợp lệ.
+4. START route Claude bằng task có English title → nhận `session_id` + `result_path`.
+5. Đọc artifact → xác nhận result hợp lệ và filename dùng English slug.
 6. RESUME Claude với follow-up thật → same ID/path và append turn.
 7. Hai task read-only trên Git root khác nhau có thể active cùng wave nếu host
    dispatch concurrent calls.
