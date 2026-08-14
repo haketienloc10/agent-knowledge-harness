@@ -1,115 +1,99 @@
-# Model Routing cho QiQi
+# Route Selection Policy cho QiQi
 
-Tệp này là policy để QiQi **chọn route**. Machine-readable agent/model/native
-argv nằm trong `instructions/agent-routing.yaml`.
+Tệp này chỉ giúp QiQi **chọn exact `route`** để truyền vào
+`delegate_repo_task`. Nó không mô tả cách MCP chạy agent.
 
-QiQi không tự ghép executable, model ID hoặc CLI flags. Khi cần đổi model/flag,
-sửa route registry; public MCP schema giữ nguyên.
+`instructions/agent-routing.yaml` là machine source of truth duy nhất cho route
+đang tồn tại và cho executable, adapter, model, START/RESUME argv cùng native CLI
+flags của từng route.
 
-## Profiles
+Không copy model ID, permission mode, effort hay CLI flags vào file này. Khi
+runtime configuration thay đổi, chỉ registry machine-readable phải đổi.
 
-| Profile | Route | Dùng khi | Route hiện tại |
-|---|---|---|---|
-| `fast` | `claude-haiku` | Task cơ học, nhỏ, yêu cầu rõ, verification trực tiếp. | Claude `haiku`, `--permission-mode acceptEdits`, `--effort medium`. |
-| `balanced` | `claude-balanced` | Implementation thông thường, bug vừa, test/docs kỹ thuật. | Claude `sonnet`, `--permission-mode auto`, `--effort medium`. |
-| `deep` | `claude-deep` | Kiến trúc, migration, contract phức tạp hoặc bug khó. | Claude `sonnet`, `--permission-mode auto`, `--effort high`. |
-| `verifier` | `claude-verifier` | Review độc lập, đối chiếu spec/rủi ro/evidence. | Claude `sonnet`, `--permission-mode auto`, `--effort xhigh`. |
+## Route hiện có
 
-`codex-balanced` tồn tại trong machine registry và có thể được QiQi chọn khi
-policy/task yêu cầu Codex; nó dùng `gpt-5.4` với reasoning effort medium.
+### `claude-haiku`
 
-## Quy tắc Chọn
+Dùng cho task nhỏ, cơ học và có phạm vi rõ, khi:
 
-1. Xác định loại task và mức rủi ro.
-2. Chọn profile thấp nhất vẫn đủ tin cậy.
-3. Resolve route từ policy và registry.
-4. Truyền đúng tên route vào `delegate_repo_task`.
-5. START mới: bỏ `session_id`.
-6. Tiếp tục native conversation: truyền native `session_id` đã được tool trả về và
-   dùng route thuộc cùng agent family.
-7. Muốn chuyển agent family: START session mới và handoff context; không resume
-   chéo ID.
-8. Không truyền raw CLI arguments, executable, model ID hoặc permission mode qua
-   task/tool arguments.
+- thay đổi hẹp và ít uncertainty;
+- expected outcome cụ thể;
+- verification trực tiếp;
+- không cần reasoning kiến trúc đáng kể.
 
-Không đổi route chỉ vì environment failure, dependency thiếu hoặc product
-requirement chưa rõ.
+### `claude-balanced`
 
-## Agent Routing Registry
+Route mặc định cho phần lớn repo-local implementation, gồm:
 
-`instructions/agent-routing.yaml` là source of truth thực thi.
+- feature/bugfix thông thường;
+- refactor có phạm vi vừa;
+- test hoặc docs kỹ thuật gắn với implementation;
+- investigation cần reasoning ở mức vừa nhưng chưa phải bài toán kiến trúc sâu.
 
-Mỗi `agent` định nghĩa:
+Khi không có lý do rõ để chọn route khác, ưu tiên `claude-balanced`.
 
-- `command`;
-- `adapter` (`codex` hoặc `claude`);
-- `start_args`;
-- `resume_args`.
+### `claude-deep`
 
-Mỗi `route` định nghĩa:
+Dùng khi task có uncertainty hoặc reasoning cost cao, ví dụ:
 
-- `agent`;
-- `model`;
-- route-specific `args`.
+- architecture hoặc design trade-off phức tạp;
+- migration có nhiều bước/ràng buộc;
+- contract thay đổi có blast radius đáng kể;
+- bug khó, nguyên nhân chưa rõ hoặc cần reasoning sâu qua nhiều subsystem.
 
-Runtime placeholders MCP hỗ trợ:
+Không chọn route này chỉ vì task dài; chọn vì độ khó reasoning/risk thực sự cao.
+
+### `claude-verifier`
+
+Dùng cho verification/review độc lập khi mục tiêu chính là đánh giá evidence thay
+vì implementation, ví dụ:
+
+- review change quan trọng;
+- đối chiếu implementation với spec/contract;
+- tìm regression/risk sau một delegation khác;
+- xác minh claim trước khi QiQi reconcile cross-repo result.
+
+Nếu verifier phát hiện cần implementation mới, QiQi quyết định delegation tiếp
+theo; verifier không mặc nhiên trở thành implementation route.
+
+### `codex-balanced`
+
+Dùng khi **Codex được yêu cầu hoặc ưu tiên có chủ đích**, chẳng hạn:
+
+- người dùng hoặc project policy chỉ định Codex;
+- task phụ thuộc capability/integration đã được xác minh là phù hợp riêng với
+  Codex;
+- QiQi có lý do cụ thể để giữ execution trên Codex thay vì route Claude mặc định.
+
+Không chọn Codex chỉ để retry một environment/runtime failure của route khác.
+
+## Quy tắc chọn route
+
+1. Xác định outcome, scope, risk và uncertainty của repo-local task.
+2. Chọn route nhẹ nhất vẫn đủ tin cậy để hoàn thành task.
+3. Ưu tiên `claude-balanced` khi không có tín hiệu rõ cho fast/deep/verifier hoặc
+   Codex.
+4. Truyền **exact route name** vào `delegate_repo_task`; không truyền profile name.
+5. Không đặt executable, model ID, permission mode, effort hoặc raw CLI flags vào
+   task hay MCP arguments.
+6. Nếu route không tồn tại trong `agent-routing.yaml`, route đó không khả dụng dù
+   được nhắc ở tài liệu hay ví dụ khác.
+7. Không đổi route chỉ để né blocker về environment, dependency, permission hoặc
+   product decision; giải quyết blocker thực tế trước.
+
+## Boundary
+
+File này sở hữu duy nhất câu hỏi:
 
 ```text
-{model}
-{session_id}
-{result_dir}
-{route_args}
+QiQi nên chọn route nào cho task này?
 ```
 
-`{route_args}` là list splice. Các placeholder scalar còn lại được MCP expand
-trực tiếp vào argv. `start_args` không được chứa `{session_id}`;
-`resume_args` bắt buộc chứa `{session_id}`.
+Các concern sau **không thuộc route-selection policy** và được mô tả ở artifact
+sở hữu tương ứng:
 
-Registry mô tả **interactive** Codex/Claude argv chạy bên trong Herdr. Execution
-transport không dùng non-interactive JSON/output-schema flow.
-
-`{result_dir}` trỏ tới workspace `.qiqi/runs` để interactive agent có quyền truy
-cập exact result artifact mà MCP handoff.
-
-## Native Session Identity
-
-QiQi không parse stdout hoặc output envelope để lấy session ID. MCP nhận native
-identity từ Herdr agent integration sau khi interactive turn thực sự bắt đầu.
-
-MCP chỉ coi RESUME thành công khi native identity báo lại đúng `session_id` được
-yêu cầu. Fallback sang session mới là lỗi.
-
-Native ID được coi là opaque. Không suy luận agent/session semantics từ format ID.
-
-## Result Handoff không thuộc Model Routing
-
-Route chỉ quyết định **agent/model/flags**. Route không quyết định result format.
-
-MCP append cùng một result-handoff protocol cho mọi route và success return:
-
-```json
-{
-  "session_id": "<native-id>",
-  "result_path": ".qiqi/runs/<session-artifact>.md"
-}
-```
-
-QiQi đọc `result_path` để reconcile newest Result section. Không dùng RESUME chỉ
-để lấy lại report.
-
-## Concurrency không thuộc Model Routing
-
-Route không quyết định task có chạy đồng thời hay không.
-
-QiQi có thể đặt task vào cùng delegation wave khi:
-
-- khác resolved Git root;
-- không phụ thuộc output/decision chưa có;
-- không cùng shared mutable resource;
-- không dùng cùng native `session_id`.
-
-Trong cùng `qiqi_delegate` server process, MCP reject concurrent call trên cùng
-resolved Git root hoặc cùng native session. Khi dependency/conflict không rõ,
-QiQi chạy tuần tự.
-
-Trong wave, QiQi áp dụng Delegation Silence và không poll child state.
+- task/prompt semantics → `AGENTS.md` + `identity.md`;
+- agent/model/native argv → `agent-routing.yaml`;
+- START/RESUME, Herdr lifecycle, native session identity, result artifact → MCP;
+- dependency/concurrency/delegation waves → `AGENTS.md`;
+- setup và smoke test → `docs/WORKSPACE_SETUP.md`.
