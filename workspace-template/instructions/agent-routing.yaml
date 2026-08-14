@@ -1,11 +1,15 @@
-# Machine-readable interactive execution registry for qiqi_delegate.
-# QiQi selects a route. The MCP server owns Herdr workspace/agent lifecycle,
-# START/RESUME, native session identity, prompt/wait, and result artifact paths.
-# Flags belong here, not in QiQi prompts or MCP tool arguments.
+# Canonical machine-readable runtime routing registry for qiqi_delegate.
+# This is the only file under instructions/ loaded by the MCP server.
 #
+# QiQi owns task semantics, route selection, and the START vs RESUME decision.
+# This registry owns only agent executable/adapter, interactive START/RESUME argv,
+# model selection, and route-specific native CLI flags.
+# MCP owns Herdr workspace/agent lifecycle, native session identity, prompt/wait,
+# result artifact lifecycle, validation, and cleanup.
+#
+# Flags belong here, not in QiQi prompts or MCP tool arguments.
 # `start_args` and `resume_args` are interactive agent arguments passed after
-# `herdr agent start ... --`; they must not use non-interactive modes such as
-# `codex exec` or `claude -p`.
+# `herdr agent start ... --`; they must not use non-interactive execution modes.
 #
 # {route_args} expands to the selected route's args list. Scalar placeholders:
 # {model}, {session_id}, {result_dir}.
