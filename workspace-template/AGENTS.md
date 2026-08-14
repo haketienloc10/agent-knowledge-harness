@@ -26,7 +26,7 @@ Khi bắt đầu phiên tại workspace root:
    liên quan API/event/schema/auth/deployment/runtime chung.
 5. Đọc `KNOWLEDGE.md` và `knowledge/INDEX.md` khi cần tri thức cross-repo đã được
    xác minh.
-6. Đọc `instructions/model-routing.md` để chọn profile/route.
+6. Đọc `instructions/model-routing.md` để chọn exact route.
 7. Đọc `instructions/agent-routing.yaml` khi cần biết agent/model/flags và
    START/RESUME argv thực tế.
 
