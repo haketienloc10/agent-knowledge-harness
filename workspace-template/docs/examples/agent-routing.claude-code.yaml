@@ -1,0 +1,65 @@
+# DOCUMENTATION-ONLY EXAMPLE.
+# qiqi_delegate does NOT load this file.
+# To use any route below, copy/adapt it into instructions/agent-routing.yaml,
+# which is the canonical runtime registry.
+#
+# Example registry for a Claude Code-only qiqi_delegate setup.
+version: 1
+
+agents:
+  claude:
+    command: claude
+    adapter: claude
+
+    start_args:
+      - --model
+      - "{model}"
+      - --add-dir
+      - "{result_dir}"
+      - "{route_args}"
+
+    resume_args:
+      - --resume
+      - "{session_id}"
+      - --model
+      - "{model}"
+      - --add-dir
+      - "{result_dir}"
+      - "{route_args}"
+
+routes:
+  claude-haiku:
+    agent: claude
+    model: haiku
+    args:
+      - --permission-mode
+      - acceptEdits
+      - --effort
+      - medium
+
+  claude-balanced:
+    agent: claude
+    model: sonnet
+    args:
+      - --permission-mode
+      - auto
+      - --effort
+      - medium
+
+  claude-deep:
+    agent: claude
+    model: sonnet
+    args:
+      - --permission-mode
+      - auto
+      - --effort
+      - high
+
+  claude-verifier:
+    agent: claude
+    model: sonnet
+    args:
+      - --permission-mode
+      - auto
+      - --effort
+      - xhigh
