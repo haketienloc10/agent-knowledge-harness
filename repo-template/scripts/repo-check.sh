@@ -82,7 +82,7 @@ if [[ -f "$agents" ]]; then
   rg -q '^## Tri thức Repo-local$' "$agents" || fail 'AGENTS.md: missing repo-local knowledge rules'
   rg -q '^## Cross-repo Impact$' "$agents" || fail 'AGENTS.md: missing cross-repo impact rules'
   rg -q '^## Final Result Contract$' "$agents" || fail 'AGENTS.md: missing final result contract'
-  rg -U -q 'Agent không cần và không được tự mở workspace knowledge.*result artifact của[[:space:]]+repository khác' "$agents" || \
+  rg -U -q 'workspace knowledge hoặc result artifact của[[:space:]]+repository khác' "$agents" || \
     fail 'AGENTS.md: child must not read workspace knowledge or sibling result artifacts'
   rg -q 'QiQi là handoff broker' "$agents" || \
     fail 'AGENTS.md: QiQi must broker cross-repo handoff'
