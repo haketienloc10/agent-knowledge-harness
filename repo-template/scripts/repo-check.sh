@@ -78,9 +78,20 @@ if [[ -f "$agents" ]]; then
   rg -q '`\.qiqi/runs/`' "$agents" || fail 'AGENTS.md: missing workspace result-artifact path'
   rg -q 'không tự suy đoán hoặc tìm artifact khác' "$agents" || \
     fail 'AGENTS.md: result artifact must come only from MCP handoff'
+  rg -q '^## Handoff với QiQi$' "$agents" || fail 'AGENTS.md: missing QiQi handoff contract'
   rg -q '^## Tri thức Repo-local$' "$agents" || fail 'AGENTS.md: missing repo-local knowledge rules'
-  rg -q '^## Ứng viên Tri thức Cross-repo$' "$agents" || fail 'AGENTS.md: missing cross-repo rules'
+  rg -q '^## Cross-repo Impact$' "$agents" || fail 'AGENTS.md: missing cross-repo impact rules'
   rg -q '^## Final Result Contract$' "$agents" || fail 'AGENTS.md: missing final result contract'
+  rg -U -q 'Agent không cần và không được tự mở workspace knowledge.*result artifact của[[:space:]]+repository khác' "$agents" || \
+    fail 'AGENTS.md: child must not read workspace knowledge or sibling result artifacts'
+  rg -q 'QiQi là handoff broker' "$agents" || \
+    fail 'AGENTS.md: QiQi must broker cross-repo handoff'
+  rg -q 'repository/boundary nào bị ảnh hưởng' "$agents" || \
+    fail 'AGENTS.md: Cross-repo Impact must identify affected boundary'
+  rg -q 'evidence chính từ repository hiện tại' "$agents" || \
+    fail 'AGENTS.md: Cross-repo Impact must carry evidence'
+  rg -q 'next action nếu đã rõ' "$agents" || \
+    fail 'AGENTS.md: Cross-repo Impact must carry next action when known'
 
   for heading in \
     '### Outcome' \
