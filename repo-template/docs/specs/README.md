@@ -14,5 +14,6 @@ Mỗi tài liệu nên nêu rõ:
 - acceptance criteria;
 - verification và source of truth.
 
-Contract ảnh hưởng nhiều repository phải được trả về QiQi như cross-repo
-knowledge candidate; không mô tả repository khác như nguồn sự thật tại đây.
+Nếu contract ảnh hưởng nhiều repository, giữ source of truth repo-local đúng phạm
+vi của repo hiện tại và handoff phần ảnh hưởng cùng evidence cho QiQi qua
+Cross-repo Impact. Không mô tả repository khác như nguồn sự thật tại đây.
