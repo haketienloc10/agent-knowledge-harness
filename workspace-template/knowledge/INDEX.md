@@ -1,7 +1,7 @@
 # Knowledge Index
 
 Đây là mục lục để QiQi biết **knowledge nào cần đọc cho task hiện tại**. Luôn bắt
-đầu từ file này thay vì quét toàn bộ `knowledge/`.
+đầu từ file này và không quét toàn bộ `knowledge/`.
 
 Dựa vào `Summary`, `Khi nào cần đọc` và `Phạm vi`, chỉ mở exact document có liên
 quan. Quy tắc tạo/cập nhật knowledge nằm trong `README.md`.
