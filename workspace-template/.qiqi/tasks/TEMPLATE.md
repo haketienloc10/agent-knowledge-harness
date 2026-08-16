@@ -39,18 +39,30 @@ Chỉ ghi delegation sau khi `delegate_repo_task` đã return thành công và Q
 Nếu chuyển sang agent khác, tạo START mới và ghi row mới; không tái sử dụng native
 session ID của agent cũ.
 
+## Handoff liên repository
+
+Chỉ ghi fact/evidence QiQi đã reconcile và còn giá trị cho downstream work.
+
+| Từ repository | Fact/evidence cần truyền | Repository nhận | Trạng thái |
+|---|---|---|---|
+
+Không yêu cầu downstream agent tự đọc result artifact hoặc workspace knowledge;
+QiQi phải đưa context cần dùng trực tiếp vào task prompt.
+
 ## Blocker hoặc câu hỏi mở
 
 ## Verification evidence
 
-## Ứng viên tri thức lâu bền
+## Cross-repo impact còn phải xử lý
 
-Chỉ ghi phát hiện có khả năng dùng lại. Nếu cần giữ, tạo proposal trong
-`knowledge/proposals/`; không chép thẳng toàn bộ task sang durable knowledge.
+Chỉ ghi impact còn cần downstream task, user decision hoặc workspace update. Nếu
+impact đã được truyền/lưu xong thì đánh dấu rõ để không xử lý lặp lại.
 
 ## Kết quả cuối
 
 ## Durable knowledge đã cập nhật
 
-- Proposal hoặc tài liệu:
-- Không có, nếu task không tạo tri thức dùng lại.
+- `SYSTEM_MAP.md`:
+- `knowledge/...`:
+- `knowledge/INDEX.md`:
+- Không có, nếu task không tạo tri thức cross-repo có khả năng dùng lại.
