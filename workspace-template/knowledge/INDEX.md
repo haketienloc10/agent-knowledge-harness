@@ -1,29 +1,25 @@
 # Knowledge Index
 
-Đây là điểm vào của thư viện tri thức workspace. Agent phải tìm tài liệu từ
-index này thay vì quét toàn bộ thư mục.
+Đây là mục lục để QiQi biết **knowledge nào cần đọc cho task hiện tại**. Luôn bắt
+đầu từ file này thay vì quét toàn bộ `knowledge/`.
 
-Index chỉ chứa durable knowledge đã được promote. Phát hiện chưa xác minh nằm ở
-`knowledge/proposals/` và chưa được dùng như context đã xác nhận.
+Dựa vào `Summary`, `Khi nào cần đọc` và `Phạm vi`, chỉ mở exact document có liên
+quan. Quy tắc tạo/cập nhật knowledge nằm trong `README.md`.
 
-## Registry
+## Mục lục
 
-| ID | Loại | Phạm vi/repository | Trạng thái | Cập nhật | Tài liệu |
-|---|---|---|---|---|---|
-| `example-contract` | contract | `producer → consumer` | verified | YYYY-MM-DD | `contracts/example.md` |
+| Tài liệu | Summary | Khi nào cần đọc | Phạm vi |
+|---|---|---|---|
+| `contracts/example.md` | Ví dụ contract giữa producer và consumer. | Khi task thay đổi API/event/schema tương ứng. | `producer → consumer` |
 
-Xóa dòng ví dụ khi thêm tài liệu thật đầu tiên.
-
-## Trạng thái
-
-- `verified`: có evidence và được phép dùng làm context.
-- `superseded`: đã bị thay thế; phải liên kết đến tài liệu mới.
-- `deprecated`: còn tồn tại để tương thích nhưng không dùng cho thay đổi mới.
+Xóa dòng ví dụ khi thêm knowledge document thật đầu tiên.
 
 ## Quy tắc cập nhật
 
-- Mỗi durable document phải có đúng một dòng trong registry.
-- `Phạm vi/repository` phải đủ cụ thể để agent biết khi nào cần đọc.
-- Không đưa task document hoặc proposal chưa được duyệt vào registry.
-- Khi thay thế tài liệu, không xóa lịch sử im lặng; đổi trạng thái và liên kết đến
-  nguồn mới.
+- Mỗi durable knowledge document có đúng một dòng trong mục lục.
+- `Summary` phải cho biết document chứa kết luận gì, không chỉ lặp lại tên file.
+- `Khi nào cần đọc` phải giúp QiQi quyết định document có liên quan task hay không.
+- `Phạm vi` phải nêu repository, boundary hoặc flow mà knowledge áp dụng.
+- Khi tạo, đổi phạm vi, rename hoặc xóa knowledge document, cập nhật mục lục trong
+  cùng thay đổi.
+- Không đưa task context, result artifact hoặc repo-local document vào đây.
