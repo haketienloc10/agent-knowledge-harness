@@ -109,6 +109,9 @@ QiQi workspace context
 → workspace knowledge nếu thực sự dùng lại
 ```
 
+Invariant: producer result phải đi qua QiQi thành consumer task prompt; child không
+đọc producer artifact trực tiếp.
+
 ## Task Prompt
 
 Task prompt do QiQi sở hữu. MCP không reinterpret task semantics. Trước khi
