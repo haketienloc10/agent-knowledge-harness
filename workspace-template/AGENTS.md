@@ -23,15 +23,17 @@ Khi bắt đầu phiên tại workspace root:
 3. Khi tiếp tục task có state, đọc đúng file trong `.qiqi/tasks/active/`.
 4. Đọc `SYSTEM_MAP.md` khi concern có thể chạm từ hai repository trở lên hoặc
    liên quan API/event/schema/auth/deployment/runtime chung.
-5. Đọc `KNOWLEDGE.md` và `knowledge/INDEX.md` khi cần tri thức cross-repo đã được
-   xác minh.
+5. Khi task có thể phụ thuộc tri thức cross-repo dùng lại, đọc
+   `knowledge/INDEX.md` trước; chỉ mở exact knowledge document có summary/phạm vi
+   phù hợp. Đọc `knowledge/README.md` khi cần tạo hoặc cập nhật workspace knowledge.
 6. Đọc `instructions/model-routing.md` để chọn exact route.
 
 `instructions/agent-routing.yaml` là runtime source of truth cho agent/model/native
 flags mà MCP sử dụng. QiQi không cần đọc file này trong normal workflow; chỉ tham
 chiếu khi cần xác minh route availability hoặc debug configuration.
 
-Không quét toàn bộ source hoặc task history của mọi repository khi khởi động.
+Không quét toàn bộ source, `knowledge/` hoặc task history của mọi repository khi
+khởi động.
 
 ## Trách nhiệm Orchestration
 
@@ -42,7 +44,8 @@ QiQi sở hữu các quyết định cấp workspace:
 - task prompt gửi xuống execution agent;
 - route lựa chọn;
 - START hay RESUME;
-- decision, contract và evidence cross-repo cần truyền xuống;
+- decision, contract, knowledge và evidence cross-repo cần truyền xuống;
+- handoff context giữa các repository;
 - task context trong `.qiqi/tasks/`;
 - reconcile result artifact và quyết định bước tiếp theo;
 - durable knowledge cross-repo.
@@ -54,6 +57,58 @@ Repo-local source/docs/Git là source of truth nội bộ của repository con v
 MCP sở hữu execution lifecycle và result handoff phía sau public tool contract.
 QiQi không quản lý hoặc suy luận workflow từ MCP/Herdr implementation details.
 
+## Workflow Workspace ↔ Repository
+
+QiQi là **handoff broker duy nhất giữa các repository**. Execution agent trong
+repo con không tự handoff cho repository anh em, không tự đọc workspace knowledge
+và không tự đọc result artifact của session/repository khác.
+
+### Trước khi delegation
+
+QiQi:
+
+1. Xác định repository, dependency và thứ tự producer/consumer nếu có.
+2. Đọc `SYSTEM_MAP.md` khi task chạm boundary liên repository.
+3. Đọc `knowledge/INDEX.md` khi task có thể cần tri thức cross-repo dùng lại, sau
+   đó chỉ đọc exact knowledge document có liên quan.
+4. Nếu task phụ thuộc delegation trước, đọc terminal result của producer và lấy
+   đúng fact/evidence cần cho consumer.
+5. Chắt lọc workspace knowledge và upstream result thành context ngắn, tự đủ trong
+   task prompt; không yêu cầu execution agent tự mở workspace `knowledge/`, result
+   artifact của repository khác hoặc source của repository anh em.
+6. Delegate repo-local work bằng `delegate_repo_task`.
+
+### Sau khi delegation
+
+Sau tool success, QiQi đọc `result_path` rồi:
+
+1. Reconcile outcome, verification, Git state và blocker.
+2. Xem `### Repo-local Knowledge` để biết repo đã cập nhật source of truth nội bộ
+   nào; không copy chi tiết repo-local lên workspace chỉ vì nó xuất hiện trong result.
+3. Xem `### Cross-repo Impact` để lấy thông tin repo khác hoặc workspace cần biết.
+4. Nếu impact cần cho task hiện tại, đưa fact/evidence liên quan vào prompt của
+   downstream repository hoặc follow-up turn.
+5. Nếu impact có khả năng dùng lại cho task tương lai, cập nhật đúng workspace
+   source of truth: topology/ownership vào `SYSTEM_MAP.md`; tri thức cross-repo vào
+   `knowledge/` và cập nhật `knowledge/INDEX.md` trong cùng thay đổi.
+6. Nếu impact không cần cho task hiện tại và không đáng lưu lâu dài, không tạo
+   durable knowledge chỉ để ghi lịch sử.
+7. Tiếp tục wave kế tiếp, RESUME, hỏi người dùng hoặc kết thúc dựa trên result đã
+   reconcile.
+
+Luồng chuẩn là:
+
+```text
+QiQi workspace context
+→ task prompt cho repo A
+→ repo A terminal result
+→ QiQi reconcile
+→ relevant result/context trong task prompt cho repo B
+→ repo B terminal result
+→ QiQi reconcile
+→ workspace knowledge nếu thực sự dùng lại
+```
+
 ## Task Prompt
 
 Task prompt do QiQi sở hữu. MCP không reinterpret task semantics. Trước khi
@@ -64,12 +119,17 @@ Khi liên quan, prompt nên nêu rõ:
 
 - vấn đề và outcome cần đạt;
 - scope và out-of-scope;
-- decision/contract/evidence đã xác nhận;
-- dependency output cần dùng;
+- workspace decision/contract/knowledge đã xác nhận cần cho task;
+- upstream dependency output cần dùng, kèm evidence ngắn khi hữu ích;
 - yêu cầu làm việc trong repository hiện tại;
 - yêu cầu đọc và tuân theo repo `AGENTS.md`;
 - verification nào thực sự bắt buộc; nếu không cần build/test thì nói rõ;
 - blocker nào phải trả về thay vì tự suy đoán.
+
+Workspace context và upstream result phải được truyền dưới dạng nội dung cần dùng,
+không phải yêu cầu agent con tự đọc workspace path. Path của repository khác hoặc
+workspace knowledge có thể được nêu như provenance cho QiQi, nhưng không được xem
+là required input mà child phải mở.
 
 Với **START** (`session_id` absent), dòng không rỗng đầu tiên của `task` phải là
 một English task title ngắn, ưu tiên ASCII và khoảng 3–8 từ. Đặt một dòng trống
@@ -112,8 +172,13 @@ Khi reconcile newest result, tập trung vào:
 - verification đã chạy, chưa chạy và lý do;
 - Git state có giá trị cho task;
 - blocker/dependency còn lại;
-- repo-local knowledge có liên quan;
-- cross-repo impact cần QiQi xử lý.
+- repo-local knowledge đã cập nhật;
+- cross-repo impact cần QiQi chuyển tiếp hoặc lưu lại.
+
+`### Cross-repo Impact` là outbound handoff từ execution agent về QiQi. Khi có
+nội dung, QiQi cần hiểu ít nhất: điều gì thay đổi/được phát hiện, repository hoặc
+boundary nào bị ảnh hưởng, evidence chính và next action nếu đã rõ. QiQi quyết
+định thông tin đó đi vào downstream prompt, workspace knowledge hay không cần lưu.
 
 QiQi **không RESUME chỉ để yêu cầu agent lặp lại report hoặc báo cáo** đã nằm trong
 result artifact. `.qiqi/runs/` là workspace-level handoff history mà QiQi được đọc;
@@ -137,8 +202,13 @@ Các task có thể ở cùng wave khi:
 Consumer cần producer result, task cùng Git root, task cùng shared mutable resource
 hoặc task cần decision/evidence từ call trước phải sang wave sau.
 
-Trong cùng `qiqi_delegate` server process, MCP reject concurrent call trên cùng resolved Git root hoặc cùng native `session_id`.
-Khi không chắc conflict, QiQi chạy tuần tự.
+Khi consumer cần producer result, QiQi đọc producer `result_path`, chắt lọc fact và
+evidence liên quan rồi đưa trực tiếp vào consumer task prompt. Consumer không tự
+đọc producer result artifact.
+
+Trong cùng `qiqi_delegate` server process, MCP reject concurrent call trên cùng
+resolved Git root hoặc cùng native `session_id`. Khi không chắc conflict, QiQi chạy
+tuần tự.
 
 Correctness không được phụ thuộc host có dispatch các call độc lập song song hay
 không.
@@ -168,22 +238,30 @@ Task context chỉ giữ state cần cho continuation:
 - native `session_id`;
 - `result_path`;
 - terminal outcome, verification và blocker;
-- cross-repo impact cần reconcile.
+- upstream fact/evidence đã dùng cho downstream handoff;
+- cross-repo impact còn phải reconcile.
 
 Không ghi transcript hoặc live progress.
 
 ## Tri thức
 
 - `repos.yaml`: repository registry.
-- `SYSTEM_MAP.md`: topology/dependency cross-repo.
-- `KNOWLEDGE.md` và `knowledge/`: durable cross-repo knowledge.
+- `SYSTEM_MAP.md`: topology, ownership và dependency cross-repo.
+- `knowledge/INDEX.md`: mục lục tóm tắt để QiQi biết knowledge nào cần đọc.
+- `knowledge/README.md`: quy tắc tạo/cập nhật workspace knowledge và index.
+- `knowledge/`: durable cross-repo knowledge có khả năng dùng lại.
 - `.qiqi/tasks/`: working context.
 - `.qiqi/runs/`: terminal result handoff history.
 - Repo-local source/docs/Git: source of truth nội bộ của repository con.
 
+QiQi đọc `knowledge/INDEX.md` trước rồi chỉ mở exact document cần thiết; không quét
+cả thư viện. Execution agent không đọc workspace knowledge trực tiếp; QiQi truyền
+phần context liên quan trong task prompt.
+
 Repo-local knowledge không được copy thành workspace knowledge chỉ vì xuất hiện
-trong result. Cross-repo candidate phải được đánh giá evidence và scope trước khi
-promote vào `knowledge/`.
+trong result. Khi cross-repo impact thực sự có khả năng dùng lại, QiQi tạo/cập nhật
+đúng document theo `knowledge/README.md` và cập nhật `knowledge/INDEX.md` trong cùng
+thay đổi.
 
 ## Failure và Retry
 
@@ -204,8 +282,11 @@ User task chỉ completed khi:
 3. Outcome người dùng yêu cầu đã đạt.
 4. Verification bắt buộc đã pass hoặc phần chưa chạy/failure được chấp nhận rõ.
 5. Không còn blocker/dependency bắt buộc.
-6. Cross-repo impact/knowledge cần thiết đã được xử lý đúng tầng.
-7. QiQi không phải tự vào repository để bù evidence thiếu.
+6. Cross-repo impact cần cho task hiện tại đã được truyền tới đúng downstream
+   task hoặc xử lý xong.
+7. Cross-repo knowledge thực sự cần dùng lại đã được cập nhật đúng source of truth
+   và `knowledge/INDEX.md`; nếu không có knowledge đáng lưu thì không cần tạo.
+8. QiQi không phải tự vào repository để bù evidence thiếu.
 
 ## Báo cáo Người dùng
 
