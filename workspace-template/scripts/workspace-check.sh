@@ -36,6 +36,8 @@ required_files=(
   knowledge/INDEX.md
   knowledge/glossary.md
   .qiqi/tasks/TEMPLATE.md
+  .qiqi/tasks/active/README.md
+  .qiqi/tasks/completed/README.md
   instructions/agent-routing.yaml
   instructions/model-routing.md
   .codex/config.toml
@@ -171,6 +173,28 @@ if [[ -f "$agents_md" ]]; then
     fail 'AGENTS.md: missing direct-agent-CLI bypass prohibition'
   rg -U -q 'Không[[:space:]]+fallback sang shell-based `codex`, `claude`' "$agents_md" || \
     fail 'AGENTS.md: missing MCP-failure shell fallback prohibition'
+  rg -q 'Mọi \*\*task thực thi\*\* tại workspace phải có task file' "$agents_md" || \
+    fail 'AGENTS.md: every workspace execution task must create a task file'
+  rg -q 'Chỉ bỏ qua task file cho hỏi đáp, giải thích hoặc clarification thông thường' "$agents_md" || \
+    fail 'AGENTS.md: ordinary Q&A must be the only task-file exception'
+  rg -q 'Task chỉ chạm một repository, hoàn thành trong một lượt hoặc' "$agents_md" || \
+    fail 'AGENTS.md: single-repo/single-turn work must still create a task file'
+  rg -q 'chuyển file sang `.qiqi/tasks/completed/`' "$agents_md" || \
+    fail 'AGENTS.md: completed tasks must move out of active/'
+fi
+
+active_tasks_readme="$workspace_root/.qiqi/tasks/active/README.md"
+if [[ -f "$active_tasks_readme" ]]; then
+  rg -q '^# Active Tasks$' "$active_tasks_readme" || \
+    fail '.qiqi/tasks/active/README.md: missing title'
+  rg -q 'Mọi \*\*task thực thi\*\* tại workspace phải có một file' "$active_tasks_readme" || \
+    fail '.qiqi/tasks/active/README.md: must require every execution task to be recorded'
+  rg -q 'Chỉ bỏ qua task file cho hỏi đáp, giải thích hoặc clarification thông thường' "$active_tasks_readme" || \
+    fail '.qiqi/tasks/active/README.md: must exempt only ordinary Q&A'
+  rg -q 'chỉ chạm một repository, hoàn thành trong một lượt' "$active_tasks_readme" || \
+    fail '.qiqi/tasks/active/README.md: single-repo/single-turn task rule missing'
+  rg -q 'Tạo file mới từ `../TEMPLATE.md` trước khi bắt đầu task' "$active_tasks_readme" || \
+    fail '.qiqi/tasks/active/README.md: task file must be created before execution'
 fi
 
 knowledge_readme="$workspace_root/knowledge/README.md"
