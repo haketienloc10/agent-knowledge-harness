@@ -230,11 +230,21 @@ khởi động task phụ thuộc từ partial/in-flight state.
 
 ## Task Context
 
-Không bắt buộc tạo task file cho mọi yêu cầu. Tạo từ `.qiqi/tasks/TEMPLATE.md`
-khi task kéo dài qua nhiều lượt/repository, có dependency/blocker/UAT hoặc native
-session cần continuity.
+Mọi **task thực thi** tại workspace phải có task file. Task thực thi gồm
+investigation, implementation, verification, thay đổi workspace/repository,
+delegation hoặc công việc operational khác mà QiQi phải thực hiện thay vì chỉ trả
+lời hội thoại.
 
-Task context chỉ giữ state cần cho continuation:
+Chỉ bỏ qua task file cho hỏi đáp, giải thích hoặc clarification thông thường khi
+QiQi chỉ cần trả lời và không bắt đầu công việc thực thi. Nếu yêu cầu chuyển từ hỏi
+đáp sang thực hiện công việc, tạo task file trước khi bắt đầu phần thực thi.
+
+Trước khi bắt đầu task, tạo file từ `.qiqi/tasks/TEMPLATE.md` dưới
+`.qiqi/tasks/active/`. Task chỉ chạm một repository, hoàn thành trong một lượt hoặc
+không có dependency vẫn phải tạo task file. Nếu task hoàn thành trong cùng lượt,
+vẫn tạo ở `active/`, reconcile kết quả rồi chuyển file sang `.qiqi/tasks/completed/`.
+
+Task context chỉ giữ state có giá trị cho task và continuation:
 
 - scope, priority, decision và dependency;
 - repository và route;
@@ -290,6 +300,8 @@ User task chỉ completed khi:
 7. Cross-repo knowledge thực sự cần dùng lại đã được cập nhật đúng source of truth
    và `knowledge/INDEX.md`; nếu không có knowledge đáng lưu thì không cần tạo.
 8. QiQi không phải tự vào repository để bù evidence thiếu.
+9. Task file đã ghi terminal outcome cần thiết và được chuyển từ
+   `.qiqi/tasks/active/` sang `.qiqi/tasks/completed/`.
 
 ## Báo cáo Người dùng
 
