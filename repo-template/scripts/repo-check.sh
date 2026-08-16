@@ -73,19 +73,21 @@ if [[ -f "$agents" ]]; then
   rg -q '`ARCHITECTURE\.md`' "$agents" || fail 'AGENTS.md: must route to ARCHITECTURE.md'
   rg -q '`docs/VERIFY\.md`' "$agents" || fail 'AGENTS.md: must route to docs/VERIFY.md'
   rg -q 'Git root hiện tại' "$agents" || fail 'AGENTS.md: missing Git-root boundary'
-  rg -q 'Không sửa repository anh em' "$agents" || fail 'AGENTS.md: missing sibling-repository boundary'
-  rg -q 'exact result artifact' "$agents" || fail 'AGENTS.md: missing exact result-artifact exception'
-  rg -q '`\.qiqi/runs/`' "$agents" || fail 'AGENTS.md: missing workspace result-artifact path'
-  rg -q 'không tự suy đoán hoặc tìm artifact khác' "$agents" || \
+  rg -q 'Không đọc/sửa repository anh em' "$agents" || fail 'AGENTS.md: missing sibling-repository boundary'
+  rg -q 'exact result artifact' "$agents" || fail 'AGENTS.md: missing MCP result-artifact exception'
+  rg -q 'Không tự suy đoán, tìm hoặc mở result artifact khác' "$agents" || \
     fail 'AGENTS.md: result artifact must come only from MCP handoff'
-  rg -q '^## Handoff với QiQi$' "$agents" || fail 'AGENTS.md: missing QiQi handoff contract'
+  rg -q '^## Handoff với QiQi$' "$agents" || fail 'AGENTS.md: missing QiQi handoff policy'
   rg -q '^## Tri thức Repo-local$' "$agents" || fail 'AGENTS.md: missing repo-local knowledge rules'
   rg -q '^## Cross-repo Impact$' "$agents" || fail 'AGENTS.md: missing cross-repo impact rules'
-  rg -q '^## Final Result Contract$' "$agents" || fail 'AGENTS.md: missing final result contract'
-  rg -U -q 'workspace knowledge hoặc result artifact của[[:space:]]+repository khác' "$agents" || \
-    fail 'AGENTS.md: child must not read workspace knowledge or sibling result artifacts'
+  rg -U -q 'không tự mở workspace knowledge hoặc result/source của[[:space:]]+repository khác' "$agents" || \
+    fail 'AGENTS.md: child must not read workspace knowledge or sibling repository results'
   rg -q 'QiQi là handoff broker' "$agents" || \
     fail 'AGENTS.md: QiQi must broker cross-repo handoff'
+  rg -q 'MCP footer là source of truth duy nhất' "$agents" || \
+    fail 'AGENTS.md: MCP footer must own result-handoff mechanics'
+  rg -q 'Repo-local Knowledge' "$agents" || \
+    fail 'AGENTS.md: missing repo-local knowledge handoff semantics'
   rg -q 'repository/boundary nào bị ảnh hưởng' "$agents" || \
     fail 'AGENTS.md: Cross-repo Impact must identify affected boundary'
   rg -q 'evidence chính từ repository hiện tại' "$agents" || \
@@ -93,28 +95,12 @@ if [[ -f "$agents" ]]; then
   rg -q 'next action nếu đã rõ' "$agents" || \
     fail 'AGENTS.md: Cross-repo Impact must carry next action when known'
 
-  for heading in \
-    '### Outcome' \
-    '### Changes' \
-    '### Verification' \
-    '### Git State' \
-    '### Blockers' \
-    '### Repo-local Knowledge' \
-    '### Cross-repo Impact'; do
-    rg -q --fixed-strings "$heading" "$agents" || \
-      fail "AGENTS.md: final result missing heading $heading"
-  done
-
-  rg -q 'completed.*blocked|blocked.*completed' "$agents" || \
-    fail 'AGENTS.md: Outcome must define completed/blocked values'
-  rg -q 'newest pending Result section' "$agents" || \
-    fail 'AGENTS.md: missing newest Result-section finalization rule'
-  rg -q 'Giữ nguyên toàn bộ history' "$agents" || \
-    fail 'AGENTS.md: missing result-history preservation rule'
-  rg -q 'chain-of-thought|working transcript' "$agents" || \
-    fail 'AGENTS.md: missing no-reasoning/transcript result rule'
-  rg -q 'Outcome `blocked`' "$agents" || \
-    fail 'AGENTS.md: missing blocked-before-question handoff rule'
+  if rg -q '^## Final Result Contract$' "$agents"; then
+    fail 'AGENTS.md: must not duplicate MCP-owned final result protocol'
+  fi
+  if rg -q 'Newest Result section bắt buộc|Giữ nguyên toàn bộ history|newest pending Result section' "$agents"; then
+    fail 'AGENTS.md: MCP-owned marker/history/finalization mechanics are duplicated'
+  fi
 
   if rg -q 'Caller có thể ép output bằng JSON Schema|final result missing field|`git_state`|`repo_local_knowledge`' "$agents"; then
     fail 'AGENTS.md: legacy logical JSON result contract found'
