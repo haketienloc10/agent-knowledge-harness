@@ -2,7 +2,7 @@
 
 Tài liệu này dùng khi đưa `repo-template/` vào một Git repository nằm trong
 workspace multi-repo. Mục tiêu là giúp execution agent hiểu repo, xác minh thay đổi
-và handoff kết quả đúng tầng cho QiQi.
+và handoff đúng semantics cho QiQi mà không sao chép protocol do MCP sở hữu.
 
 Không sửa source sản phẩm trong quá trình setup, trừ khi người dùng mở rộng phạm
 vi rõ ràng.
@@ -10,7 +10,8 @@ vi rõ ràng.
 ## Kết quả cần đạt
 
 - `AGENTS.md` định tuyến agent và bảo vệ Git-root boundary;
-- `AGENTS.md` mô tả rõ input từ QiQi và terminal output về QiQi;
+- `AGENTS.md` mô tả input từ QiQi và semantics cần handoff ngược về QiQi;
+- MCP footer vẫn là source of truth cho result artifact và result format;
 - `ARCHITECTURE.md` mô tả trách nhiệm, module và boundary nội bộ bằng evidence;
 - `docs/VERIFY.md` chứa command thực tế và side effect;
 - execution agent không tự đọc workspace knowledge, sibling repository hoặc sibling
@@ -36,10 +37,11 @@ Nếu repo đã có `AGENTS.md` hoặc instruction tương đương:
 1. Đọc và phân loại các quy tắc hiện có.
 2. Giữ workflow đặc thù của repo.
 3. Gộp các nguyên tắc tối thiểu từ template: Git-root boundary, đọc
-   `ARCHITECTURE.md`, đọc `docs/VERIFY.md`, input/output handoff với QiQi,
-   repo-local knowledge ownership và final result contract.
-4. Không ghi đè toàn bộ file hiện có.
-5. Báo mọi mâu thuẫn không thể hợp nhất an toàn.
+   `ARCHITECTURE.md`, đọc `docs/VERIFY.md`, input từ QiQi, repo-local knowledge
+   ownership và Cross-repo Impact semantics.
+4. Không sao chép result-handoff mechanics từ MCP footer vào repo instruction.
+5. Không ghi đè toàn bộ file hiện có.
+6. Báo mọi mâu thuẫn không thể hợp nhất an toàn.
 
 ## Bước 3: Khảo sát repository
 
@@ -91,20 +93,18 @@ Prompt có thể chứa relevant workspace knowledge, upstream result và decisi
 xác nhận. Agent không tự đi đọc workspace `knowledge/`, result artifact của repo
 khác hoặc source của repository anh em.
 
-Sau khi làm việc trong repo hiện tại, agent handoff về QiQi qua exact result
-artifact:
+Khi chạy qua `qiqi_delegate`, MCP footer cung cấp exact result artifact và format
+cần ghi. Repo instruction không cần định nghĩa lại headings, thứ tự, marker,
+history preservation hoặc Outcome vocabulary.
 
-```text
-### Repo-local Knowledge
-### Cross-repo Impact
-```
+Repo chỉ cần hiểu hai semantics riêng của knowledge handoff:
 
-- `Repo-local Knowledge`: source of truth nội bộ đã cập nhật hoặc kết luận có giá
-  trị cho repo hiện tại.
-- `Cross-repo Impact`: fact/evidence QiQi cần để điều phối downstream repository
+- **Repo-local Knowledge**: source of truth nội bộ đã cập nhật hoặc kết luận có giá
+  trị dùng lại trong repo hiện tại.
+- **Cross-repo Impact**: fact/evidence QiQi cần để điều phối downstream repository
   hoặc workspace.
 
-Khi có cross-repo impact, nêu affected repository/boundary, evidence chính và next
+Khi có Cross-repo Impact, nêu affected repository/boundary, evidence chính và next
 action nếu đã rõ. Agent không tự giao task cho repository anh em.
 
 ## Bước 7: Chạy checker
@@ -113,8 +113,9 @@ action nếu đã rõ. Agent không tự giao task cho repository anh em.
 bash scripts/repo-check.sh
 ```
 
-Checker chỉ kiểm tra cấu trúc harness, placeholder và handoff/boundary policy. Nó
-không chạy test dự án và không thay thế verification trong `docs/VERIFY.md`.
+Checker chỉ kiểm tra cấu trúc harness, placeholder, ownership và handoff semantics.
+Nó không kiểm tra lại MCP result format, không chạy test dự án và không thay thế
+verification trong `docs/VERIFY.md`.
 
 ## Bước 8: Fresh-session test
 
@@ -125,8 +126,9 @@ Mở một agent mới tại Git root và xác nhận agent có thể trả lờ
 3. Agent được phép đọc/sửa phạm vi nào?
 4. Workspace/upstream context đến từ đâu?
 5. Tri thức repo-local được cập nhật ở đâu?
-6. `Cross-repo Impact` phải handoff về QiQi với thông tin nào?
+6. Khi nào phải handoff Cross-repo Impact và cần mang theo evidence gì?
 7. Agent có được tự đọc workspace knowledge hoặc result của repo khác không?
+8. Thành phần nào sở hữu exact result format? — MCP footer, không phải repo policy.
 
 Chỉ báo repo sẵn sàng khi checker pass, artifact đã có evidence và instruction
 hiện có không còn mâu thuẫn chưa xử lý.
