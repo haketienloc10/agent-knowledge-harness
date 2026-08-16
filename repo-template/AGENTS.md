@@ -42,15 +42,55 @@ có. Không tạo file rỗng chỉ để hoàn thiện cấu trúc.
   handoff rõ trong prompt của turn hiện tại.
 - Result artifact hợp lệ nằm dưới workspace `.qiqi/runs/` và path cụ thể phải đến
   từ MCP footer; không tự suy đoán hoặc tìm artifact khác.
-- Ngoài exact result artifact đó, không sửa `repos.yaml`, `SYSTEM_MAP.md`,
-  `.qiqi/tasks/`, `knowledge/` hoặc workspace control file khác.
+- Ngoài exact result artifact đó, không đọc/sửa workspace `knowledge/`, result
+  artifact của repository/session khác, `repos.yaml`, `SYSTEM_MAP.md`,
+  `.qiqi/tasks/` hoặc workspace control file khác.
 - Không sửa repository anh em.
 - Không spawn/delegate sang coding agent khác và không gọi MCP orchestration của
   QiQi từ child turn.
-- Context cross-repo phải đến từ prompt của QiQi hoặc source được prompt liên kết;
-  không tự coi suy đoán về repository khác là sự thật.
+- Context cross-repo phải đến từ task prompt của QiQi; không tự đọc repository anh
+  em hoặc workspace knowledge để bổ sung context.
 - Nếu context từ QiQi mâu thuẫn với source/test hiện tại, dừng phần phụ thuộc,
   ghi evidence và báo conflict.
+
+## Handoff với QiQi
+
+QiQi là handoff broker giữa repository hiện tại và phần còn lại của workspace.
+Execution agent không handoff trực tiếp cho repository anh em.
+
+### Input từ QiQi
+
+Task prompt của QiQi là nguồn workspace-level duy nhất cho turn hiện tại. Khi cần,
+prompt phải chứa trực tiếp:
+
+- outcome, scope và phần ngoài phạm vi;
+- decision/contract/knowledge cross-repo đã xác nhận cần cho task;
+- upstream result từ repository khác cần dùng;
+- evidence hoặc provenance ngắn đủ để hiểu vì sao context đó đáng tin;
+- verification hoặc blocker policy có liên quan.
+
+Agent không cần và không được tự mở workspace knowledge hoặc result artifact của
+repository khác. Từ context QiQi đã handoff, agent tự khám phá implementation detail
+bên trong Git root hiện tại.
+
+### Output về QiQi
+
+Exact result artifact của turn là terminal handoff duy nhất về QiQi.
+
+- `### Repo-local Knowledge`: nêu source-of-truth repo-local đã cập nhật hoặc phát
+  hiện có giá trị cho repo này; dùng `None.` nếu không có.
+- `### Cross-repo Impact`: nêu thông tin QiQi cần để điều phối repository khác,
+  dependency hoặc workspace knowledge; dùng `None.` nếu không có.
+
+Khi `### Cross-repo Impact` có nội dung, nêu ngắn gọn:
+
+- điều gì thay đổi hoặc được phát hiện;
+- repository/boundary nào bị ảnh hưởng;
+- evidence chính từ repository hiện tại;
+- next action nếu đã rõ.
+
+Agent không quyết định trực tiếp công việc của repository anh em. Agent chỉ handoff
+fact/evidence cho QiQi để QiQi quyết định downstream task hoặc workspace update.
 
 ## Hợp đồng Làm việc
 
@@ -77,17 +117,21 @@ nhật source of truth phù hợp trong cùng thay đổi:
 Không tạo tài liệu để sao chép điều đã rõ từ source/test. Phát hiện chưa đủ
 evidence không được ghi như sự thật.
 
-## Ứng viên Tri thức Cross-repo
+Nếu implementation làm một repo-local source-of-truth document hiện có trở nên
+sai hoặc stale, cập nhật document đó trong cùng task hoặc báo blocker/lý do rõ.
 
-Khi phát hiện ảnh hưởng từ hai repository trở lên, API/event/schema dùng chung
-hoặc decision cần QiQi điều phối:
+## Cross-repo Impact
+
+Khi phát hiện ảnh hưởng từ hai repository trở lên, API/event/schema dùng chung,
+upstream/downstream behavior hoặc decision cần QiQi điều phối:
 
 1. Không sửa workspace knowledge.
 2. Không sửa repository khác.
-3. Ghi tóm tắt, scope, evidence và trạng thái verified/unverified trong
+3. Ghi fact, affected repository/boundary, evidence và next action nếu rõ vào
    `### Cross-repo Impact` của result artifact.
 
-QiQi chịu trách nhiệm promote hoặc giữ candidate ở workspace level.
+QiQi chịu trách nhiệm chuyển context đó tới downstream repository hoặc lưu thành
+workspace knowledge khi có khả năng dùng lại.
 
 ## Ghi nhận Friction
 
@@ -145,7 +189,8 @@ Quy tắc:
 - `### Blockers`: blocker/decision/dependency còn lại; dùng `None.` nếu không có.
 - `### Repo-local Knowledge`: source-of-truth path/kết luận đã cập nhật; `None.`
   nếu không có.
-- `### Cross-repo Impact`: candidate/friction cần QiQi xử lý; `None.` nếu không có.
+- `### Cross-repo Impact`: fact/evidence cần QiQi chuyển tiếp hoặc xử lý ở workspace;
+  `None.` nếu không có.
 - Không ghi chain-of-thought hoặc working transcript vào result artifact.
 - Nếu bị blocker cần hỏi QiQi/người dùng, finalize artifact với Outcome `blocked`
   **trước** khi trình bày câu hỏi/blocker interactive.
@@ -157,8 +202,8 @@ workspace `.qiqi/runs/`.
 ## Hoàn thành
 
 Task chỉ `completed` khi outcome đã đạt, verification liên quan đã chạy hoặc phần
-chưa chạy được báo rõ, không có regression mới đã biết và knowledge/friction có
-giá trị đã được xử lý đúng tầng.
+chưa chạy được báo rõ, không có regression mới đã biết, repo-local knowledge cần
+thiết đã cập nhật và cross-repo impact cần QiQi biết đã được handoff trong result.
 
 Nếu còn decision hoặc dependency không thể tự giải quyết, trả `blocked` thay vì
 suy đoán.
