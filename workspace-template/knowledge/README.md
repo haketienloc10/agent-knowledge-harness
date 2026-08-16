@@ -5,9 +5,8 @@ workspace. Chi tiết implementation, architecture, domain rule hoặc verificat
 thuộc một repository phải ở source of truth của repository đó, không sao chép lên
 workspace.
 
-QiQi là agent đọc và cập nhật workspace knowledge. Execution agent trong repo con
-không tự đọc thư mục này; QiQi chắt lọc phần context liên quan và truyền trực tiếp
-trong task prompt.
+QiQi là agent đọc và cập nhật workspace knowledge. Execution agent không tự đọc thư
+mục này. QiQi chắt lọc phần context liên quan và truyền trực tiếp trong task prompt.
 
 ## Cách đọc
 
