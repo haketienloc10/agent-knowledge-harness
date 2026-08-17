@@ -3,8 +3,10 @@
 Thư mục này lưu behavior, contract và acceptance criteria do repository hiện
 tại sở hữu và cần được bảo toàn qua thay đổi.
 
-Chỉ tạo tài liệu khi source và test chưa đủ để agent hiểu ổn định hành vi cần
-giữ hoặc khi nhiều thay đổi tiếp theo cần cùng một specification.
+Không cần tạo tài liệu cho behavior có thể đọc thấy trực tiếp và rõ ràng từ source
+hoặc test hiện tại. Khi task xác nhận behavior/contract không tầm thường mà agent
+tương lai cần hiểu ổn định hoặc nhiều thay đổi có thể dùng lại, tạo hoặc cập nhật
+specification phù hợp.
 
 Mỗi tài liệu nên nêu rõ:
 
