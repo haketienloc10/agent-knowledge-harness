@@ -230,14 +230,22 @@ khởi động task phụ thuộc từ partial/in-flight state.
 
 ## Task Context
 
-Mọi **task thực thi** tại workspace phải có task file. Task thực thi gồm
-investigation, implementation, verification, thay đổi workspace/repository,
-delegation hoặc công việc operational khác mà QiQi phải thực hiện thay vì chỉ trả
-lời hội thoại.
+Mọi **task thực thi** tại workspace phải có task file, trừ các trường hợp stateless
+được nêu dưới đây. Task thực thi gồm investigation, implementation, verification,
+thay đổi workspace/repository, delegation hoặc công việc operational khác mà QiQi
+phải thực hiện thay vì chỉ trả lời hội thoại.
 
-Chỉ bỏ qua task file cho hỏi đáp, giải thích hoặc clarification thông thường khi
-QiQi chỉ cần trả lời và không bắt đầu công việc thực thi. Nếu yêu cầu chuyển từ hỏi
-đáp sang thực hiện công việc, tạo task file trước khi bắt đầu phần thực thi.
+Không cần task file cho:
+
+- hỏi đáp, giải thích hoặc clarification thông thường khi QiQi chỉ cần trả lời;
+- tổng hợp, biên tập hoặc lưu workspace document từ result/evidence đã có, khi
+  không cần delegation mới hoặc continuation state.
+
+Nếu update tài liệu phát sinh từ một active task, giữ nó trong task hiện tại thay
+vì tạo task mới chỉ cho bước tổng hợp hoặc persist.
+
+Nếu công việc cần investigation, implementation, verification, delegation hoặc
+phát sinh state phải tiếp tục qua lượt khác, tạo task file trước phần thực thi đó.
 
 Trước khi bắt đầu task, tạo file từ `.qiqi/tasks/TEMPLATE.md` dưới
 `.qiqi/tasks/active/`. Task chỉ chạm một repository, hoàn thành trong một lượt hoặc
@@ -300,8 +308,8 @@ User task chỉ completed khi:
 7. Cross-repo knowledge thực sự cần dùng lại đã được cập nhật đúng source of truth
    và `knowledge/INDEX.md`; nếu không có knowledge đáng lưu thì không cần tạo.
 8. QiQi không phải tự vào repository để bù evidence thiếu.
-9. Task file đã ghi terminal outcome cần thiết và được chuyển từ
-   `.qiqi/tasks/active/` sang `.qiqi/tasks/completed/`.
+9. Nếu công việc có task file, task file đã ghi terminal outcome cần thiết và được
+   chuyển từ `.qiqi/tasks/active/` sang `.qiqi/tasks/completed/`.
 
 ## Báo cáo Người dùng
 
