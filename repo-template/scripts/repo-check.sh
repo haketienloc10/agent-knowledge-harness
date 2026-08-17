@@ -94,6 +94,14 @@ if [[ -f "$agents" ]]; then
     fail 'AGENTS.md: Cross-repo Impact must carry evidence'
   rg -q 'next action nếu đã rõ' "$agents" || \
     fail 'AGENTS.md: Cross-repo Impact must carry next action when known'
+  rg -q 'đều có thể tạo ra tri thức repo-local' "$agents" || \
+    fail 'AGENTS.md: every task type must be allowed to produce repo-local knowledge'
+  rg -q 'Trước khi finalize task, tự kiểm tra' "$agents" || \
+    fail 'AGENTS.md: missing pre-finalize repo-local knowledge review'
+  rg -U -q 'Không cần ghi lại thông tin có thể đọc thấy trực tiếp và rõ ràng từ source/test' "$agents" || \
+    fail 'AGENTS.md: trivial directly-readable source/test facts should not be persisted'
+  rg -q 'knowledge review trước khi finalize' "$agents" || \
+    fail 'AGENTS.md: Definition of Done must include repo-local knowledge review'
 
   if rg -q '^## Final Result Contract$' "$agents"; then
     fail 'AGENTS.md: must not duplicate MCP-owned final result protocol'
