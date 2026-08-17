@@ -110,8 +110,12 @@ fact/evidence cho QiQi để QiQi quyết định downstream task hoặc workspa
 
 ## Tri thức Repo-local
 
-Khi task xác nhận tri thức có khả năng dùng lại và chỉ thuộc repository này, cập
-nhật source of truth phù hợp trong cùng thay đổi:
+Mọi task — investigation, implementation, verification hoặc loại công việc khác —
+đều có thể tạo ra tri thức repo-local.
+
+Trước khi finalize task, tự kiểm tra xem công việc vừa thực hiện có xác nhận tri
+thức không tầm thường và có khả năng hữu ích cho task tương lai hay không. Nếu có,
+cập nhật source of truth phù hợp trong cùng task:
 
 - responsibility/module/data flow → `ARCHITECTURE.md`;
 - verification path ổn định → `docs/VERIFY.md`;
@@ -119,8 +123,12 @@ nhật source of truth phù hợp trong cùng thay đổi:
 - behavior/contract do repo sở hữu → `docs/specs/` nếu phù hợp;
 - quyết định kỹ thuật lâu bền → `docs/decisions/` nếu phù hợp.
 
-Không tạo tài liệu để sao chép điều đã rõ từ source/test. Phát hiện chưa đủ
-evidence không được ghi như sự thật.
+Không cần ghi lại thông tin có thể đọc thấy trực tiếp và rõ ràng từ source/test
+hiện tại. Với tri thức cần tổng hợp, suy luận hoặc xác minh qua nhiều nguồn, lưu
+kết luận, invariant, ownership, flow hoặc constraint đã được evidence xác nhận;
+không lưu working log của quá trình điều tra.
+
+Phát hiện chưa đủ evidence không được ghi như sự thật.
 
 Nếu implementation làm một repo-local source-of-truth document hiện có trở nên
 sai hoặc stale, cập nhật document đó trong cùng task hoặc báo blocker/lý do rõ.
@@ -170,8 +178,10 @@ chưa chạy phải có lý do rõ; không biến suy đoán thành evidence.
 ## Hoàn thành
 
 Task chỉ completed khi outcome đã đạt, verification liên quan đã chạy hoặc phần
-chưa chạy được báo rõ, không có regression mới đã biết, repo-local knowledge cần
-thiết đã cập nhật và cross-repo impact cần QiQi biết đã được handoff.
+chưa chạy được báo rõ, không có regression mới đã biết, agent đã thực hiện
+knowledge review trước khi finalize, tri thức repo-local không tầm thường đáng giữ
+đã được cập nhật vào source of truth phù hợp, và cross-repo impact cần QiQi biết
+đã được handoff.
 
 Nếu còn decision hoặc dependency không thể tự giải quyết, task chưa completed;
 tuân theo MCP result-handoff protocol của turn để ghi terminal state và blocker.
