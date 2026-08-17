@@ -3,8 +3,10 @@
 Thư mục này lưu thuật ngữ nghiệp vụ, entity lifecycle, state semantics và
 invariant thuộc riêng repository hiện tại.
 
-Chỉ tạo tài liệu khi tri thức đó cần được dùng lại và chưa được thể hiện đầy đủ
-trong source, test hoặc tài liệu hiện có.
+Không cần tạo tài liệu cho thông tin có thể đọc thấy trực tiếp và rõ ràng từ
+source, test hoặc tài liệu hiện có. Khi task xác nhận domain knowledge không tầm
+thường và có khả năng hữu ích cho task tương lai, tạo hoặc cập nhật tài liệu phù
+hợp để giữ kết luận đã được evidence xác nhận.
 
 Mỗi tài liệu nên nêu rõ:
 
