@@ -174,13 +174,17 @@ if [[ -f "$agents_md" ]]; then
   rg -U -q 'Không[[:space:]]+fallback sang shell-based `codex`, `claude`' "$agents_md" || \
     fail 'AGENTS.md: missing MCP-failure shell fallback prohibition'
   rg -q 'Mọi \*\*task thực thi\*\* tại workspace phải có task file' "$agents_md" || \
-    fail 'AGENTS.md: every workspace execution task must create a task file'
-  rg -q 'Chỉ bỏ qua task file cho hỏi đáp, giải thích hoặc clarification thông thường' "$agents_md" || \
-    fail 'AGENTS.md: ordinary Q&A must be the only task-file exception'
+    fail 'AGENTS.md: every stateful workspace execution task must create a task file'
+  rg -U -q 'tổng hợp, biên tập hoặc lưu workspace document từ result/evidence đã có, khi[[:space:]]+không cần delegation mới hoặc continuation state' "$agents_md" || \
+    fail 'AGENTS.md: missing stateless existing-evidence documentation exception'
+  rg -U -q 'Nếu công việc cần investigation, implementation, verification, delegation hoặc[[:space:]]+phát sinh state phải tiếp tục qua lượt khác, tạo task file trước phần thực thi đó' "$agents_md" || \
+    fail 'AGENTS.md: new execution or continuation state must create a task file'
   rg -q 'Task chỉ chạm một repository, hoàn thành trong một lượt hoặc' "$agents_md" || \
-    fail 'AGENTS.md: single-repo/single-turn work must still create a task file'
+    fail 'AGENTS.md: single-repo/single-turn execution work must still create a task file'
+  rg -q 'Nếu công việc có task file' "$agents_md" || \
+    fail 'AGENTS.md: Definition of Done task-file requirement must be conditional'
   rg -q 'chuyển file sang `.qiqi/tasks/completed/`' "$agents_md" || \
-    fail 'AGENTS.md: completed tasks must move out of active/'
+    fail 'AGENTS.md: completed recorded tasks must move out of active/'
 fi
 
 active_tasks_readme="$workspace_root/.qiqi/tasks/active/README.md"
@@ -188,10 +192,12 @@ if [[ -f "$active_tasks_readme" ]]; then
   rg -q '^# Active Tasks$' "$active_tasks_readme" || \
     fail '.qiqi/tasks/active/README.md: missing title'
   rg -q 'Mọi \*\*task thực thi\*\* tại workspace phải có một file' "$active_tasks_readme" || \
-    fail '.qiqi/tasks/active/README.md: must require every execution task to be recorded'
-  rg -q 'Chỉ bỏ qua task file cho hỏi đáp, giải thích hoặc clarification thông thường' "$active_tasks_readme" || \
-    fail '.qiqi/tasks/active/README.md: must exempt only ordinary Q&A'
-  rg -q 'chỉ chạm một repository, hoàn thành trong một lượt' "$active_tasks_readme" || \
+    fail '.qiqi/tasks/active/README.md: must require stateful execution tasks to be recorded'
+  rg -U -q 'tổng hợp, biên tập hoặc lưu workspace document từ result/evidence đã có, khi[[:space:]]+không cần delegation mới hoặc continuation state' "$active_tasks_readme" || \
+    fail '.qiqi/tasks/active/README.md: missing stateless existing-evidence documentation exception'
+  rg -U -q 'Nếu công việc cần investigation, implementation, verification, delegation hoặc[[:space:]]+phát sinh state phải tiếp tục qua lượt khác, tạo active task trước phần thực thi đó' "$active_tasks_readme" || \
+    fail '.qiqi/tasks/active/README.md: new execution or continuation state must create an active task'
+  rg -U -q 'chỉ chạm[[:space:]]+một repository, hoàn thành trong một lượt' "$active_tasks_readme" || \
     fail '.qiqi/tasks/active/README.md: single-repo/single-turn task rule missing'
   rg -q 'Tạo file mới từ `../TEMPLATE.md` trước khi bắt đầu task' "$active_tasks_readme" || \
     fail '.qiqi/tasks/active/README.md: task file must be created before execution'
