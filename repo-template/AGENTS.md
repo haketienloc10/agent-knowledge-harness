@@ -78,6 +78,10 @@ result handoff**: exact artifact, pending marker/history, headings và thứ t�
 Outcome vocabulary, cùng quy tắc finalization. Không lặp hoặc tự định nghĩa lại
 protocol đó trong repo policy.
 
+Exact result artifact dưới workspace `.qiqi/runs/` chỉ được parent execution
+agent nhận task trực tiếp từ QiQi/MCP cập nhật hoặc finalize. Subagent không được
+sửa result artifact này.
+
 Repo policy chỉ bổ sung semantics mà QiQi cần từ kết quả:
 
 - **Repo-local Knowledge**: source of truth nội bộ đã cập nhật hoặc phát hiện có
