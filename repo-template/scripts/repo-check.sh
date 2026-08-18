@@ -74,6 +74,17 @@ if [[ -f "$agents" ]]; then
   rg -q 'exact result artifact' "$agents" || fail 'AGENTS.md: missing MCP result-artifact exception'
   rg -q 'Không tự suy đoán, tìm hoặc mở result artifact khác' "$agents" || \
     fail 'AGENTS.md: result artifact must come only from MCP handoff'
+  rg -q '^## Shared Knowledge$' "$agents" || fail 'AGENTS.md: missing shared knowledge lifecycle'
+  rg -q '`knowledge_read`' "$agents" || fail 'AGENTS.md: missing knowledge_read requirement'
+  rg -q '`knowledge_write`' "$agents" || fail 'AGENTS.md: missing knowledge_write requirement'
+  rg -q 'knowledge_write(entries=\[\])' "$agents" || \
+    fail 'AGENTS.md: empty knowledge review must be explicit'
+  rg -q 'không truyền filename/path/directory' "$agents" || \
+    fail 'AGENTS.md: agent must not choose shared knowledge storage path'
+  rg -q 'không có field `language`' "$agents" || \
+    fail 'AGENTS.md: language field must not be part of knowledge contract'
+  rg -q 'live source/test thắng' "$agents" || \
+    fail 'AGENTS.md: live owner source/test must override stale shared knowledge'
   rg -q '^## Handoff với QiQi$' "$agents" || fail 'AGENTS.md: missing QiQi handoff policy'
   rg -q '^## Cross-repo Impact$' "$agents" || fail 'AGENTS.md: missing cross-repo impact rules'
   rg -U -q 'không tự mở result/source của repository khác' "$agents" || \
@@ -82,6 +93,8 @@ if [[ -f "$agents" ]]; then
     fail 'AGENTS.md: QiQi must broker cross-repo live-result handoff'
   rg -q 'MCP footer là source of truth duy nhất' "$agents" || \
     fail 'AGENTS.md: MCP footer must own result-handoff mechanics'
+  rg -q 'compatibility' "$agents" || \
+    fail 'AGENTS.md: Repo-local Knowledge compatibility semantics must be explicit'
   rg -q 'repository/boundary nào bị ảnh hưởng' "$agents" || \
     fail 'AGENTS.md: Cross-repo Impact must identify affected boundary'
   rg -q 'evidence chính từ repository hiện tại' "$agents" || \
@@ -89,13 +102,15 @@ if [[ -f "$agents" ]]; then
   rg -q 'next action nếu đã rõ' "$agents" || \
     fail 'AGENTS.md: Cross-repo Impact must carry next action when known'
 
+  if rg -q '^## Tri thức Repo-local$|workspace `knowledge/`|knowledge/INDEX\.md' "$agents"; then
+    fail 'AGENTS.md: legacy workspace/repo-local knowledge lifecycle returned'
+  fi
   if rg -q '^## Final Result Contract$' "$agents"; then
     fail 'AGENTS.md: must not duplicate MCP-owned final result protocol'
   fi
   if rg -q 'Newest Result section bắt buộc|Giữ nguyên toàn bộ history|newest pending Result section' "$agents"; then
     fail 'AGENTS.md: MCP-owned marker/history/finalization mechanics are duplicated'
   fi
-
   if rg -q 'Caller có thể ép output bằng JSON Schema|final result missing field|`git_state`|`repo_local_knowledge`' "$agents"; then
     fail 'AGENTS.md: legacy logical JSON result contract found'
   fi

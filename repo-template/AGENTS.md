@@ -6,8 +6,9 @@ thay đổi trong **Git root hiện tại**.
 
 QiQi sở hữu context cấp workspace, dependency liên repository và task semantics.
 MCP `qiqi_delegate` sở hữu execution lifecycle, native session và **result-handoff
-protocol**. Repo này sở hữu architecture, domain rule, implementation, test và
-verification nội bộ.
+protocol**. Shared Knowledge MCP sở hữu durable knowledge retrieval/persistence
+mechanics độc lập với current repository. Repo này sở hữu architecture, domain
+rule, implementation, test và verification nội bộ.
 
 ## Bắt đầu
 
@@ -18,7 +19,8 @@ Trước code task không tầm thường:
 1. Xác nhận thư mục hiện tại là Git root bằng `git rev-parse --show-toplevel`.
 2. Đọc `ARCHITECTURE.md` để hiểu responsibility/module/boundary.
 3. Đọc `docs/VERIFY.md` để biết verification command và side effect.
-4. Đọc artifact khác chỉ khi concern của task yêu cầu.
+4. Sinh nhiều task-relevant search terms và gọi `knowledge_read` trước investigation.
+5. Đọc artifact repo-local khác chỉ khi concern của task yêu cầu.
 
 Không quét toàn bộ repository hoặc toàn bộ `docs/` khi chưa cần.
 
@@ -28,13 +30,50 @@ Không quét toàn bộ repository hoặc toàn bộ `docs/` khi chưa cần.
 |---|---|
 | Responsibility, module, dependency và data flow nội bộ | `ARCHITECTURE.md` |
 | Bootstrap, test, lint, build và guardrail | `docs/VERIFY.md` |
-| Domain rule hoặc invariant | `docs/domain/` nếu tồn tại |
-| User/API behavior hoặc acceptance criteria | `docs/specs/` nếu tồn tại |
-| Quyết định kỹ thuật lâu bền | `docs/decisions/` nếu tồn tại |
+| Domain rule hoặc invariant | source/test/docs hiện có trong repo |
+| User/API behavior hoặc acceptance criteria | source/test/docs hiện có trong repo |
+| Quyết định kỹ thuật lâu bền | source/test/docs hiện có trong repo |
 | Security boundary hoặc dữ liệu nhạy cảm | `docs/SECURITY.md` nếu tồn tại |
 
 Artifact optional không tồn tại thì tiếp tục bằng source, test và tài liệu hiện
 có. Không tạo file rỗng chỉ để hoàn thiện cấu trúc.
+
+## Shared Knowledge
+
+Shared knowledge là durable reusable context nằm ngoài current repository. Agent
+được đọc knowledge của bất kỳ repo/module/domain nào qua `knowledge_read`; việc này
+không cho phép agent tự mở source hoặc result artifact của repository anh em.
+
+Đầu mỗi work turn:
+
+1. Hiểu concern hiện tại rồi sinh nhiều keywords/concepts liên quan.
+2. Ưu tiên canonical English concepts; thêm original-language/domain aliases khi
+   hữu ích cho retrieval.
+3. Gọi `knowledge_read(keywords, context?, limit?)` trước investigation.
+4. Dùng `context.repo`/`context.domain` chỉ như ranking hint, không như filter.
+
+Nếu shared knowledge mâu thuẫn với source/test hiện tại của owner repository đang
+được agent trực tiếp xác minh, live source/test thắng. Không biến knowledge stale
+thành reason để sửa source cho khớp tài liệu cũ.
+
+Trước khi finalize mọi work turn, agent review reusable verified knowledge rồi gọi
+`knowledge_write`:
+
+- không có knowledge đáng lưu → `knowledge_write(entries=[])`;
+- create → submit semantic fields, không truyền filename/path/directory;
+- update → dùng exact `id` + `expected_revision` từ `knowledge_read`;
+- `canonical_name`, scope ID và routing concepts dùng canonical identifiers/terms;
+- `routing.summary`, `when_to_read`, `keywords` ưu tiên English;
+- `routing.aliases` optional và có thể đa ngôn ngữ;
+- `content` dùng ngôn ngữ nào cũng được; không có field `language`;
+- durable fact phải có provenance/evidence trong `sources`.
+
+Agent không tự materialize shared knowledge Markdown và không tự sửa `INDEX.md`.
+Knowledge MCP sở hữu canonical ID/path, mkdir, rendering, locking, revision check,
+atomic file replace và index update.
+
+Nếu task xác nhận knowledge material cần persist nhưng `knowledge_write` lỗi, không
+được báo như đã lưu; ghi blocker/persistence failure rõ trong terminal result.
 
 ## Ranh giới Workspace
 
@@ -46,6 +85,8 @@ có. Không tạo file rỗng chỉ để hoàn thiện cấu trúc.
 - Không đọc/sửa repository anh em.
 - Không spawn/delegate sang coding agent khác và không gọi MCP orchestration của
   QiQi từ child turn.
+- Shared knowledge chỉ đi qua Knowledge MCP, không qua direct filesystem traversal
+  từ repository hiện tại.
 - Upstream live result phải đến từ task prompt của QiQi; không tự đi tìm result
   hoặc source ở repository khác.
 - Nếu context từ QiQi mâu thuẫn với source/test hiện tại, dừng phần phụ thuộc,
@@ -68,9 +109,10 @@ ví dụ:
 - evidence hoặc provenance ngắn khi cần để kiểm chứng context;
 - verification hoặc blocker policy có liên quan.
 
-Agent không tự mở result/source của repository khác để bổ sung live context. Từ
-handoff của QiQi, agent tự khám phá implementation detail bên trong Git root hiện
-tại.
+Shared durable knowledge không cần QiQi copy vào prompt vì child agent được đọc trực
+tiếp qua Knowledge MCP. Agent không tự mở result/source của repository khác để bổ
+sung live context. Từ handoff của QiQi, agent tự khám phá implementation detail bên
+trong Git root hiện tại.
 
 ### Output về QiQi
 
@@ -83,9 +125,14 @@ Exact result artifact dưới workspace `.qiqi/runs/` chỉ được parent exec
 agent nhận task trực tiếp từ QiQi/MCP cập nhật hoặc finalize. Subagent không được
 sửa result artifact này.
 
-`### Cross-repo Impact` là outbound execution handoff cho QiQi khi repo-local work
-phát hiện impact cần repository khác hoặc workspace xử lý. Khi có Cross-repo
-Impact, nêu đủ:
+Heading `### Repo-local Knowledge` còn tồn tại trong result protocol hiện tại vì
+compatibility. Không dùng heading này để khôi phục repo-local knowledge lifecycle
+cũ. Ghi ngắn knowledge review của turn: `None` nếu `entries=[]`, hoặc shared
+knowledge ID/revision đã create/update; persistence failure phải được nêu rõ.
+
+`### Cross-repo Impact` là outbound **execution** handoff cho QiQi khi repo-local
+work phát hiện impact cần repository khác hoặc workspace xử lý. Đây không phải
+knowledge transport. Khi có Cross-repo Impact, nêu đủ:
 
 - điều gì thay đổi hoặc được phát hiện;
 - repository/boundary nào bị ảnh hưởng;
@@ -102,7 +149,7 @@ fact/evidence cho QiQi để QiQi quyết định downstream task hoặc workspa
 - Dùng evidence kiểm tra lại được: source path, test, command, spec hoặc runtime output.
 - Không tuyên bố hoàn thành chỉ từ inspection khi task yêu cầu thay đổi/verification.
 - Không đổi regression mới thành legacy issue để hoàn thành task.
-- Không ghi secret hoặc dữ liệu nhạy cảm vào tài liệu/result artifact.
+- Không ghi secret hoặc dữ liệu nhạy cảm vào tài liệu/result artifact/shared knowledge.
 
 ## Cross-repo Impact
 
@@ -114,7 +161,8 @@ upstream/downstream behavior hoặc decision cần QiQi điều phối:
    QiQi qua result của turn hiện tại.
 
 QiQi chịu trách nhiệm chuyển live context đó tới downstream repository hoặc xử lý
-workspace action cần thiết.
+workspace action cần thiết. Durable reusable fact có thể được persist độc lập qua
+Knowledge MCP khi đủ evidence.
 
 ## Ghi nhận Friction
 
@@ -148,8 +196,9 @@ chưa chạy phải có lý do rõ; không biến suy đoán thành evidence.
 ## Hoàn thành
 
 Task chỉ completed khi outcome đã đạt, verification liên quan đã chạy hoặc phần
-chưa chạy được báo rõ, không có regression mới đã biết, và cross-repo impact cần
-QiQi biết đã được handoff.
+chưa chạy được báo rõ, không có regression mới đã biết, knowledge review đã gọi
+`knowledge_write`, durable update material đã persist hoặc persistence failure được
+báo rõ, và cross-repo impact cần QiQi biết đã được handoff.
 
 Nếu còn decision hoặc dependency không thể tự giải quyết, task chưa completed;
 tuân theo MCP result-handoff protocol của turn để ghi terminal state và blocker.
