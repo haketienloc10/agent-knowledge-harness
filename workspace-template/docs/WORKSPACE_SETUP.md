@@ -26,7 +26,8 @@ Sau setup:
 - MCP START/RESUME chạy real interactive Codex/Claude qua Herdr;
 - success return chỉ có native `session_id` + workspace-relative `result_path`;
 - START result path dùng readable English task slug do QiQi title quyết định;
-- QiQi đọc result artifact trước khi quyết định task tiếp theo;
+- QiQi đọc result artifact trước khi quyết định task tiếp theo và không delegate
+  lại khi relevant evidence hiện có đã đủ cho yêu cầu hiện tại;
 - concurrent call cùng Git root hoặc cùng native session bị reject trong cùng
   MCP server process;
 - `bash scripts/workspace-check.sh` trả `PASS`.
@@ -329,11 +330,14 @@ Sau khi đọc result, QiQi quyết định:
 - contract/flow/decision reusable → cập nhật `knowledge/` + `knowledge/INDEX.md`;
 - chỉ có giá trị cho task hiện tại → không tạo durable knowledge.
 
-Không RESUME chỉ để yêu cầu agent cung cấp lại terminal report. Nếu tool đã trả
-success nhưng QiQi chưa có report trong context, hành động đúng là đọc artifact.
+Nếu relevant result/evidence đã đủ trả lời yêu cầu hiện tại, QiQi đọc hoặc đọc lại
+artifact và trả lời trực tiếp. Không START hoặc RESUME chỉ để lấy lại, diễn giải,
+kiểm tra lại hoặc cải thiện cách trình bày information/evidence đã có.
 
-Mỗi native session giữ một result artifact; RESUME append vào cùng file. `.pending-*`
-chỉ là START staging artifact và không được dùng để resolve RESUME.
+Delegation mới chỉ hợp lệ khi còn một repo-local work/evidence gap cụ thể chưa được
+evidence hiện có giải quyết; sau đó QiQi mới chọn RESUME hay START theo continuity
+thực tế. Mỗi native session giữ một result artifact; RESUME append vào cùng file.
+`.pending-*` chỉ là START staging artifact và không được dùng để resolve RESUME.
 
 ## Bước 10: Dependency và Delegation Waves
 
@@ -406,7 +410,10 @@ Checker xác minh:
 - result artifact/identity validation;
 - repo/native-session concurrency guard;
 - Claude stalled-prompt recovery;
-- QiQi policy về `result_path` và no-report-only RESUME.
+- QiQi policy về evidence reuse: đọc lại result khi đủ, chỉ delegate khi có
+  work/evidence gap cụ thể, và không START/RESUME chỉ để report lại;
+- user-facing report phải giữ material findings/evidence cần cho hiểu kết quả hoặc
+  quyết định bước tiếp theo.
 
 Checker không gọi model API và không chạy test của repository con. Các file trong
 `docs/examples/` cũng không phải runtime input và không được checker xem như active
@@ -431,6 +438,14 @@ Tối thiểu:
 10. Không có user-visible progress commentary trong wave.
 11. Không có second RESUME chỉ để lấy report; report được đọc trực tiếp từ
     `result_path`.
+12. Sau một terminal result có đủ evidence, user yêu cầu giải thích hoặc kiểm tra
+    lại result → QiQi đọc lại cùng `result_path` và không gọi `delegate_repo_task`.
+13. User follow-up yêu cầu một fact/check chưa có trong result → QiQi xác định được
+    work/evidence gap cụ thể trước khi delegate, rồi chọn RESUME hay START theo
+    continuity thực tế.
+14. Với result có nhiều materially distinct findings, user-facing answer giữ các
+    finding/evidence ảnh hưởng tới kết luận hoặc quyết định, không collapse thành
+    chỉ outcome/verification/blocker.
 
 ## Bước 15: Smoke Test Workflow Hai chiều
 
@@ -442,7 +457,7 @@ Dùng hai repository test có dependency producer → consumer.
 2. QiQi delegate một investigation/change task cho repo A.
 3. Repo A result phải có `### Cross-repo Impact` nêu một fact consumer cần biết,
    affected boundary và evidence.
-4. QiQi đọc `result_path`; không mở RESUME chỉ để hỏi lại report.
+4. QiQi đọc `result_path`; không START hoặc RESUME chỉ để hỏi lại report đã có.
 
 ### Repo B — consumer
 

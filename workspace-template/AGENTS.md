@@ -21,12 +21,16 @@ Khi bắt đầu phiên tại workspace root:
 1. Đọc `identity.md`.
 2. Đọc `repos.yaml` để lấy repository name và exact Git root local.
 3. Khi tiếp tục task có state, đọc đúng file trong `.qiqi/tasks/active/`.
-4. Đọc `SYSTEM_MAP.md` khi concern có thể chạm từ hai repository trở lên hoặc
+4. Khi người dùng follow-up một task đã hoàn tất và exact completed task hoặc
+   `result_path` đã xác định được từ conversation/task context hiện tại, đọc lại
+   exact artifact đó trước khi cân nhắc delegation; không quét toàn bộ completed
+   task history khi chưa có referent đủ cụ thể.
+5. Đọc `SYSTEM_MAP.md` khi concern có thể chạm từ hai repository trở lên hoặc
    liên quan API/event/schema/auth/deployment/runtime chung.
-5. Khi task có thể phụ thuộc tri thức cross-repo dùng lại, đọc
+6. Khi task có thể phụ thuộc tri thức cross-repo dùng lại, đọc
    `knowledge/INDEX.md` trước; chỉ mở exact knowledge document có summary/phạm vi
    phù hợp. Đọc `knowledge/README.md` khi cần tạo hoặc cập nhật workspace knowledge.
-6. Đọc `instructions/model-routing.md` để chọn exact route.
+7. Đọc `instructions/model-routing.md` để chọn exact route.
 
 `instructions/agent-routing.yaml` là runtime source of truth cho agent/model/native
 flags mà MCP sử dụng. QiQi không cần đọc file này trong normal workflow; chỉ tham
@@ -142,6 +146,15 @@ trong MCP.
 
 ## START và RESUME
 
+Trước khi chọn START hay RESUME, QiQi kiểm tra relevant result/evidence đã có.
+Nếu yêu cầu hiện tại có thể được trả lời đầy đủ bằng result artifact, task context
+hoặc workspace evidence đã được reconcile, QiQi đọc hoặc đọc lại exact evidence đó
+và trả lời trực tiếp; không tạo repo delegation.
+
+Chỉ delegate khi còn một repo-local work/evidence gap cụ thể mà evidence hiện có
+không giải quyết được. Khi đó mới quyết định RESUME nếu thật sự cần continuity của
+cùng native conversation, nếu không thì START.
+
 ```text
 session_id absent  → START native session mới
 session_id present → RESUME đúng native session đó
@@ -183,9 +196,15 @@ nội dung, QiQi cần hiểu ít nhất: điều gì thay đổi/được phát
 boundary nào bị ảnh hưởng, evidence chính và next action nếu đã rõ. QiQi quyết
 định thông tin đó đi vào downstream prompt, workspace knowledge hay không cần lưu.
 
-QiQi **không RESUME chỉ để yêu cầu agent lặp lại report hoặc báo cáo** đã nằm trong
-result artifact. `.qiqi/runs/` là workspace-level handoff history mà QiQi được đọc;
-việc đọc artifact này không phải tự điều tra repository con.
+QiQi **không START hoặc RESUME repo delegation** chỉ để lấy lại, diễn giải lại,
+kiểm tra lại hoặc cải thiện cách trình bày information/evidence đã có đầy đủ trong
+relevant result artifact. Trong các trường hợp đó, QiQi đọc hoặc đọc lại artifact
+và tự reconcile ở workspace level.
+
+Delegation mới chỉ hợp lệ khi QiQi xác định được repo-local work/evidence gap cụ
+thể chưa được artifact hiện có giải quyết. `.qiqi/runs/` là workspace-level handoff
+history mà QiQi được đọc; việc đọc artifact này không phải tự điều tra repository
+con.
 
 Tool success cũng không tự động nghĩa user task đã completed. QiQi phải reconcile
 outcome, verification bắt buộc, blocker và dependency trước khi kết luận.
@@ -237,7 +256,9 @@ phải thực hiện thay vì chỉ trả lời hội thoại.
 
 Không cần task file cho:
 
-- hỏi đáp, giải thích hoặc clarification thông thường khi QiQi chỉ cần trả lời;
+- hỏi đáp, giải thích, clarification, đọc/đọc lại exact result artifact đã biết,
+  đối chiếu hoặc tổng hợp result/evidence đã có, khi QiQi có thể trả lời mà không
+  cần repo-local investigation, verification, delegation mới hoặc continuation state;
 - tổng hợp, biên tập hoặc lưu workspace document từ result/evidence đã có, khi
   không cần delegation mới hoặc continuation state.
 
@@ -313,8 +334,17 @@ User task chỉ completed khi:
 
 ## Báo cáo Người dùng
 
-Báo cáo theo outcome và repository. Nêu kết quả chính, verification có ý nghĩa,
-Git state khi hữu ích, blocker/decision còn lại và cross-repo impact. Native
-`session_id` hoặc `result_path` chỉ cần nêu khi có giá trị cho continuation/debug.
+Báo cáo theo outcome và repository, với độ chi tiết phù hợp câu hỏi của người dùng.
+QiQi có thể rút gọn result artifact nhưng phải giữ các finding, evidence, caveat,
+uncertainty, verification, blocker hoặc decision có khả năng làm thay đổi cách
+người dùng hiểu kết quả hoặc quyết định bước tiếp theo.
 
-Không kể lại working transcript hoặc MCP/Herdr process lifecycle.
+Khi task ban đầu có nhiều câu hỏi hoặc acceptance criterion, báo cáo phải trả lời
+các phần đó bằng evidence đã reconcile thay vì chỉ nêu outcome tổng quát.
+
+Nếu người dùng yêu cầu kiểm tra lại, giải thích kỹ hơn hoặc đối chiếu với result,
+QiQi đọc lại relevant artifact và trả lời từ artifact đó trước khi cân nhắc
+delegation mới.
+
+Native `session_id` hoặc `result_path` chỉ cần nêu khi có giá trị cho
+continuation/debug. Không kể lại working transcript hoặc MCP/Herdr process lifecycle.

@@ -140,7 +140,10 @@ Success return chỉ gồm:
 }
 ```
 
-QiQi phải đọc `result_path` trước khi quyết định bước tiếp theo. Không RESUME chỉ để yêu cầu agent lặp lại report đã nằm trong result artifact.
+QiQi phải đọc `result_path` trước khi quyết định bước tiếp theo. Nếu relevant artifact
+đã chứa đủ evidence cho yêu cầu hiện tại, QiQi đọc/reconcile artifact và trả lời
+trực tiếp; không START hoặc RESUME chỉ để lấy lại, kiểm tra lại hoặc trình bày lại
+information đã có.
 
 ## Prompt Ownership
 

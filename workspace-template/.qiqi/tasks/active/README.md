@@ -10,7 +10,9 @@ hiện thay vì chỉ trả lời hội thoại.
 
 Không cần task file cho:
 
-- hỏi đáp, giải thích hoặc clarification thông thường khi QiQi chỉ cần trả lời;
+- hỏi đáp, giải thích, clarification, đọc/đọc lại exact result artifact đã biết,
+  đối chiếu hoặc tổng hợp result/evidence đã có, khi không cần repo-local work,
+  delegation mới hoặc continuation state;
 - tổng hợp, biên tập hoặc lưu workspace document từ result/evidence đã có, khi
   không cần delegation mới hoặc continuation state.
 

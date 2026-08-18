@@ -157,8 +157,20 @@ if [[ -f "$agents_md" ]]; then
     fail 'AGENTS.md: durable workspace knowledge must update INDEX.md in the same change'
   rg -q 'đọc.*`result_path`|đọc.*result artifact' "$agents_md" || \
     fail 'AGENTS.md: QiQi must read result_path before deciding the next step'
-  rg -q 'không.*RESUME.*report|không.*RESUME.*báo cáo' "$agents_md" || \
-    fail 'AGENTS.md: missing no-report-only RESUME invariant'
+  rg -q --fixed-strings 'Trước khi chọn START hay RESUME, QiQi kiểm tra relevant result/evidence đã có.' "$agents_md" || \
+    fail 'AGENTS.md: START/RESUME must be gated by existing evidence'
+  rg -q --fixed-strings 'và trả lời trực tiếp; không tạo repo delegation.' "$agents_md" || \
+    fail 'AGENTS.md: sufficient existing evidence must be answered without delegation'
+  rg -q --fixed-strings 'QiQi **không START hoặc RESUME repo delegation** chỉ để lấy lại, diễn giải lại,' "$agents_md" || \
+    fail 'AGENTS.md: report-only START/RESUME must be forbidden when result evidence already exists'
+  rg -q --fixed-strings 'Delegation mới chỉ hợp lệ khi QiQi xác định được repo-local work/evidence gap cụ' "$agents_md" || \
+    fail 'AGENTS.md: new delegation requires a concrete repo-local work/evidence gap'
+  rg -q --fixed-strings 'exact artifact đó trước khi cân nhắc delegation; không quét toàn bộ completed' "$agents_md" || \
+    fail 'AGENTS.md: completed-task follow-up must reuse a known result before delegation'
+  rg -q --fixed-strings 'QiQi có thể rút gọn result artifact nhưng phải giữ các finding, evidence, caveat,' "$agents_md" || \
+    fail 'AGENTS.md: user report must preserve material result findings'
+  rg -q --fixed-strings 'uncertainty, verification, blocker hoặc decision có khả năng làm thay đổi cách' "$agents_md" || \
+    fail 'AGENTS.md: user report must preserve material caveats and decision evidence'
   rg -q 'prompt.*QiQi|QiQi.*prompt' "$agents_md" || \
     fail 'AGENTS.md: missing QiQi-owned task prompt invariant'
   rg -U -q 'progress[[:space:]]+commentary' "$agents_md" || \
@@ -175,6 +187,10 @@ if [[ -f "$agents_md" ]]; then
     fail 'AGENTS.md: missing MCP-failure shell fallback prohibition'
   rg -q 'Mọi \*\*task thực thi\*\* tại workspace phải có task file' "$agents_md" || \
     fail 'AGENTS.md: every stateful workspace execution task must create a task file'
+  rg -q --fixed-strings 'đọc/đọc lại exact result artifact đã biết,' "$agents_md" || \
+    fail 'AGENTS.md: existing-result reconciliation must be recognized as stateless work'
+  rg -q --fixed-strings 'cần repo-local investigation, verification, delegation mới hoặc continuation state;' "$agents_md" || \
+    fail 'AGENTS.md: existing-result reconciliation must stay stateless only when no repo work is needed'
   rg -U -q 'tổng hợp, biên tập hoặc lưu workspace document từ result/evidence đã có, khi[[:space:]]+không cần delegation mới hoặc continuation state' "$agents_md" || \
     fail 'AGENTS.md: missing stateless existing-evidence documentation exception'
   rg -U -q 'Nếu công việc cần investigation, implementation, verification, delegation hoặc[[:space:]]+phát sinh state phải tiếp tục qua lượt khác, tạo task file trước phần thực thi đó' "$agents_md" || \
@@ -193,6 +209,10 @@ if [[ -f "$active_tasks_readme" ]]; then
     fail '.qiqi/tasks/active/README.md: missing title'
   rg -q 'Mọi \*\*task thực thi\*\* tại workspace phải có một file' "$active_tasks_readme" || \
     fail '.qiqi/tasks/active/README.md: must require stateful execution tasks to be recorded'
+  rg -q --fixed-strings 'đọc/đọc lại exact result artifact đã biết,' "$active_tasks_readme" || \
+    fail '.qiqi/tasks/active/README.md: existing-result reconciliation must be recognized as stateless work'
+  rg -q --fixed-strings 'delegation mới hoặc continuation state;' "$active_tasks_readme" || \
+    fail '.qiqi/tasks/active/README.md: existing-result reconciliation must stay stateless only when no repo work is needed'
   rg -U -q 'tổng hợp, biên tập hoặc lưu workspace document từ result/evidence đã có, khi[[:space:]]+không cần delegation mới hoặc continuation state' "$active_tasks_readme" || \
     fail '.qiqi/tasks/active/README.md: missing stateless existing-evidence documentation exception'
   rg -U -q 'Nếu công việc cần investigation, implementation, verification, delegation hoặc[[:space:]]+phát sinh state phải tiếp tục qua lượt khác, tạo active task trước phần thực thi đó' "$active_tasks_readme" || \
