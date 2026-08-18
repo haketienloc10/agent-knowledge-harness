@@ -32,8 +32,8 @@ thể kiểm tra.
 
 ## External boundaries
 
-Chỉ mô tả phần boundary mà repo này trực tiếp sở hữu hoặc tiêu thụ. Chi tiết
-cross-repo đầy đủ thuộc workspace knowledge.
+Chỉ mô tả phần boundary mà repo này trực tiếp sở hữu hoặc tiêu thụ. Quan hệ
+cross-repo tổng thể thuộc `SYSTEM_MAP.md` và context orchestration của QiQi.
 
 | Boundary | Direction | Contract owner | Local source |
 |---|---|---|---|

@@ -46,8 +46,8 @@ Chỉ ghi fact/evidence QiQi đã reconcile và còn giá trị cho downstream w
 | Từ repository | Fact/evidence cần truyền | Repository nhận | Trạng thái |
 |---|---|---|---|
 
-Không yêu cầu downstream agent tự đọc result artifact hoặc workspace knowledge;
-QiQi phải đưa context cần dùng trực tiếp vào task prompt.
+Không yêu cầu downstream agent tự đọc sibling result artifact hoặc repository
+source; QiQi phải đưa live context cần dùng trực tiếp vào task prompt.
 
 ## Blocker hoặc câu hỏi mở
 
@@ -55,14 +55,7 @@ QiQi phải đưa context cần dùng trực tiếp vào task prompt.
 
 ## Cross-repo impact còn phải xử lý
 
-Chỉ ghi impact còn cần downstream task, user decision hoặc workspace update. Nếu
-impact đã được truyền/lưu xong thì đánh dấu rõ để không xử lý lặp lại.
+Chỉ ghi impact còn cần downstream task, user decision hoặc workspace action. Nếu
+impact đã được truyền/xử lý xong thì đánh dấu rõ để không xử lý lặp lại.
 
 ## Kết quả cuối
-
-## Durable knowledge đã cập nhật
-
-- `SYSTEM_MAP.md`:
-- `knowledge/...`:
-- `knowledge/INDEX.md`:
-- Không có, nếu task không tạo tri thức cross-repo có khả năng dùng lại.

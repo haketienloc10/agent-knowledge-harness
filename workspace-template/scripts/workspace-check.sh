@@ -18,11 +18,6 @@ require_file() {
   [[ -f "$path" ]] || fail "missing file: ${path#$workspace_root/}"
 }
 
-require_dir() {
-  local path="$1"
-  [[ -d "$path" ]] || fail "missing directory: ${path#$workspace_root/}"
-}
-
 for command in git rg uv python3 yq herdr; do
   require_command "$command"
 done
@@ -32,9 +27,6 @@ required_files=(
   identity.md
   SYSTEM_MAP.md
   repos.yaml
-  knowledge/README.md
-  knowledge/INDEX.md
-  knowledge/glossary.md
   instructions/agent-routing.yaml
   instructions/model-routing.md
   .codex/config.toml
@@ -48,23 +40,6 @@ required_files=(
 for path in "${required_files[@]}"; do
   require_file "$workspace_root/$path"
 done
-
-required_dirs=(
-  knowledge/systems
-  knowledge/contracts
-  knowledge/decisions
-)
-
-for path in "${required_dirs[@]}"; do
-  require_dir "$workspace_root/$path"
-done
-
-if [[ -e "$workspace_root/KNOWLEDGE.md" ]]; then
-  fail 'KNOWLEDGE.md: duplicate knowledge router is not part of the MVP workflow'
-fi
-if [[ -e "$workspace_root/knowledge/proposals" ]]; then
-  fail 'knowledge/proposals: proposal lifecycle is not part of the MVP workflow'
-fi
 
 for legacy_example in \
   instructions/agent-routing.codex.example.yaml \
@@ -128,8 +103,6 @@ if [[ -f "$agents_md" ]]; then
     '`identity\.md`' \
     '`repos\.yaml`' \
     '`SYSTEM_MAP\.md`' \
-    '`knowledge/README\.md`' \
-    '`knowledge/INDEX\.md`' \
     '`instructions/agent-routing\.yaml`' \
     '`instructions/model-routing\.md`' \
     '`delegate_repo_task`' \
@@ -143,12 +116,8 @@ if [[ -f "$agents_md" ]]; then
   done
   rg -q 'handoff broker duy nhất giữa các repository' "$agents_md" || \
     fail 'AGENTS.md: QiQi must be the only cross-repo handoff broker'
-  rg -U -q 'không yêu cầu execution agent tự mở workspace `knowledge/`.*result[[:space:]]+artifact của repository khác' "$agents_md" || \
-    fail 'AGENTS.md: child must receive workspace/upstream context through the QiQi prompt'
   rg -U -q 'producer `result_path`.*consumer task prompt|producer result.*consumer task prompt' "$agents_md" || \
     fail 'AGENTS.md: producer result must flow through QiQi into the consumer prompt'
-  rg -U -q 'knowledge/INDEX\.md.*trong cùng[[:space:]]+thay đổi' "$agents_md" || \
-    fail 'AGENTS.md: durable workspace knowledge must update INDEX.md in the same change'
   rg -q 'đọc.*`result_path`|đọc.*result artifact' "$agents_md" || \
     fail 'AGENTS.md: QiQi must read result_path before deciding the next step'
   rg -q --fixed-strings 'Trước khi chọn START hay RESUME, QiQi kiểm tra relevant result/evidence đã có.' "$agents_md" || \
@@ -177,28 +146,6 @@ if [[ -f "$agents_md" ]]; then
     fail 'AGENTS.md: missing direct-agent-CLI bypass prohibition'
   rg -U -q 'Không[[:space:]]+fallback sang shell-based `codex`, `claude`' "$agents_md" || \
     fail 'AGENTS.md: missing MCP-failure shell fallback prohibition'
-fi
-
-knowledge_readme="$workspace_root/knowledge/README.md"
-if [[ -f "$knowledge_readme" ]]; then
-  rg -q '^# Workspace Knowledge$' "$knowledge_readme" || \
-    fail 'knowledge/README.md: missing workspace knowledge guide title'
-  rg -q '`INDEX\.md`' "$knowledge_readme" || \
-    fail 'knowledge/README.md: must route reads through INDEX.md'
-  rg -U -q 'Execution agent.*không tự đọc thư mục này' "$knowledge_readme" || \
-    fail 'knowledge/README.md: child must not read workspace knowledge directly'
-  rg -U -q 'cập nhật[[:space:]]+`INDEX\.md` trong cùng thay đổi' "$knowledge_readme" || \
-    fail 'knowledge/README.md: knowledge writes must update INDEX.md atomically'
-fi
-
-knowledge_index="$workspace_root/knowledge/INDEX.md"
-if [[ -f "$knowledge_index" ]]; then
-  rg -q '^# Knowledge Index$' "$knowledge_index" || \
-    fail 'knowledge/INDEX.md: missing index title'
-  rg -q --fixed-strings '| Tài liệu | Summary | Khi nào cần đọc | Phạm vi |' "$knowledge_index" || \
-    fail 'knowledge/INDEX.md: missing MVP read-routing columns'
-  rg -q 'không quét toàn bộ `knowledge/`' "$knowledge_index" || \
-    fail 'knowledge/INDEX.md: must prevent scanning the whole knowledge library'
 fi
 
 codex_config="$workspace_root/.codex/config.toml"

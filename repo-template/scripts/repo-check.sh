@@ -27,9 +27,6 @@ required_files=(
   ARCHITECTURE.md
   docs/VERIFY.md
   docs/REPO_SETUP.md
-  docs/domain/README.md
-  docs/specs/README.md
-  docs/decisions/README.md
   docs/friction/README.md
   scripts/repo-check.sh
 )
@@ -78,30 +75,19 @@ if [[ -f "$agents" ]]; then
   rg -q 'Không tự suy đoán, tìm hoặc mở result artifact khác' "$agents" || \
     fail 'AGENTS.md: result artifact must come only from MCP handoff'
   rg -q '^## Handoff với QiQi$' "$agents" || fail 'AGENTS.md: missing QiQi handoff policy'
-  rg -q '^## Tri thức Repo-local$' "$agents" || fail 'AGENTS.md: missing repo-local knowledge rules'
   rg -q '^## Cross-repo Impact$' "$agents" || fail 'AGENTS.md: missing cross-repo impact rules'
-  rg -U -q 'không tự mở workspace knowledge hoặc result/source của[[:space:]]+repository khác' "$agents" || \
-    fail 'AGENTS.md: child must not read workspace knowledge or sibling repository results'
+  rg -U -q 'không tự mở result/source của repository khác' "$agents" || \
+    fail 'AGENTS.md: child must not read sibling repository results/source'
   rg -q 'QiQi là handoff broker' "$agents" || \
-    fail 'AGENTS.md: QiQi must broker cross-repo handoff'
+    fail 'AGENTS.md: QiQi must broker cross-repo live-result handoff'
   rg -q 'MCP footer là source of truth duy nhất' "$agents" || \
     fail 'AGENTS.md: MCP footer must own result-handoff mechanics'
-  rg -q 'Repo-local Knowledge' "$agents" || \
-    fail 'AGENTS.md: missing repo-local knowledge handoff semantics'
   rg -q 'repository/boundary nào bị ảnh hưởng' "$agents" || \
     fail 'AGENTS.md: Cross-repo Impact must identify affected boundary'
   rg -q 'evidence chính từ repository hiện tại' "$agents" || \
     fail 'AGENTS.md: Cross-repo Impact must carry evidence'
   rg -q 'next action nếu đã rõ' "$agents" || \
     fail 'AGENTS.md: Cross-repo Impact must carry next action when known'
-  rg -q 'đều có thể tạo ra tri thức repo-local' "$agents" || \
-    fail 'AGENTS.md: every task type must be allowed to produce repo-local knowledge'
-  rg -q 'Trước khi finalize task, tự kiểm tra' "$agents" || \
-    fail 'AGENTS.md: missing pre-finalize repo-local knowledge review'
-  rg -U -q 'Không cần ghi lại thông tin có thể đọc thấy trực tiếp và rõ ràng từ source/test' "$agents" || \
-    fail 'AGENTS.md: trivial directly-readable source/test facts should not be persisted'
-  rg -q 'knowledge review trước khi finalize' "$agents" || \
-    fail 'AGENTS.md: Definition of Done must include repo-local knowledge review'
 
   if rg -q '^## Final Result Contract$' "$agents"; then
     fail 'AGENTS.md: must not duplicate MCP-owned final result protocol'

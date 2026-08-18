@@ -33,10 +33,6 @@ repository vào registry.
 |---|---|---|---|---|---|
 | `{{CONTRACT_NAME}}` | `{{PRODUCER}}` | `{{CONSUMERS}}` | `HTTP / event / schema` | `{{COMPATIBILITY_RULE}}` | `{{SPEC_OR_CODE_PATH}}` |
 
-Chi tiết contract có khả năng dùng lại có thể được chắt lọc vào
-`knowledge/contracts/`, nhưng bảng này vẫn giữ bản đồ producer–consumer và liên
-kết đến source of truth.
-
 ## Ranh giới Dữ liệu và Ownership
 
 | Dữ liệu hoặc resource | Owner | Consumer được phép | Cách truy cập |
