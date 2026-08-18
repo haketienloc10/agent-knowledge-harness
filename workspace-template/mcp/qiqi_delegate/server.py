@@ -463,7 +463,7 @@ QiQi MCP result handoff protocol:
 - Preserve all existing content in that Markdown file.
 - Replace exactly this pending marker under the newest Result section:
   {marker}
-- Before this turn settles, replace the marker with concise Markdown containing these headings in exactly this order:
+- Before this turn settles, replace the marker with Markdown containing these headings in exactly this order:
   `### Outcome`;
   `### Changes`;
   `### Verification`;
@@ -471,6 +471,7 @@ QiQi MCP result handoff protocol:
   `### Blockers`;
   `### Repo-local Knowledge`;
   `### Cross-repo Impact`.
+- The result artifact is the authoritative, complete, and self-contained handoff back to QiQi. Write all task output needed to understand, verify, or continue the work into the artifact. Do not rely on the chat/final response for any task information; it may be omitted or contain only a summary.
 - Under `### Outcome`, write exactly `completed` or `blocked`.
 - If the turn is blocked, finalize this result section with Outcome `blocked` before presenting the interactive blocker or question.
 """

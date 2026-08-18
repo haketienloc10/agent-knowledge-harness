@@ -3,8 +3,10 @@
 Thư mục này lưu behavior, contract và acceptance criteria do repository hiện
 tại sở hữu và cần được bảo toàn qua thay đổi.
 
-Chỉ tạo tài liệu khi source và test chưa đủ để agent hiểu ổn định hành vi cần
-giữ hoặc khi nhiều thay đổi tiếp theo cần cùng một specification.
+Không cần tạo tài liệu cho behavior có thể đọc thấy trực tiếp và rõ ràng từ source
+hoặc test hiện tại. Khi task xác nhận behavior/contract không tầm thường mà agent
+tương lai cần hiểu ổn định hoặc nhiều thay đổi có thể dùng lại, tạo hoặc cập nhật
+specification phù hợp.
 
 Mỗi tài liệu nên nêu rõ:
 
@@ -14,5 +16,6 @@ Mỗi tài liệu nên nêu rõ:
 - acceptance criteria;
 - verification và source of truth.
 
-Contract ảnh hưởng nhiều repository phải được trả về QiQi như cross-repo
-knowledge candidate; không mô tả repository khác như nguồn sự thật tại đây.
+Nếu contract ảnh hưởng nhiều repository, giữ source of truth repo-local đúng phạm
+vi của repo hiện tại và handoff phần ảnh hưởng cùng evidence cho QiQi qua
+Cross-repo Impact. Không mô tả repository khác như nguồn sự thật tại đây.
