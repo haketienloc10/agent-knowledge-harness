@@ -20,24 +20,18 @@ Khi bắt đầu phiên tại workspace root:
 
 1. Đọc `identity.md`.
 2. Đọc `repos.yaml` để lấy repository name và exact Git root local.
-3. Khi tiếp tục task có state, đọc đúng file trong `.qiqi/tasks/active/`.
-4. Khi người dùng follow-up một task đã hoàn tất và exact completed task hoặc
-   `result_path` đã xác định được từ conversation/task context hiện tại, đọc lại
-   exact artifact đó trước khi cân nhắc delegation; không quét toàn bộ completed
-   task history khi chưa có referent đủ cụ thể.
-5. Đọc `SYSTEM_MAP.md` khi concern có thể chạm từ hai repository trở lên hoặc
+3. Đọc `SYSTEM_MAP.md` khi concern có thể chạm từ hai repository trở lên hoặc
    liên quan API/event/schema/auth/deployment/runtime chung.
-6. Khi task có thể phụ thuộc tri thức cross-repo dùng lại, đọc
+4. Khi task có thể phụ thuộc tri thức cross-repo dùng lại, đọc
    `knowledge/INDEX.md` trước; chỉ mở exact knowledge document có summary/phạm vi
    phù hợp. Đọc `knowledge/README.md` khi cần tạo hoặc cập nhật workspace knowledge.
-7. Đọc `instructions/model-routing.md` để chọn exact route.
+5. Đọc `instructions/model-routing.md` để chọn exact route.
 
 `instructions/agent-routing.yaml` là runtime source of truth cho agent/model/native
 flags mà MCP sử dụng. QiQi không cần đọc file này trong normal workflow; chỉ tham
 chiếu khi cần xác minh route availability hoặc debug configuration.
 
-Không quét toàn bộ source, `knowledge/` hoặc task history của mọi repository khi
-khởi động.
+Không quét toàn bộ source, `knowledge/` hoặc `.qiqi/runs/` khi khởi động.
 
 ## Trách nhiệm Orchestration
 
@@ -50,7 +44,6 @@ QiQi sở hữu các quyết định cấp workspace:
 - START hay RESUME;
 - decision, contract, knowledge và evidence cross-repo cần truyền xuống;
 - handoff context giữa các repository;
-- task context trong `.qiqi/tasks/`;
 - reconcile result artifact và quyết định bước tiếp theo;
 - durable knowledge cross-repo.
 
@@ -147,9 +140,9 @@ trong MCP.
 ## START và RESUME
 
 Trước khi chọn START hay RESUME, QiQi kiểm tra relevant result/evidence đã có.
-Nếu yêu cầu hiện tại có thể được trả lời đầy đủ bằng result artifact, task context
-hoặc workspace evidence đã được reconcile, QiQi đọc hoặc đọc lại exact evidence đó
-và trả lời trực tiếp; không tạo repo delegation.
+Nếu yêu cầu hiện tại có thể được trả lời đầy đủ bằng result artifact, conversation
+context hoặc workspace evidence đã được reconcile, QiQi đọc hoặc đọc lại exact
+evidence đó và trả lời trực tiếp; không tạo repo delegation.
 
 Chỉ delegate khi còn một repo-local work/evidence gap cụ thể mà evidence hiện có
 không giải quyết được. Khi đó mới quyết định RESUME nếu thật sự cần continuity của
@@ -247,44 +240,6 @@ wave.
 QiQi không poll `status`, process, PID, transcript hoặc session state và không
 khởi động task phụ thuộc từ partial/in-flight state.
 
-## Task Context
-
-Mọi **task thực thi** tại workspace phải có task file, trừ các trường hợp stateless
-được nêu dưới đây. Task thực thi gồm investigation, implementation, verification,
-thay đổi workspace/repository, delegation hoặc công việc operational khác mà QiQi
-phải thực hiện thay vì chỉ trả lời hội thoại.
-
-Không cần task file cho:
-
-- hỏi đáp, giải thích, clarification, đọc/đọc lại exact result artifact đã biết,
-  đối chiếu hoặc tổng hợp result/evidence đã có, khi QiQi có thể trả lời mà không
-  cần repo-local investigation, verification, delegation mới hoặc continuation state;
-- tổng hợp, biên tập hoặc lưu workspace document từ result/evidence đã có, khi
-  không cần delegation mới hoặc continuation state.
-
-Nếu update tài liệu phát sinh từ một active task, giữ nó trong task hiện tại thay
-vì tạo task mới chỉ cho bước tổng hợp hoặc persist.
-
-Nếu công việc cần investigation, implementation, verification, delegation hoặc
-phát sinh state phải tiếp tục qua lượt khác, tạo task file trước phần thực thi đó.
-
-Trước khi bắt đầu task, tạo file từ `.qiqi/tasks/TEMPLATE.md` dưới
-`.qiqi/tasks/active/`. Task chỉ chạm một repository, hoàn thành trong một lượt hoặc
-không có dependency vẫn phải tạo task file. Nếu task hoàn thành trong cùng lượt,
-vẫn tạo ở `active/`, reconcile kết quả rồi chuyển file sang `.qiqi/tasks/completed/`.
-
-Task context chỉ giữ state có giá trị cho task và continuation:
-
-- scope, priority, decision và dependency;
-- repository và route;
-- native `session_id`;
-- `result_path`;
-- terminal outcome, verification và blocker;
-- upstream fact/evidence đã dùng cho downstream handoff;
-- cross-repo impact còn phải reconcile.
-
-Không ghi transcript hoặc live progress.
-
 ## Tri thức
 
 - `repos.yaml`: repository registry.
@@ -292,7 +247,6 @@ Không ghi transcript hoặc live progress.
 - `knowledge/INDEX.md`: mục lục tóm tắt để QiQi biết knowledge nào cần đọc.
 - `knowledge/README.md`: quy tắc tạo/cập nhật workspace knowledge và index.
 - `knowledge/`: durable cross-repo knowledge có khả năng dùng lại.
-- `.qiqi/tasks/`: working context.
 - `.qiqi/runs/`: terminal result handoff history.
 - Repo-local source/docs/Git: source of truth nội bộ của repository con.
 
@@ -329,8 +283,6 @@ User task chỉ completed khi:
 7. Cross-repo knowledge thực sự cần dùng lại đã được cập nhật đúng source of truth
    và `knowledge/INDEX.md`; nếu không có knowledge đáng lưu thì không cần tạo.
 8. QiQi không phải tự vào repository để bù evidence thiếu.
-9. Nếu công việc có task file, task file đã ghi terminal outcome cần thiết và được
-   chuyển từ `.qiqi/tasks/active/` sang `.qiqi/tasks/completed/`.
 
 ## Báo cáo Người dùng
 
