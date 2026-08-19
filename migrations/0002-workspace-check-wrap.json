@@ -1,0 +1,20 @@
+{
+  "version": 2,
+  "from_ref": "358bd9ad1942985cb637998b5e5f12d46488761e",
+  "to_ref": "f553522efa7f952103ef0e271d698d9675da3e01",
+  "description": "make workspace checker tolerate Markdown line wrapping",
+  "workspace": {
+    "merge": [],
+    "replace": [
+      "workspace-template/scripts/workspace-check.sh"
+    ],
+    "delete": [],
+    "manual_review": []
+  },
+  "repo": {
+    "merge": [],
+    "replace": [],
+    "delete": [],
+    "manual_review": []
+  }
+}
