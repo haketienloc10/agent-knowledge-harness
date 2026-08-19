@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "from_ref": "fafdd1f6eac814543b27ce646fe12bfba8a41437",
+  "to_ref": "358bd9ad1942985cb637998b5e5f12d46488761e",
+  "description": "shared knowledge architecture, agent-facing schema, and usage policy",
+  "workspace": {
+    "merge": [],
+    "replace": [
+      "workspace-template/AGENTS.md",
+      "workspace-template/.qiqi/tasks/TEMPLATE.md",
+      "workspace-template/.qiqi/tasks/completed/README.md",
+      "workspace-template/README.md",
+      "workspace-template/docs/WORKSPACE_SETUP.md",
+      "workspace-template/scripts/workspace-check.sh"
+    ],
+    "delete": [
+      "workspace-template/knowledge/INDEX.md",
+      "workspace-template/knowledge/README.md",
+      "workspace-template/knowledge/contracts/README.md",
+      "workspace-template/knowledge/decisions/README.md",
+      "workspace-template/knowledge/glossary.md",
+      "workspace-template/knowledge/systems/README.md"
+    ],
+    "manual_review": [
+      "workspace-template/SYSTEM_MAP.md",
+      "workspace-template/identity.md"
+    ]
+  },
+  "repo": {
+    "merge": [],
+    "replace": [
+      "repo-template/AGENTS.md",
+      "repo-template/docs/REPO_SETUP.md",
+      "repo-template/scripts/repo-check.sh"
+    ],
+    "delete": [],
+    "manual_review": [
+      "repo-template/ARCHITECTURE.md"
+    ]
+  }
+}

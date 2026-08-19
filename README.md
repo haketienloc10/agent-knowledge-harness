@@ -211,9 +211,7 @@ Repo agent hiểu concern rồi áp dụng Knowledge MCP decision rule nhưng v�
 
 ## Migrate workspace đã tồn tại
 
-Từ checkout của `agent-knowledge-harness`, script versioned migration nhận một
-workspace path, đọc `repos.yaml`, rồi migrate workspace và từng exact Git root con.
-Nên chạy dry-run trước:
+Từ checkout của `agent-knowledge-harness`, public command vẫn là:
 
 ```bash
 bash scripts/migrate-workspace.sh --dry-run /path/to/multi-repo
@@ -221,12 +219,29 @@ bash scripts/migrate-workspace.sh /path/to/multi-repo
 bash scripts/migrate-workspace.sh --status /path/to/multi-repo
 ```
 
-Thêm `--verify` để chạy `workspace-check.sh` và `repo-check.sh` trước khi ghi migration
-state. `--force` chỉ dành cho conflict thật sự không thể merge tự động và có thể thay
-thế local content ở managed added/modified file, nên phải review trước khi dùng.
+Shell script chỉ là stable launcher; migration core nằm trong
+`scripts/migrate_workspace.py`. Script đọc `repos.yaml`, rồi migrate workspace và
+từng exact Git root con. Thêm `--verify` để chạy `workspace-check.sh` và
+`repo-check.sh` trước khi ghi migration state.
 
-Migration definitions nằm trong `migrations/` và pin exact `FROM_REF` / `TO_REF`.
-State được lưu tập trung tại:
+Migration definitions là JSON dưới `migrations/`, pin exact `from_ref` / `to_ref`
+và khai báo strategy riêng cho từng file:
+
+- `replace`: template-owned policy/docs/checker. Nếu local file đã diverge, script
+  archive bản local vào `.qiqi/migration-backups/vNNNN/...` rồi replace bằng target
+  template; không cần `--force` và không mất customization cũ;
+- `merge`: dành cho future migration nhỏ nơi local customization cần được giữ bằng
+  3-way merge; conflict overlap mới dừng preflight, `--force` mới cho phép backup +
+  replace;
+- `delete`: legacy template path. Nếu local content diverge, archive trước rồi xóa;
+- `manual_review`: live/customized artifact; không overwrite tự động.
+
+Migration v1 là architecture rewrite lớn nên toàn bộ template-owned `AGENTS.md`,
+README/setup/checker/task guidance dùng `replace` có backup. Workspace `SYSTEM_MAP.md`,
+`identity.md` và repo `ARCHITECTURE.md` vẫn là `manual_review` vì chứa live truth.
+
+Preflight chạy cho workspace + toàn bộ repo của cùng migration version trước khi ghi
+managed file nào. State được lưu tập trung tại:
 
 ```text
 <workspace>/.qiqi/agent-knowledge-harness-migrations.tsv
@@ -234,22 +249,6 @@ State được lưu tập trung tại:
 
 State giữ version riêng cho workspace và từng `repo:<relative-path>`, nên repository
 được thêm vào `repos.yaml` sau này vẫn bắt đầu migrate từ version 0.
-
-Mỗi migration chỉ tự động thay **template-managed artifacts** và chạy preflight cho
-workspace + toàn bộ repo trước khi ghi file nào:
-
-- target bằng target template → skip idempotently;
-- target bằng base template hoặc đang thiếu → apply target template;
-- managed file `M` đã diverge → thử 3-way merge với `FROM_REF` làm base và `TO_REF`
-  làm incoming template; chỉ conflict khi local edit overlap template change;
-- managed file `D` đã diverge → archive bản local vào
-  `.qiqi/migration-backups/vNNNN/...` rồi remove legacy path, không mất dữ liệu;
-- added file collision hoặc merge conflict thật sự → stop preflight; `--force` chỉ
-  dùng khi chủ động chấp nhận replace.
-
-Live/customized artifacts như workspace `SYSTEM_MAP.md`, `identity.md` và repo
-`ARCHITECTURE.md` không bị overwrite tự động; migration chỉ liệt kê chúng để human
-review khi template semantics liên quan thay đổi.
 
 ## Result artifact
 
