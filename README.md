@@ -209,6 +209,43 @@ bash scripts/repo-check.sh
 Repo agent hiểu concern rồi áp dụng Knowledge MCP decision rule nhưng vẫn không được
 đọc sibling source/result.
 
+## Migrate workspace đã tồn tại
+
+Từ checkout của `agent-knowledge-harness`, script versioned migration nhận một
+workspace path, đọc `repos.yaml`, rồi migrate workspace và từng exact Git root con.
+Nên chạy dry-run trước:
+
+```bash
+bash scripts/migrate-workspace.sh --dry-run /path/to/multi-repo
+bash scripts/migrate-workspace.sh /path/to/multi-repo
+bash scripts/migrate-workspace.sh --status /path/to/multi-repo
+```
+
+Thêm `--verify` để chạy `workspace-check.sh` và `repo-check.sh` trước khi ghi migration
+state. `--force` cho phép replace/delete managed file đã diverge và vì vậy chỉ nên
+dùng sau khi đã review conflict.
+
+Migration definitions nằm trong `migrations/` và pin exact `FROM_REF` / `TO_REF`.
+State được lưu tập trung tại:
+
+```text
+<workspace>/.qiqi/agent-knowledge-harness-migrations.tsv
+```
+
+State giữ version riêng cho workspace và từng `repo:<relative-path>`, nên repository
+được thêm vào `repos.yaml` sau này vẫn bắt đầu migrate từ version 0.
+
+Mỗi migration chỉ tự động thay **template-managed artifacts**. Trước khi overwrite
+hoặc delete, script so target với template ở migration base/target:
+
+- target bằng target template → skip idempotently;
+- target bằng base template hoặc đang thiếu → apply;
+- target đã diverge → stop với conflict, trừ khi dùng `--force`.
+
+Live/customized artifacts như workspace `SYSTEM_MAP.md`, `identity.md` và repo
+`ARCHITECTURE.md` không bị overwrite tự động; migration chỉ liệt kê chúng để human
+review khi template semantics liên quan thay đổi.
+
 ## Result artifact
 
 Current qiqi_delegate compatibility contract vẫn có headings:
