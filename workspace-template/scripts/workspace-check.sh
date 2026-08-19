@@ -145,7 +145,7 @@ if [[ -f "$agents_md" ]]; then
     fail 'AGENTS.md: missing no-polling child-state invariant'
   rg -q 'QiQi không trực tiếp gọi `codex`, `claude` hoặc coding-agent CLI khác' "$agents_md" || \
     fail 'AGENTS.md: missing direct-agent-CLI bypass prohibition'
-  rg -U -q 'Không[[:space:]]+fallback sang shell-based `codex`, `claude`' "$agents_md" || \
+  rg -U -q 'Không[[:space:]]+fallback[[:space:]]+sang[[:space:]]+shell-based[[:space:]]+`codex`,[[:space:]]+`claude`' "$agents_md" || \
     fail 'AGENTS.md: missing MCP-failure shell fallback prohibition'
 fi
 
