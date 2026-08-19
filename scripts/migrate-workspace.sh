@@ -8,7 +8,7 @@ Usage:
 
 Options:
   --dry-run           Show planned changes without writing files or migration state.
-  --force             Overwrite/delete diverged managed files instead of stopping.
+  --force             Replace colliding added/modified managed files when merge is unsafe.
   --verify            Run workspace-check.sh and each repo-check.sh before recording state.
   --status            Show recorded migration versions and exit.
   --to-version <n>    Apply migrations only through version <n>.
@@ -16,6 +16,10 @@ Options:
 
 Migration state is stored in:
   <workspace>/.qiqi/agent-knowledge-harness-migrations.tsv
+
+Diverged modified managed files are migrated with a three-way merge using the
+migration FROM_REF as base and TO_REF as the incoming template. Diverged files
+removed by a migration are archived under .qiqi/migration-backups/ before removal.
 USAGE
 }
 
@@ -85,7 +89,7 @@ done
 [[ -z "$to_version" || "$to_version" =~ ^[0-9]+$ ]] || fail '--to-version must be a non-negative integer'
 ((dry_run && verify)) && fail '--verify cannot be combined with --dry-run'
 
-for command in git yq cmp mktemp; do
+for command in git yq cmp mktemp cp; do
   command -v "$command" >/dev/null 2>&1 || fail "missing required command: $command"
 done
 
@@ -200,6 +204,12 @@ mode_is_supported() {
   [[ "$1" == '100644' || "$1" == '100755' ]]
 }
 
+validate_ref_file_mode() {
+  local ref="$1" source_path="$2" mode
+  mode="$(ref_mode "$ref" "$source_path")"
+  mode_is_supported "$mode" || fail "unsupported Git mode $mode for $source_path at $ref"
+}
+
 target_matches_ref() {
   local target="$1" ref="$2" source_path="$3" mode tmp expected_exec actual_exec
   ref_file_exists "$ref" "$source_path" || return 1
@@ -220,14 +230,81 @@ target_matches_ref() {
   ((expected_exec == actual_exec))
 }
 
-validate_ref_file_mode() {
-  local ref="$1" source_path="$2" mode
-  mode="$(ref_mode "$ref" "$source_path")"
-  mode_is_supported "$mode" || fail "unsupported Git mode $mode for $source_path at $ref"
+render_three_way_merge() {
+  local from_ref="$1" to_ref="$2" source_path="$3" target="$4" output="$5"
+  local base incoming current rc
+  [[ -f "$target" && ! -L "$target" ]] || return 2
+  ref_file_exists "$from_ref" "$source_path" || return 2
+  ref_file_exists "$to_ref" "$source_path" || return 2
+
+  base="$(mktemp)"
+  incoming="$(mktemp)"
+  current="$(mktemp)"
+  git -C "$harness_root" show "$from_ref:$source_path" > "$base"
+  git -C "$harness_root" show "$to_ref:$source_path" > "$incoming"
+  cp -p "$target" "$current"
+
+  set +e
+  git merge-file -p \
+    -L "workspace:${source_path}" \
+    -L "template-base:${source_path}" \
+    -L "template-target:${source_path}" \
+    "$current" "$base" "$incoming" > "$output"
+  rc=$?
+  set -e
+  rm -f "$base" "$incoming" "$current"
+  return "$rc"
+}
+
+three_way_merge_is_clean() {
+  local from_ref="$1" to_ref="$2" source_path="$3" target="$4" merged rc
+  merged="$(mktemp)"
+  set +e
+  render_three_way_merge "$from_ref" "$to_ref" "$source_path" "$target" "$merged"
+  rc=$?
+  set -e
+  rm -f "$merged"
+  return "$rc"
+}
+
+backup_root_for() {
+  local key="$1" version="$2"
+  if [[ "$key" == 'workspace' ]]; then
+    printf '%s/.qiqi/migration-backups/v%04d/workspace\n' "$workspace_root" "$version"
+  else
+    printf '%s/.qiqi/migration-backups/v%04d/repos/%s\n' \
+      "$workspace_root" "$version" "${key#repo:}"
+  fi
+}
+
+preflight_backup_target() {
+  local target="$1" backup="$2"
+  if [[ ! -e "$backup" && ! -L "$backup" ]]; then
+    return 0
+  fi
+  if [[ -f "$backup" && ! -L "$backup" ]] && cmp -s "$target" "$backup"; then
+    return 0
+  fi
+  printf 'CONFLICT: %s\n' "$backup" >&2
+  printf '  migration backup path already exists with different content/type.\n' >&2
+  return 1
+}
+
+backup_diverged_deletion() {
+  local target="$1" backup="$2"
+  [[ -f "$target" && ! -L "$target" ]] || fail "cannot safely archive non-regular managed path: $target"
+  mkdir -p "$(dirname "$backup")"
+  if [[ -e "$backup" || -L "$backup" ]]; then
+    [[ -f "$backup" && ! -L "$backup" ]] || fail "migration backup path is not a regular file: $backup"
+    cmp -s "$target" "$backup" || fail "migration backup already exists with different content: $backup"
+    return 0
+  fi
+  cp -p "$target" "$backup"
 }
 
 preflight_change() {
   local status="$1" from_ref="$2" to_ref="$3" source_path="$4" target="$5"
+  local rc
   case "$status" in
     A)
       validate_ref_file_mode "$to_ref" "$source_path"
@@ -242,9 +319,27 @@ preflight_change() {
          target_matches_ref "$target" "$from_ref" "$source_path"; then
         return 0
       fi
+      if [[ -f "$target" && ! -L "$target" ]]; then
+        set +e
+        three_way_merge_is_clean "$from_ref" "$to_ref" "$source_path" "$target"
+        rc=$?
+        set -e
+        if ((rc == 0)); then
+          return 0
+        fi
+        if ((rc == 1)); then
+          printf 'CONFLICT: %s\n' "$target" >&2
+          printf '  local edits overlap template changes; automatic three-way merge has conflicts.\n' >&2
+          printf '  merge it manually or rerun with --force to replace it with the target template.\n' >&2
+          return 1
+        fi
+      fi
       ;;
     D)
       if [[ ! -e "$target" && ! -L "$target" ]] || target_matches_ref "$target" "$from_ref" "$source_path"; then
+        return 0
+      fi
+      if [[ -f "$target" && ! -L "$target" ]]; then
         return 0
       fi
       ;;
@@ -258,7 +353,7 @@ preflight_change() {
     return 0
   fi
   printf 'CONFLICT: %s\n' "$target" >&2
-  printf '  target differs from both the migration base and target template.\n' >&2
+  printf '  managed path cannot be migrated safely with its current type/content.\n' >&2
   printf '  merge it manually or rerun with --force to replace it.\n' >&2
   return 1
 }
@@ -278,6 +373,28 @@ apply_copy() {
   mv -f "$tmp" "$target"
 }
 
+apply_three_way_merge() {
+  local from_ref="$1" to_ref="$2" source_path="$3" target="$4" mode tmp rc
+  mode="$(ref_mode "$to_ref" "$source_path")"
+  validate_ref_file_mode "$to_ref" "$source_path"
+  tmp="$(mktemp "$(dirname "$target")/.migrate.XXXXXX")"
+  set +e
+  render_three_way_merge "$from_ref" "$to_ref" "$source_path" "$target" "$tmp"
+  rc=$?
+  set -e
+  if ((rc == 0)); then
+    if [[ "$mode" == '100755' ]]; then
+      chmod 755 "$tmp"
+    else
+      chmod 644 "$tmp"
+    fi
+    mv -f "$tmp" "$target"
+    return 0
+  fi
+  rm -f "$tmp"
+  return "$rc"
+}
+
 prune_empty_parents() {
   local dir="$1" stop="$2"
   while [[ "$dir" != "$stop" && "$dir" == "$stop"/* ]]; do
@@ -287,10 +404,11 @@ prune_empty_parents() {
 }
 
 process_file_set() {
-  local phase="$1" from_ref="$2" to_ref="$3" prefix="$4" target_root="$5"
-  shift 5
+  local phase="$1" key="$2" version="$3" from_ref="$4" to_ref="$5" prefix="$6" target_root="$7"
+  shift 7
   local -a source_paths=("$@")
-  local source_path line status changed_path relative target failures=0
+  local source_path line status changed_path relative target failures=0 backup_root backup rc
+  backup_root="$(backup_root_for "$key" "$version")"
 
   for source_path in "${source_paths[@]}"; do
     [[ "$source_path" == "$prefix/"* ]] || fail "migration path outside $prefix: $source_path"
@@ -307,30 +425,95 @@ process_file_set() {
     if [[ "$phase" == 'preflight' ]]; then
       if ! preflight_change "$status" "$from_ref" "$to_ref" "$source_path" "$target"; then
         failures=$((failures + 1))
+      elif [[ "$status" == 'D' && -f "$target" && ! -L "$target" ]] && \
+           ! target_matches_ref "$target" "$from_ref" "$source_path"; then
+        backup="$backup_root/$relative"
+        if ! preflight_backup_target "$target" "$backup"; then
+          failures=$((failures + 1))
+        fi
       fi
       continue
     fi
 
     case "$status" in
-      A|M)
+      A)
         if target_matches_ref "$target" "$to_ref" "$source_path"; then
           log "  = $relative"
         elif ((dry_run)); then
-          log "  + $relative"
+          if [[ -e "$target" || -L "$target" ]]; then
+            log "  + $relative (force replace)"
+          else
+            log "  + $relative"
+          fi
         else
           apply_copy "$to_ref" "$source_path" "$target"
           log "  + $relative"
         fi
         ;;
+      M)
+        if target_matches_ref "$target" "$to_ref" "$source_path"; then
+          log "  = $relative"
+        elif [[ ! -e "$target" && ! -L "$target" ]] || target_matches_ref "$target" "$from_ref" "$source_path"; then
+          if ((dry_run)); then
+            log "  + $relative"
+          else
+            apply_copy "$to_ref" "$source_path" "$target"
+            log "  + $relative"
+          fi
+        elif ((force)); then
+          if ((dry_run)); then
+            log "  + $relative (force replace)"
+          else
+            apply_copy "$to_ref" "$source_path" "$target"
+            log "  + $relative (force replace)"
+          fi
+        else
+          if ((dry_run)); then
+            log "  ~ $relative (clean 3-way merge)"
+          else
+            set +e
+            apply_three_way_merge "$from_ref" "$to_ref" "$source_path" "$target"
+            rc=$?
+            set -e
+            if ((rc == 0)); then
+              log "  ~ $relative (3-way merged)"
+            else
+              fail "three-way merge became unsafe after preflight for $target (exit $rc)"
+            fi
+          fi
+        fi
+        ;;
       D)
         if [[ ! -e "$target" && ! -L "$target" ]]; then
           log "  = $relative (already absent)"
-        elif ((dry_run)); then
-          log "  - $relative"
+        elif target_matches_ref "$target" "$from_ref" "$source_path"; then
+          if ((dry_run)); then
+            log "  - $relative"
+          else
+            rm -f "$target"
+            prune_empty_parents "$(dirname "$target")" "$target_root"
+            log "  - $relative"
+          fi
+        elif [[ -f "$target" && ! -L "$target" ]]; then
+          backup="$backup_root/$relative"
+          if ((dry_run)); then
+            log "  - $relative (archive customized file -> ${backup#"$workspace_root/"})"
+          else
+            backup_diverged_deletion "$target" "$backup"
+            rm -f "$target"
+            prune_empty_parents "$(dirname "$target")" "$target_root"
+            log "  - $relative (archived -> ${backup#"$workspace_root/"})"
+          fi
+        elif ((force)); then
+          if ((dry_run)); then
+            log "  - $relative (force remove non-regular path)"
+          else
+            rm -rf -- "$target"
+            prune_empty_parents "$(dirname "$target")" "$target_root"
+            log "  - $relative (force removed)"
+          fi
         else
-          rm -f "$target"
-          prune_empty_parents "$(dirname "$target")" "$target_root"
-          log "  - $relative"
+          fail "non-regular deleted managed path became unsafe after preflight: $target"
         fi
         ;;
       *)
@@ -356,14 +539,14 @@ load_migration() {
   ref_exists "$TO_REF" || fail "migration $VERSION target commit is unavailable: $TO_REF"
 }
 
-apply_target_migrations() {
-  local key="$1" prefix="$2" target_root="$3" current next migration_file
+run_target_migrations() {
+  local phase="$1" key="$2" prefix="$3" target_root="$4" current next migration_file
   local -a files=() manual_review=()
   current="$(get_state_version "$key")"
   ((current <= target_version)) || fail "$key is recorded at future version $current (target $target_version)"
 
   if ((current == target_version)); then
-    log "$key: already at version $current"
+    [[ "$phase" == 'apply' ]] && log "$key: already at version $current"
     return 0
   fi
 
@@ -385,26 +568,26 @@ apply_target_migrations() {
       fi
     fi
 
-    log "$key: preflight migration $VERSION ${DESCRIPTION:+- $DESCRIPTION}"
-    if ! process_file_set preflight "$FROM_REF" "$TO_REF" "$prefix" "$target_root" "${files[@]}"; then
-      fail "$key migration $VERSION has conflicts; no files for this migration were changed"
-    fi
-
-    if ((dry_run)); then
-      log "$key: dry-run migration $VERSION"
+    if [[ "$phase" == 'preflight' ]]; then
+      log "$key: preflight migration $VERSION ${DESCRIPTION:+- $DESCRIPTION}"
+      process_file_set preflight "$key" "$VERSION" "$FROM_REF" "$TO_REF" "$prefix" "$target_root" "${files[@]}" || return 1
     else
-      log "$key: apply migration $VERSION"
-    fi
-    process_file_set apply "$FROM_REF" "$TO_REF" "$prefix" "$target_root" "${files[@]}"
+      if ((dry_run)); then
+        log "$key: dry-run migration $VERSION"
+      else
+        log "$key: apply migration $VERSION"
+      fi
+      process_file_set apply "$key" "$VERSION" "$FROM_REF" "$TO_REF" "$prefix" "$target_root" "${files[@]}"
 
-    if ((${#manual_review[@]} > 0)); then
-      log "$key: manual review (not overwritten automatically):"
-      for source_path in "${manual_review[@]}"; do
-        log "  ! ${source_path#"$prefix/"}"
-      done
-    fi
+      if ((${#manual_review[@]} > 0)); then
+        log "$key: manual review (not overwritten automatically):"
+        for source_path in "${manual_review[@]}"; do
+          log "  ! ${source_path#"$prefix/"}"
+        done
+      fi
 
-    state["$key"]="$VERSION"
+      state["$key"]="$VERSION"
+    fi
     current="$VERSION"
   done
 }
@@ -423,10 +606,22 @@ write_state() {
   mv -f "$temp" "$state_file"
 }
 
-apply_target_migrations workspace workspace-template "$workspace_root"
+preflight_failed=0
+if ! run_target_migrations preflight workspace workspace-template "$workspace_root"; then
+  preflight_failed=1
+fi
 for index in "${!repo_paths[@]}"; do
   repo_rel="${repo_paths[$index]}"
-  apply_target_migrations "repo:$repo_rel" repo-template "${repo_roots[$index]}"
+  if ! run_target_migrations preflight "repo:$repo_rel" repo-template "${repo_roots[$index]}"; then
+    preflight_failed=1
+  fi
+done
+((preflight_failed == 0)) || fail 'migration preflight has conflicts; no managed files were changed'
+
+run_target_migrations apply workspace workspace-template "$workspace_root"
+for index in "${!repo_paths[@]}"; do
+  repo_rel="${repo_paths[$index]}"
+  run_target_migrations apply "repo:$repo_rel" repo-template "${repo_roots[$index]}"
 done
 
 if ((verify)); then
