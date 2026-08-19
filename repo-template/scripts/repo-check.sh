@@ -92,7 +92,7 @@ if [[ -f "$agents" ]]; then
     fail 'AGENTS.md: QiQi must broker live cross-repo handoff'
   rg -U -q 'context\.repo.*context\.domain.*ranking hint|context\.repo.*ranking hint' "$agents" || \
     fail 'AGENTS.md: repo/domain context must be ranking-only for shared knowledge'
-  rg -U -q 'live source/test.*thắng|source/test.*thắng' "$agents" || \
+  rg -U -q '(?s)(live source/test|source/test).*?thắng' "$agents" || \
     fail 'AGENTS.md: live owner source/test must override stale shared knowledge'
   rg -U -q 'không truyền filename, path,[[:space:]]+directory' "$agents" || \
     fail 'AGENTS.md: agent must not own knowledge filesystem layout'
