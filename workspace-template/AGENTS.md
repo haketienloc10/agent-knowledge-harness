@@ -33,9 +33,8 @@ Khi bắt đầu phiên tại workspace root:
 3. Đọc `SYSTEM_MAP.md` khi concern có thể chạm từ hai repository trở lên hoặc
    liên quan API/event/schema/auth/deployment/runtime chung.
 4. Đọc `instructions/model-routing.md` để chọn exact route.
-5. Khi đã hiểu concern của request/work turn, tạo nhiều search terms liên quan và
-   gọi `knowledge_read`; ưu tiên canonical English concepts và giữ original-language
-   hoặc project aliases khi chúng giúp retrieval.
+5. Khi đã hiểu concern của request/work turn, áp dụng decision rule trong
+   `## Shared Knowledge`; không gọi `knowledge_read` chỉ vì session bắt đầu.
 
 `instructions/agent-routing.yaml` là runtime source of truth cho agent/model/native
 flags mà MCP sử dụng. QiQi không cần đọc file này trong normal workflow; chỉ tham
@@ -49,9 +48,46 @@ knowledge store trên filesystem; chỉ dùng Knowledge MCP.
 Shared knowledge là reusable, non-trivial, evidence-backed context; nó không phải
 live source of truth mạnh hơn current owner source/test.
 
+### Khi nào dùng
+
+**MUST `knowledge_read`** sau khi hiểu request nếu prior durable knowledge có khả
+năng thay đổi quyết định orchestration hoặc câu trả lời của QiQi. Các tín hiệu
+điển hình:
+
+- repo selection, dependency/wave hoặc task semantics phụ thuộc system/domain rule,
+  ownership, invariant hoặc decision đã có;
+- concern chạm API/event/schema/auth/security/deployment/runtime contract hoặc
+  boundary dùng chung;
+- request nhắc decision/convention trước đây, recurring issue, known pitfall hoặc
+  durable context từ work cũ có thể giúp tránh investigation/delegation lặp lại;
+- QiQi có thể trả lời hoặc thu hẹp delegation bằng reusable knowledge đã persist;
+- QiQi chuẩn bị create/update shared knowledge và cần search existing concept để
+  dedupe/resolve exact identity.
+
+**MAY `knowledge_read`** khi chưa chắc durable context có tồn tại nhưng một query
+ngắn có thể giảm uncertainty hoặc tránh lặp lại decision cũ.
+
+**SKIP `knowledge_read`** khi shared knowledge không thể thay đổi hành động hợp lý,
+ví dụ:
+
+- report/status-only từ result artifact hoặc conversation evidence đã đủ;
+- mechanical workspace edit/format/typo không đổi semantics;
+- exact lookup trong `repos.yaml`, `SYSTEM_MAP.md` hoặc result artifact đã được chỉ
+  định và không có dấu hiệu reusable decision/contract liên quan;
+- pure repo-local work mà knowledge chỉ có thể ảnh hưởng implementation bên trong
+  repo, không ảnh hưởng repo selection/dependency/task prompt của QiQi; trong case
+  này QiQi delegate self-contained task và để repo agent áp dụng decision rule của
+  repo thay vì query trùng lặp.
+
+Không dùng Knowledge MCP như ceremony trước mọi delegation hoặc mọi câu trả lời.
+Task read-only vẫn có thể MUST read nếu nó hỏi durable decision, contract, ownership
+hoặc recurring behavior.
+
 ### Đọc
 
-- Hiểu task trước, sau đó tạo khoảng 5–12 search terms có giá trị phân biệt.
+- Khi decision rule yêu cầu read, hiểu task trước rồi tạo khoảng 5–12 search terms
+  có giá trị phân biệt; ưu tiên canonical English concepts và giữ original-language
+  hoặc project aliases khi chúng giúp retrieval.
 - `context.repo` và `context.domain` chỉ là ranking hint, không phải permission
   boundary. Relevant knowledge ở namespace khác vẫn có thể được trả về.
 - Không coi kết quả rỗng là bằng chứng rằng knowledge chưa từng tồn tại nếu
@@ -62,16 +98,25 @@ live source of truth mạnh hơn current owner source/test.
 
 ### Ghi
 
-Trước khi user task kết thúc, QiQi review knowledge được xác nhận từ chính work,
-result và decision hiện tại. Chỉ persist invariant, contract, ownership, flow,
-constraint hoặc durable decision có khả năng giúp task tương lai.
+Knowledge review + `knowledge_write` là **bắt buộc cho substantive workspace work
+có khả năng tạo hoặc xác nhận reusable conclusion**, ví dụ architecture/system
+decision, cross-repo contract/ownership conclusion, recurring operational finding
+hoặc durable constraint được reconcile từ repo results.
+
+Với report/status-only, result replay, mechanical workspace edit hoặc task không
+tạo reusable conclusion, skip knowledge write hoàn toàn; không gọi
+`knowledge_write(entries=[])` chỉ để hoàn thành checklist.
+
+Khi review là bắt buộc, thực hiện trước khi user task kết thúc và chỉ persist
+invariant, contract, ownership, flow, constraint hoặc durable decision có khả năng
+giúp task tương lai:
 
 - Dùng semantic payload; không truyền filename, directory, path hoặc `INDEX.md`.
 - Search existing knowledge trước khi tạo candidate mới; ưu tiên update thay vì
   duplicate.
 - Update phải dùng exact `id` + `expected_revision` từ `knowledge_read`.
-- Nếu không có durable candidate, vẫn gọi `knowledge_write(entries=[])` để ghi nhận
-  knowledge review đã hoàn tất mà không mutate store.
+- Nếu review bắt buộc nhưng không có durable candidate, gọi
+  `knowledge_write(entries=[])` để ghi nhận review hoàn tất mà không mutate store.
 - Nếu có durable candidate nhưng write thất bại, không được silently báo như đã
   persist; nêu failure/caveat trong kết quả người dùng.
 
@@ -116,14 +161,16 @@ QiQi:
 
 1. Xác định repository, dependency và thứ tự producer/consumer nếu có.
 2. Đọc `SYSTEM_MAP.md` khi task chạm boundary liên repository.
-3. Nếu task phụ thuộc delegation trước, đọc terminal result của producer và lấy
+3. Áp dụng Shared Knowledge decision rule nếu durable context có thể thay đổi
+   orchestration; không query chỉ vì sắp delegate.
+4. Nếu task phụ thuộc delegation trước, đọc terminal result của producer và lấy
    đúng fact/evidence cần cho consumer.
-4. Chắt lọc workspace context và upstream result thành context ngắn, tự đủ trong
+5. Chắt lọc workspace context và upstream result thành context ngắn, tự đủ trong
    consumer task prompt; producer result phải đi qua QiQi thành consumer task prompt.
-5. Không yêu cầu execution agent tự mở result artifact của repository khác hoặc
+6. Không yêu cầu execution agent tự mở result artifact của repository khác hoặc
    source của repository anh em. Durable shared knowledge không cần inline toàn bộ:
-   child tự query Knowledge MCP theo concern của turn.
-6. Delegate repo-local work bằng `delegate_repo_task`.
+   child tự query Knowledge MCP theo repo decision rule khi cần.
+7. Delegate repo-local work bằng `delegate_repo_task`.
 
 ### Sau khi delegation
 
@@ -142,19 +189,19 @@ Sau tool success, QiQi đọc `result_path` rồi:
 6. Tiếp tục wave kế tiếp, RESUME, hỏi người dùng hoặc kết thúc dựa trên result đã
    reconcile.
 
-Luồng chuẩn là:
+Luồng substantive có knowledge relevant có thể là:
 
 ```text
-QiQi knowledge_read + workspace context
+QiQi conditional knowledge_read + workspace context
 → task prompt cho repo A
-→ repo A knowledge_read + live repo work + knowledge_write
-→ repo A terminal result
+→ repo A conditional knowledge_read + live repo work
+→ repo A conditional knowledge review/write + terminal result
 → QiQi reconcile live result
 → relevant live result/context trong task prompt cho repo B
-→ repo B knowledge_read + live repo work + knowledge_write
+→ repo B áp dụng cùng decision rule
 → repo B terminal result
 → QiQi reconcile
-→ QiQi knowledge_write cho durable conclusion cấp system/global nếu cần
+→ QiQi knowledge review/write cho durable system/global conclusion nếu required
 ```
 
 Invariant: shared knowledge có thể được mọi agent đọc qua Knowledge MCP; **producer
@@ -318,9 +365,10 @@ User task chỉ completed khi:
 5. Không còn blocker/dependency bắt buộc.
 6. Cross-repo impact cần cho task hiện tại đã được truyền tới đúng downstream
    task hoặc xử lý xong.
-7. QiQi đã review durable knowledge của work hiện tại và gọi `knowledge_write`, kể
-   cả `entries=[]` khi không có gì đáng persist; persistence failure có candidate
-   không bị che giấu.
+7. Với substantive workspace work theo `### Ghi`, QiQi đã review durable knowledge
+   và gọi `knowledge_write`; nếu review không có durable candidate thì dùng
+   `entries=[]`, còn persistence failure có candidate không bị che giấu. Với task
+   thuộc nhóm SKIP, không có knowledge-write requirement.
 8. QiQi không phải tự vào repository để bù evidence thiếu.
 
 ## Báo cáo Người dùng

@@ -10,8 +10,9 @@ user/global scope từ `knowledge-template/`.
 - project-scoped `.codex/config.toml` chỉ đăng ký `qiqi_delegate`;
 - user-scoped MCP `knowledge` có mặt trong fresh QiQi session và fresh child
   Codex/Claude session;
-- QiQi + child đều dùng `knowledge_read` đầu work turn và `knowledge_write` trước
-  finalization;
+- QiQi + child đều áp dụng Shared Knowledge decision rule: read khi prior durable
+  context có thể thay đổi quyết định/cách làm, review/write cho substantive work có
+  khả năng tạo reusable conclusion, không dùng MCP như ceremony ở task trivial;
 - live upstream result vẫn đi qua QiQi vào downstream prompt;
 - child không đọc sibling source/result;
 - Herdr integrations ở trạng thái `current`;
@@ -139,8 +140,18 @@ trực tiếp; không START/RESUME chỉ để report lại.
 
 ### Durable shared context
 
-QiQi và repo agent tự query Knowledge MCP bằng keyword set sau khi hiểu task.
-`context.repo/domain` chỉ boost ranking.
+QiQi và repo agent hiểu task trước rồi áp dụng `AGENTS.md` decision rule:
+
+- **MUST read** khi prior durable knowledge có thể đổi interpretation,
+  orchestration, implementation hoặc verification;
+- **MAY read** khi query ngắn có thể giảm uncertainty hoặc tránh investigation lặp;
+- **SKIP read** khi durable context không thể đổi hành động hợp lý, như
+  typo/format/comment-only, exact local lookup hoặc report/status-only từ evidence
+  đã đủ.
+
+`context.repo/domain` chỉ boost ranking. QiQi không cần duplicate child query nếu
+knowledge chỉ có thể ảnh hưởng repo-local implementation và không ảnh hưởng
+orchestration/task prompt.
 
 ### Live upstream context
 
@@ -157,15 +168,23 @@ child đọc sibling result/source.
 
 ## Bước 10: Knowledge Finalization
 
-Sau work/verification, agent review durable knowledge rồi gọi:
+Knowledge review/write là required cho substantive work có khả năng tạo hoặc xác
+nhận reusable conclusion: implementation/debugging/investigation có kết luận,
+design/decision, contract/ownership change hoặc verified operational finding.
+
+Trivial/mechanical/report-only work không tạo reusable conclusion được skip write;
+không dùng empty write như ritual.
+
+Khi review là required, sau work/verification agent gọi:
 
 ```text
 knowledge_write(entries)
 ```
 
+- search existing concept trước create/update để dedupe;
 - create: semantic payload, không path/filename;
 - update: exact ID + expected revision từ read;
-- no candidate: `entries=[]`;
+- required review nhưng không candidate: `entries=[]`;
 - write failure có durable candidate phải xuất hiện trong result/caveat.
 
 `### Repo-local Knowledge` trong current result contract là legacy label; repo policy
@@ -177,20 +196,26 @@ ghi Knowledge MCP IDs create/update, `None`, hoặc persistence failure ở đâ
 
 Tối thiểu xác minh:
 
-1. QiQi `knowledge_read` hoạt động từ workspace root.
-2. START Codex repo turn: child `knowledge_read` hoạt động; result hợp lệ.
+1. QiQi thấy `knowledge_read` / `knowledge_write` từ workspace root và tự áp dụng
+   decision rule thay vì gọi vô điều kiện.
+2. START Codex repo turn: child `knowledge_read` hoạt động khi task cần durable
+   context; result hợp lệ.
 3. START Claude repo turn: child `knowledge_read` hoạt động nếu Claude route được dùng.
-4. Một task có verified reusable candidate tạo shared knowledge mà không truyền
-   filename/path; MCP trả ID/path/revision.
-5. Follow-up read tìm được document vừa tạo.
-6. Update bằng exact revision thành công; stale revision bị reject.
-7. `knowledge_write(entries=[])` không mutate store.
+4. Một task có verified reusable candidate tự search existing concept, create hoặc
+   update phù hợp mà không truyền filename/path; MCP trả ID/path/revision.
+5. Follow-up read tìm được document vừa tạo/cập nhật.
+6. Update bằng exact revision thành công; stale revision bị reject và agent reread
+   trước retry.
+7. Required review không có candidate dùng `knowledge_write(entries=[])` và không
+   mutate store; trivial task được phép skip write hoàn toàn.
 8. Repo A → QiQi → repo B live dependency vẫn hoạt động mà repo B không đọc repo A
    source/result.
 9. Shared knowledge có body tiếng Việt vẫn tìm được bằng canonical English routing;
    alias tiếng Việt cũng match khi query tương ứng.
 10. Nếu owner source mâu thuẫn shared knowledge, agent dùng live source/test và
     update knowledge chỉ sau verification.
+11. Report/status-only hoặc exact local lookup không bị biến thành unnecessary
+    knowledge call chỉ để thỏa checklist.
 
 ## Bước 12: Checker ownership
 

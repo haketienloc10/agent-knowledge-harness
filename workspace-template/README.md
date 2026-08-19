@@ -49,18 +49,23 @@ các repository khác nhau cùng thấy một service, independent CWD.
 
 ## Execution + Knowledge Model
 
+Knowledge MCP là **conditional path**, không phải bước bắt buộc cho mọi turn.
+`AGENTS.md` quyết định khi nào QiQi/repo agent MUST/MAY/SKIP read và khi nào
+substantive work phải review/write.
+
 ```text
 QiQi
   ↓ understand task
-  ↓ knowledge_read(task keywords)
+  ↓ conditional knowledge_read nếu durable context có thể đổi orchestration/answer
   ↓ live SYSTEM_MAP / existing result evidence
   ↓ self-contained task prompt + route + optional session_id
 qiqi_delegate
   ↓ Herdr workspace + real interactive Codex/Claude
 Execution agent
-  ↓ knowledge_read(task keywords)
+  ↓ understand repo-local concern
+  ↓ conditional knowledge_read theo repo AGENTS.md
   ↓ live repo investigation / implementation / verification
-  ↓ knowledge_write(distilled reusable knowledge or entries=[])
+  ↓ conditional knowledge review/write nếu substantive work tạo reusable conclusion
   ↓ terminal Result vào .qiqi/runs/...md
 qiqi_delegate
   ↓ validate result + native identity
@@ -68,7 +73,7 @@ qiqi_delegate
 QiQi
   ↓ read/reconcile result
   ↓ downstream live handoff nếu cần
-  ↓ knowledge_write(system/global conclusion or entries=[])
+  ↓ conditional knowledge review/write cho durable system/global conclusion
 ```
 
 Shared knowledge là context, không mạnh hơn live owner source/test. Current repo và
@@ -97,21 +102,30 @@ verification.
 
 ## Shared Knowledge Lifecycle
 
-Khi đã hiểu work turn, QiQi tạo nhiều relevant search terms và gọi:
+Sau khi hiểu concern, agent áp dụng decision rule:
 
-```text
-knowledge_read(keywords, context?, limit?)
-```
+- **MUST read** khi prior reusable knowledge có khả năng đổi interpretation,
+  orchestration, implementation hoặc verification;
+- **MAY read** khi query ngắn có thể giảm uncertainty hoặc tránh investigation lặp;
+- **SKIP read** cho typo/format/comment-only, exact local lookup, report/status-only
+  từ evidence đã đủ hoặc mechanical work nơi durable context không thể đổi action.
 
-Trước khi user task kết thúc, QiQi review reusable verified conclusion và gọi:
+QiQi không cần duplicate repo-agent query nếu knowledge chỉ có thể ảnh hưởng
+repo-local implementation và không ảnh hưởng orchestration/task prompt.
+
+Với substantive work có khả năng tạo hoặc xác nhận reusable conclusion, agent
+review durable knowledge và gọi:
 
 ```text
 knowledge_write(entries)
 ```
 
-Nếu không có durable candidate, vẫn dùng `entries=[]` để ghi nhận review hoàn tất.
-Agent không truyền knowledge path/filename/directory; MCP sở hữu storage mechanics.
+Trivial/mechanical/report-only work được skip write. Khi review là required nhưng
+không có durable candidate, dùng `entries=[]`; không dùng empty write như ceremony.
+Trước create/update candidate phải search existing concept để dedupe và ưu tiên
+update.
 
+Agent không truyền knowledge path/filename/directory; MCP sở hữu storage mechanics.
 Nếu Knowledge MCP read lỗi, không được diễn giải như “store không có knowledge”.
 Nếu durable candidate tồn tại nhưng write lỗi, không silently report như đã persist.
 

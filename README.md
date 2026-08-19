@@ -44,7 +44,7 @@ Policy tối thiểu cho execution agent tại mỗi Git root:
 - architecture + verification routing;
 - Git-root/sibling-repo boundaries;
 - live upstream context từ QiQi;
-- Shared Knowledge MCP read/write lifecycle;
+- conditional Shared Knowledge MCP read/write lifecycle;
 - Cross-repo Impact handoff về QiQi;
 - result artifact finalization.
 
@@ -109,7 +109,20 @@ knowledge_read(keywords, context?, limit?)
 knowledge_write(entries)
 ```
 
-Caller hiểu task rồi sinh nhiều search terms. MCP rank deterministic từ generated
+Caller hiểu task rồi quyết định có cần durable context hay không. MCP không phải
+ceremony bắt buộc cho mọi turn:
+
+- MUST read khi prior reusable knowledge có khả năng đổi interpretation,
+  orchestration, implementation hoặc verification;
+- MAY read khi query ngắn có thể giảm uncertainty hoặc tránh investigation lặp;
+- SKIP read cho typo/format/comment-only, exact local lookup, report/status-only từ
+  evidence đã đủ hoặc mechanical work nơi durable context không thể đổi action;
+- substantive work có khả năng tạo/xác nhận reusable conclusion phải review/write;
+  trivial/mechanical/report-only work được skip write;
+- required review không có durable candidate mới dùng `entries=[]`;
+- trước create/update phải search existing concept để dedupe và ưu tiên update.
+
+Khi read, caller sinh nhiều search terms. MCP rank deterministic từ generated
 `INDEX.md`; không dùng embeddings/vector DB/translator/LLM.
 
 Agent không tạo knowledge file trực tiếp. Create submit semantic fields, MCP derive:
@@ -193,8 +206,8 @@ cd /path/to/multi-repo/<repo>
 bash scripts/repo-check.sh
 ```
 
-Repo agent query Knowledge MCP theo concern của task nhưng vẫn không được đọc sibling
-source/result.
+Repo agent hiểu concern rồi áp dụng Knowledge MCP decision rule nhưng vẫn không được
+đọc sibling source/result.
 
 ## Result artifact
 
@@ -223,6 +236,7 @@ thế handoff nếu repo khác còn cần work.
 - Agent submit knowledge; MCP materialize file.
 - Knowledge identity không phải filesystem path.
 - Human Markdown edit là first-class workflow.
+- Knowledge usage là conditional theo task semantics, không phải per-turn ritual.
 - No hidden database; no vector store trong MVP.
 - qiqi_delegate và Knowledge MCP là hai lifecycle độc lập.
 - QiQi broker live evidence; Knowledge MCP broker reusable knowledge.

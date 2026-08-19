@@ -19,12 +19,13 @@ Trước code task không tầm thường:
 1. Xác nhận thư mục hiện tại là Git root bằng `git rev-parse --show-toplevel`.
 2. Đọc `ARCHITECTURE.md` để hiểu responsibility/module/boundary.
 3. Đọc `docs/VERIFY.md` để biết verification command và side effect.
-4. Hiểu concern của task, tạo nhiều search terms có giá trị phân biệt rồi gọi
-   `knowledge_read`. Dùng canonical English concepts và original-language/project
-   aliases khi hữu ích.
+4. Hiểu concern của task rồi áp dụng decision rule trong `## Shared Knowledge MCP`;
+   chỉ gọi `knowledge_read` khi prior durable knowledge có khả năng thay đổi cách
+   hiểu, quyết định hoặc implementation của task.
 5. Đọc artifact repo-local khác chỉ khi concern của task yêu cầu.
 
-Không quét toàn bộ repository hoặc toàn bộ `docs/` khi chưa cần.
+Không quét toàn bộ repository hoặc toàn bộ `docs/` khi chưa cần. Không gọi
+Knowledge MCP chỉ vì session bắt đầu hoặc chỉ để hoàn thành một checklist.
 
 ## Định tuyến theo concern
 
@@ -45,20 +46,68 @@ Knowledge MCP độc lập với current working directory và current repositor
 được đọc. Agent ở repo hiện tại được phép nhận relevant `global`, `system`, `repo`
 hoặc `domain` knowledge khác qua tool.
 
+### Khi nào dùng
+
+**MUST `knowledge_read`** sau khi hiểu task nếu prior durable knowledge có khả năng
+thay đổi implementation, verification hoặc interpretation của task. Các tín hiệu
+điển hình:
+
+- domain rule, invariant hoặc business behavior không hiển nhiên từ một local file;
+- architecture/boundary, ownership hoặc dependency có lịch sử/decision cần reuse;
+- API/event/schema/auth/security contract hoặc compatibility constraint;
+- deployment/runtime/operational constraint, recurring incident, known pitfall hoặc
+  verification behavior đã từng được chắt lọc;
+- task nhắc tới decision/convention trước đây hoặc concept có khả năng đã được xử lý
+  ở repository/domain khác;
+- user hoặc QiQi yêu cầu dùng shared knowledge hoặc kiểm tra prior durable context.
+
+**MAY `knowledge_read`** khi chưa chắc prior reusable knowledge có tồn tại nhưng một
+query ngắn có thể giảm investigation hoặc tránh lặp lại quyết định cũ.
+
+**SKIP `knowledge_read`** khi knowledge không thể thay đổi hành động hợp lý, ví dụ:
+
+- typo/format/comment-only hoặc mechanical edit không đổi semantics;
+- exact local lookup mà câu trả lời đã nằm rõ trong source/file được chỉ định;
+- report/status-only từ evidence hiện có, không cần durable context bổ sung;
+- task đã được giải quyết đầy đủ bởi prompt + live owner source/test và không có
+  dấu hiệu contract/domain/decision/pitfall reusable liên quan.
+
+Task read-only không tự động nghĩa là skip; investigation về behavior, contract,
+decision hoặc recurring issue vẫn dùng knowledge khi các tín hiệu MUST ở trên có
+mặt.
+
+**MUST search existing knowledge trước khi create/update candidate**. Search này là
+bước dedupe/identity và áp dụng ngay cả khi initial task không cần knowledge để thực
+thi. Không create chỉ vì chưa nhớ ID; query concept trước và ưu tiên update nếu đã
+có knowledge phù hợp.
+
 ### Đọc
 
+- Khi decision rule yêu cầu read, hiểu task trước rồi tạo khoảng 5–12 search terms
+  có giá trị phân biệt; dùng canonical English concepts và original-language/project
+  aliases khi hữu ích.
 - Dùng `knowledge_read(keywords, context?, limit?)`; không tự tìm/mở physical
   Knowledge Store path.
 - Shared knowledge là reusable context, không phải oracle mạnh hơn live owner
   source/test. Nếu knowledge mâu thuẫn source/test hiện tại của repo này, source/test
   hiện tại thắng cho task đang làm; xác minh kết luận mới trước khi persist update.
 - Knowledge MCP read failure không đồng nghĩa knowledge không tồn tại. Nếu task vẫn
-  an toàn bằng live source có thể tiếp tục, nhưng phải giữ caveat phù hợp.
+  an toàn bằng live source có thể tiếp tục, nhưng phải giữ caveat phù hợp khi
+  missing durable context có thể ảnh hưởng kết luận.
 
 ### Ghi
 
-Sau implementation/investigation và verification, nhưng **trước khi finalize
-terminal result**, review knowledge đã thực sự được xác nhận trong turn.
+Knowledge review + `knowledge_write` là **bắt buộc cho substantive work có khả năng
+tạo hoặc xác nhận reusable conclusion**, gồm implementation/debugging không tầm
+thường, investigation có kết luận, design/decision, contract/behavior change, hoặc
+verified operational/verification finding.
+
+Với typo/format/comment-only, exact lookup, report/status-only hoặc mechanical task
+không tạo reusable conclusion, skip knowledge write hoàn toàn; không gọi
+`knowledge_write(entries=[])` như ceremony.
+
+Khi knowledge review là bắt buộc, thực hiện sau implementation/investigation và
+verification nhưng **trước khi finalize terminal result**:
 
 1. Không persist working log, task status, điều hiển nhiên đọc trực tiếp từ source,
    guess hoặc hypothesis chưa đủ evidence.
@@ -74,8 +123,8 @@ terminal result**, review knowledge đã thực sự được xác nhận trong 
    là English; multilingual/legacy/project terminology nằm trong aliases khi hữu ích.
 7. Content có thể Vietnamese, English hoặc mixed. Không tạo field `language`.
 8. `sources` phải có provenance đủ để kiểm tra conclusion.
-9. Nếu không có durable candidate, gọi `knowledge_write(entries=[])` để ghi nhận
-   finalization review hoàn tất mà không tạo file.
+9. Nếu review bắt buộc nhưng không còn durable candidate, gọi
+   `knowledge_write(entries=[])` để ghi nhận review hoàn tất mà không tạo file.
 10. Nếu có durable candidate nhưng write thất bại, không tuyên bố đã persist; ghi
     failure/caveat vào terminal result.
 
@@ -118,7 +167,7 @@ Khi cần, prompt phải chứa trực tiếp context đã được QiQi reconci
 
 Agent không tự mở result/source của repository khác để bổ sung live context. Từ
 handoff của QiQi, agent tự khám phá implementation detail bên trong Git root hiện
-tại và query Shared Knowledge MCP độc lập khi cần durable context.
+tại và query Shared Knowledge MCP độc lập khi decision rule yêu cầu durable context.
 
 ### Output về QiQi
 
@@ -135,7 +184,8 @@ sửa result artifact này.
 contract giữ để bảo toàn compatibility. Dưới architecture mới, section này ghi:
 
 - Knowledge MCP IDs đã `created`/`updated` trong turn, hoặc
-- `None` khi `knowledge_write(entries=[])`/không có persisted change, hoặc
+- `None` khi không có persisted change, gồm cả task được phép skip knowledge write
+  hoặc required review kết thúc bằng `knowledge_write(entries=[])`, hoặc
 - persistence failure cụ thể nếu candidate đáng lưu nhưng write không thành công.
 
 Section này không tạo nghĩa vụ ghi knowledge file vào Git repository hiện tại.
@@ -209,10 +259,13 @@ chưa chạy phải có lý do rõ; không biến suy đoán thành evidence.
 ## Hoàn thành
 
 Task chỉ completed khi outcome đã đạt, verification liên quan đã chạy hoặc phần
-chưa chạy được báo rõ, không có regression mới đã biết, agent đã thực hiện
-knowledge review và gọi `knowledge_write` kể cả `entries=[]`, persistence failure
-có durable candidate không bị che giấu, và cross-repo impact cần QiQi biết đã được
-handoff.
+chưa chạy được báo rõ, không có regression mới đã biết, và cross-repo impact cần
+QiQi biết đã được handoff.
+
+Với substantive work theo `### Ghi`, completion còn yêu cầu agent đã thực hiện
+knowledge review và gọi `knowledge_write`; nếu review không có durable candidate thì
+dùng `entries=[]`, còn persistence failure có candidate không được che giấu. Với
+task thuộc nhóm SKIP, không có knowledge-write requirement.
 
 Nếu còn decision hoặc dependency không thể tự giải quyết, task chưa completed;
 tuân theo MCP result-handoff protocol của turn để ghi terminal state và blocker.
