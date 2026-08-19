@@ -110,7 +110,13 @@ for pattern in \
   'remaining uncertainty' \
   'immutable commit/revision' \
   'bug premise' \
-  'knowledge_write(entries=\[\])'; do
+  'knowledge_write(entries=\[\])' \
+  'Run payload readiness before calling knowledge_write' \
+  'routing.summary.*retrieval abstract' \
+  'non-empty `sources` list' \
+  'typed `knowledge_write` payload' \
+  'repair only the fields' \
+  'do not weaken or silently truncate'; do
   rg -q "$pattern" "$skill" || fail "knowledge-distill missing quality gate: $pattern"
 done
 

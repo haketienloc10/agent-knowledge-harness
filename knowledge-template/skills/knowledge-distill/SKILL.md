@@ -152,10 +152,39 @@ Do not flatten routing fields at the entry top level.
   `language` field.
 - Knowledge MCP owns ID/path/render/index/locking/revision/persistence mechanics.
 
-If a tool call fails validation, inspect the typed schema/error and correct the
-payload once; do not probe alternative payload shapes by trial and error.
+### 10. Run payload readiness before calling knowledge_write
 
-### 10. Decide whether to write
+After semantic distillation is complete, convert each surviving candidate into the
+current typed `knowledge_write` payload and inspect the tool schema before the call.
+The typed schema is authoritative for required fields and field limits if they
+change; do not rely on remembered numeric limits from this skill.
+
+**`routing.summary` is a retrieval abstract, not overflow storage for the
+investigation.** Keep only the smallest durable distinction that helps a future
+agent decide whether to read the document. Put supporting evidence, ruled-out
+hypotheses, caveats, detailed reasoning, and materially relevant uncertainty in
+`content`.
+
+Every persisted entry must include a non-empty `sources` list. Metadata compression
+must not delete provenance or uncertainty merely to satisfy a field limit.
+
+Before the call, verify at minimum:
+
+1. the candidate describes what the evidence established, not the task premise;
+2. `routing` is nested and `routing.summary` is concise enough for the current typed
+   schema;
+3. `sources` is present and non-empty, with provenance sufficient to audit material
+   claims;
+4. detailed evidence and uncertainty live in `content`, not in `routing.summary`;
+5. create/update identity and revision follow the current typed schema;
+6. no filesystem-owned or unsupported fields are present.
+
+If validation still fails, inspect the typed schema/error, repair only the fields
+named by that error, and retry once. Do not probe alternative payload shapes by
+trial and error, and do not weaken or silently truncate the durable claim merely to
+make validation pass.
+
+### 11. Decide whether to write
 
 Write only candidates that survive the quality gates above.
 
