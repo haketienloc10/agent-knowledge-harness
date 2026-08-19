@@ -222,8 +222,8 @@ bash scripts/migrate-workspace.sh --status /path/to/multi-repo
 ```
 
 Thêm `--verify` để chạy `workspace-check.sh` và `repo-check.sh` trước khi ghi migration
-state. `--force` cho phép replace/delete managed file đã diverge và vì vậy chỉ nên
-dùng sau khi đã review conflict.
+state. `--force` chỉ dành cho conflict thật sự không thể merge tự động và có thể thay
+thế local content ở managed added/modified file, nên phải review trước khi dùng.
 
 Migration definitions nằm trong `migrations/` và pin exact `FROM_REF` / `TO_REF`.
 State được lưu tập trung tại:
@@ -235,12 +235,17 @@ State được lưu tập trung tại:
 State giữ version riêng cho workspace và từng `repo:<relative-path>`, nên repository
 được thêm vào `repos.yaml` sau này vẫn bắt đầu migrate từ version 0.
 
-Mỗi migration chỉ tự động thay **template-managed artifacts**. Trước khi overwrite
-hoặc delete, script so target với template ở migration base/target:
+Mỗi migration chỉ tự động thay **template-managed artifacts** và chạy preflight cho
+workspace + toàn bộ repo trước khi ghi file nào:
 
 - target bằng target template → skip idempotently;
-- target bằng base template hoặc đang thiếu → apply;
-- target đã diverge → stop với conflict, trừ khi dùng `--force`.
+- target bằng base template hoặc đang thiếu → apply target template;
+- managed file `M` đã diverge → thử 3-way merge với `FROM_REF` làm base và `TO_REF`
+  làm incoming template; chỉ conflict khi local edit overlap template change;
+- managed file `D` đã diverge → archive bản local vào
+  `.qiqi/migration-backups/vNNNN/...` rồi remove legacy path, không mất dữ liệu;
+- added file collision hoặc merge conflict thật sự → stop preflight; `--force` chỉ
+  dùng khi chủ động chấp nhận replace.
 
 Live/customized artifacts như workspace `SYSTEM_MAP.md`, `identity.md` và repo
 `ARCHITECTURE.md` không bị overwrite tự động; migration chỉ liệt kê chúng để human
