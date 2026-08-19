@@ -12,9 +12,18 @@ import sys
 import tempfile
 
 
+MIN_PYTHON = (3, 8)
+
+
 def die(message: str) -> "None":
     print(f"ERROR: {message}", file=sys.stderr)
     raise SystemExit(1)
+
+
+def require_supported_python() -> None:
+    if sys.version_info < MIN_PYTHON:
+        current = ".".join(str(part) for part in sys.version_info[:3])
+        die(f"Python {MIN_PYTHON[0]}.{MIN_PYTHON[1]}+ is required; current interpreter is {current}")
 
 
 def run(cmd: list[str], *, cwd: Path | None = None, check: bool = True, text: bool = True):
@@ -211,7 +220,10 @@ def backup_path(workspace: Path, key: str, version: int, relative: Path) -> Path
     base = workspace / ".qiqi" / "migration-backups" / f"v{version:04d}"
     if key == "workspace":
         return base / "workspace" / relative
-    return base / "repos" / key.removeprefix("repo:") / relative
+    repo_prefix = "repo:"
+    if not key.startswith(repo_prefix):
+        die(f"invalid migration scope key: {key}")
+    return base / "repos" / key[len(repo_prefix):] / relative
 
 
 def check_backup(source: Path, backup: Path) -> bool:
@@ -391,6 +403,7 @@ def apply_scope(harness: Path, workspace: Path, migration: dict, key: str, prefi
 
 
 def main() -> int:
+    require_supported_python()
     args = parse_args()
     for name in ("git", "yq"):
         require_command(name)
