@@ -1,69 +1,46 @@
 # AGENTS.md
 
-Repo này phát triển hai template phối hợp trong multi-repository workspace:
+Repo này phát triển ba template phối hợp nhưng giữ boundary độc lập:
 
-- `workspace-template/`: QiQi Chief of Staff control plane, synchronous Herdr-backed
-  MCP delegation, task continuity và cross-repo knowledge;
+- `workspace-template/`: QiQi Chief of Staff control plane và synchronous
+  Herdr-backed repo delegation;
 - `repo-template/`: workflow tối thiểu cho execution agent trong từng Git
-  repository con.
+  repository con;
+- `knowledge-template/`: Shared Knowledge Store + user-scoped Knowledge MCP độc lập
+  với current workspace/repository.
 
 Repo không chứa tri thức nghiệp vụ thật của một workspace cụ thể.
 
 ## Nguyên tắc
 
 - QiQi là Chief of Staff/coordinator, không phải coding agent của repo con.
-- Mọi repo-local work từ QiQi đi qua đúng một MCP tool: `delegate_repo_task`.
-- Public tool signature là `delegate_repo_task(repository, task, route, session_id?)`.
-- `task` semantics và execution prompt thuộc QiQi; MCP không reinterpret task.
-- QiQi là handoff broker duy nhất giữa các repository: upstream result được QiQi
-  đọc, chắt lọc rồi truyền vào downstream task prompt.
-- Repo agent không tự đọc workspace `knowledge/`, result artifact của repository
-  khác hoặc repository anh em để lấy cross-repo context.
-- Với START, dòng không rỗng đầu tiên của `task` là English task title ngắn; MCP
-  derive readable `<english-task-slug>` từ dòng này cho final result filename.
-- RESUME không rename artifact; nó giữ exact `result_path` được START tạo.
-- MCP chỉ append result-handoff protocol cần cho durable Markdown artifact.
-- Success return chỉ gồm native `session_id` và workspace-relative `result_path`.
-- QiQi phải đọc `result_path` trước khi quyết định bước tiếp; không RESUME chỉ để
-  yêu cầu agent lặp lại report.
-- START và RESUME dùng cùng tool; native `session_id` là optional argument, không
-  có separate resume tool.
-- `workspace-template/instructions/model-routing.md` chỉ sở hữu policy chọn exact
-  route; không duplicate model ID hoặc native CLI flags.
-- `workspace-template/instructions/agent-routing.yaml` là canonical runtime route
-  registry duy nhất MCP load và sở hữu agent/model/native flags + START/RESUME argv.
-- Routing examples nằm dưới `workspace-template/docs/examples/`, chỉ dùng làm tài
-  liệu tham khảo và không phải runtime input.
-- MCP chạy real interactive Codex/Claude qua Herdr; Herdr lifecycle là internal
-  implementation detail, không phải public orchestration API của QiQi.
-- Không expose progress/status/wait/read/transcript/list-runs tool.
-- Independent Git roots có thể chạy đồng thời; trong cùng `qiqi_delegate` server
-  process, cùng resolved Git root hoặc cùng native session bị reject.
-- Dependency/shared mutable resource do QiQi lập kế hoạch; khi không chắc conflict
-  thì chạy tuần tự.
-- Trong delegation wave, QiQi áp dụng Delegation Silence và không poll child state.
-- Repository con sở hữu architecture/domain/implementation/verification nội bộ.
-- Workspace sở hữu registry/topology/task context/result handoff/cross-repo knowledge.
-- `workspace-template/knowledge/INDEX.md` là mục lục read routing; `knowledge/README.md`
-  sở hữu quy tắc lưu/cập nhật knowledge.
-- Repo agent không cập nhật workspace knowledge trực tiếp; nó báo fact/evidence cần
-  QiQi xử lý trong `### Cross-repo Impact`.
+- Mọi repo-local work từ QiQi đi qua đúng một MCP tool:
+  `delegate_repo_task(repository, task, route, session_id?)`.
+- QiQi là handoff broker duy nhất của **live execution evidence** giữa repositories:
+  producer result được QiQi đọc/chắt lọc rồi truyền vào downstream task prompt.
+- Shared durable knowledge đi qua `knowledge_read` / `knowledge_write` và có thể
+  được QiQi hoặc execution agent đọc trực tiếp; current repo chỉ là ranking hint,
+  không phải permission boundary của knowledge.
+- Child agent không tự đọc sibling repository source hoặc sibling result artifact.
+- Product/workspace repositories giữ live source/test/topology truth; Shared
+  Knowledge Store giữ reusable distilled knowledge. Khi conflict ở owner repo,
+  live source/test hiện tại thắng.
+- Agent không sở hữu knowledge filename/path/directory. Agent submit semantic
+  knowledge; Knowledge MCP sở hữu ID/path/render/index/locking/revision/persistence.
+- Human được phép sửa Shared Knowledge Markdown trực tiếp nếu tuân thủ schema rồi
+  chạy `knowledge check`/`knowledge reindex`.
+- Knowledge routing metadata dùng canonical concepts (thường English), aliases có
+  thể multilingual; content tự do và không có field `language`.
+- Không đưa vector DB, embedding, translation hoặc LLM vào Knowledge MCP MVP.
 - Ưu tiên artifact nhỏ, source of truth rõ và evidence có thể kiểm tra.
 
-## Contract Result Artifact
+## qiqi_delegate contract
 
-Mỗi native session có một durable artifact:
+`workspace-template/mcp/qiqi_delegate` vẫn chỉ sở hữu execution/session/result
+handoff. START/RESUME dùng cùng tool, success return chỉ có native `session_id` và
+workspace-relative `result_path`; QiQi phải đọc artifact trước bước tiếp theo.
 
-```text
-.qiqi/runs/<repo>-<english-task-slug>-<native-session-id>.md
-```
-
-`<english-task-slug>` được derive từ dòng không rỗng đầu tiên của START `task`,
-được QiQi viết thành English title ngắn, ưu tiên ASCII. Phần instruction còn lại
-có thể dùng ngôn ngữ khác. START tạo pending artifact rồi promote sau khi native
-identity có sẵn. RESUME append `Task N / Result N` vào exact artifact của session.
-
-Newest result bắt buộc có headings theo thứ tự:
+Current result headings vẫn giữ compatibility:
 
 ```text
 ### Outcome
@@ -75,106 +52,101 @@ Newest result bắt buộc có headings theo thứ tự:
 ### Cross-repo Impact
 ```
 
-`Outcome` là `completed` hoặc `blocked`.
+`### Repo-local Knowledge` là legacy label trong result protocol. Dưới architecture
+mới, repo policy dùng section này để ghi Shared Knowledge MCP IDs create/update,
+`None`, hoặc persistence failure; nó không yêu cầu repo-local knowledge document.
+`### Cross-repo Impact` tiếp tục là live execution-impact signal cho QiQi.
 
-Tool return không duplicate nội dung report; caller đọc `result_path` để reconcile.
-`Repo-local Knowledge` mô tả source of truth nội bộ đã cập nhật. `Cross-repo Impact`
-là outbound handoff cho QiQi để truyền downstream hoặc cập nhật workspace knowledge.
+Không đổi qiqi result protocol trong cùng migration Knowledge MCP trừ khi có quyết
+định compatibility riêng.
 
-## Workflow Hai chiều
+## Shared Knowledge contract
 
-Workflow chuẩn giữa hai template là:
+Public MVP tools:
 
 ```text
-QiQi đọc workspace context/knowledge cần thiết
-→ QiQi gửi self-contained task prompt cho repo A
-→ repo A điều tra/implement/verify + ghi terminal result
-→ QiQi đọc result và reconcile Cross-repo Impact
-→ QiQi đưa relevant fact/evidence vào task prompt cho repo B
-→ repo B thực hiện + ghi terminal result
-→ QiQi reconcile và chỉ lưu workspace knowledge nếu có khả năng dùng lại
+knowledge_read(keywords, context?, limit?)
+knowledge_write(entries)
 ```
 
-Child agents không handoff trực tiếp cho nhau. `.qiqi/runs/` là handoff về QiQi,
-không phải shared mailbox để child agent khác tự đọc.
+Store là Markdown + generated `INDEX.md` với namespaces:
+
+```text
+global/
+systems/
+repos/
+domains/
+```
+
+Identity:
+
+```text
+<scope-kind>:<scope-id>:<canonical-name>
+```
+
+Create không nhận filesystem path. Update bắt buộc exact ID + optimistic revision.
+Detail document là canonical metadata source; `INDEX.md` là generated routing
+projection. Human direct edit làm index stale cho tới khi reindex; read phải fail
+rõ thay vì silently dùng stale index.
+
+Knowledge write phải giữ cross-process lock, atomic file replace, revision conflict
+check và bounded document size. Semantic merge/dedupe vẫn thuộc agent/skill, không
+thuộc MCP core.
 
 ## Khi thay đổi Workspace Template
 
-1. Giữ `AGENTS.md`, `identity.md`, `README.md`, setup guide, knowledge README/index,
-   model routing, agent routing, MCP server và checker đồng bộ cùng workflow.
-2. Giữ đúng một public MCP tool; không thêm delegation path thứ hai bằng shell,
-   daemon hoặc session manager.
-3. Không thêm public `status`, `wait`, `read`, `read_transcript`, `list_runs` hay
-   separate `resume` tool.
-4. Giữ full interactive agent TUI bên trong Herdr; không thay bằng hidden child
-   runner chỉ để lấy output máy đọc.
-5. QiQi phải sở hữu task semantics và cross-repo handoff context; MCP footer chỉ
-   sở hữu result handoff.
-6. START task title phải giữ English result-slug convention; không thêm translator
-   hoặc đổi public MCP schema chỉ để đặt filename.
-7. Repository phải resolve từ `repos.yaml` và path phải là exact Git root.
-8. Không cho nhiều registry entry cùng resolve về một Git root.
-9. `instructions/agent-routing.yaml` là canonical runtime registry duy nhất; route
-   registry sở hữu command/model/flags và runtime placeholders `{model}`,
-   `{session_id}`, `{result_dir}`, `{route_args}`.
-10. `instructions/model-routing.md` chỉ mô tả khi nào QiQi chọn exact route; không
-    copy machine configuration vào policy này.
-11. Routing examples phải nằm dưới `docs/examples/`, ghi rõ documentation-only và
-    không được coi là route khả dụng nếu chưa copy/adapt vào canonical registry.
-12. Native resume phải kiểm tra identity: ID report lại phải khớp ID yêu cầu.
-13. Concurrency guard phải resource-scoped trong một `qiqi_delegate` server
-    process: same Git root hoặc same native session bị reject ngay; không global
-    delegation lock và không silently queue same-repo calls.
-14. Tool success chỉ trả `session_id` + `result_path`; QiQi đọc artifact thay vì
-    mở RESUME turn chỉ để lấy report.
-15. Workspace knowledge read routing bắt đầu từ `knowledge/INDEX.md`; execution
-    agent không được yêu cầu tự đọc workspace knowledge.
-16. Durable workspace knowledge chỉ được tạo/cập nhật khi có khả năng dùng lại và
-    `knowledge/INDEX.md` phải cập nhật cùng thay đổi.
-17. Nếu thay đổi artifact/runtime bắt buộc, cập nhật checker + docs trong cùng PR.
-18. Herdr integration install là setup concern; MCP chỉ preflight selected adapter
-    ở trạng thái `current`.
-19. Không thêm lại Codex hook-trust bypass nếu không có quyết định mới rõ ràng.
+1. Giữ QiQi task semantics, evidence-reuse gate, delegation waves và Delegation
+   Silence không bị knowledge lifecycle làm loãng.
+2. `workspace-template/.codex/config.toml` chỉ sở hữu project-scoped
+   `qiqi_delegate`; không thêm project-specific Knowledge MCP store.
+3. Shared Knowledge MCP phải được cài ở user/global scope để workspace agent và
+   Herdr-launched child agents dùng cùng service independent CWD.
+4. Live producer result vẫn phải đi qua QiQi vào consumer prompt; không thay bằng
+   việc child tự đọc sibling result/source.
+5. `SYSTEM_MAP.md` vẫn là live workspace topology artifact, không tự động chuyển
+   vào Shared Knowledge Store.
+6. Nếu thay đổi artifact/runtime bắt buộc, cập nhật setup/checker/docs liên quan.
 
 ## Khi thay đổi Repository Template
 
-1. Giữ template tối thiểu và không tạo artifact optional rỗng.
-2. Không đưa workspace orchestration, Herdr control plane hoặc cross-repo knowledge
-   store xuống repo con.
-3. Bảo vệ Git-root boundary và cấm agent sửa repository anh em.
-4. Cho phép đúng một exception ngoài Git root: exact `.qiqi/runs/...md` result
-   artifact được MCP handoff trong prompt của turn hiện tại.
-5. Repo-local knowledge cập nhật tại source of truth của repo sở hữu.
-6. Workspace/upstream context phải đến từ QiQi task prompt; child không tự đọc
-   workspace knowledge hoặc sibling result artifact.
-7. Cross-repo impact được báo qua result artifact với fact, affected boundary,
-   evidence và next action nếu rõ; repo agent không trực tiếp orchestration repo khác.
-8. Final result contract phải dùng Markdown headings mà MCP validator yêu cầu.
+1. Giữ Git-root boundary và cấm sửa/đọc sibling repository source.
+2. Knowledge MCP là tool exception, không phải filesystem exception.
+3. Agent query shared knowledge sau khi hiểu task và review/write knowledge trước
+   terminal result.
+4. Live owner source/test thắng shared knowledge khi conflict; verified reusable
+   conclusion mới phải update shared knowledge khi thích hợp.
+5. Cross-repo Impact vẫn phải handoff nếu repository khác cần work, kể cả durable
+   knowledge đã được persist.
+6. Không thêm knowledge directory/index riêng vào repo template.
+
+## Khi thay đổi Knowledge Template
+
+1. Giữ store độc lập với current workspace/repo và không infer root từ CWD.
+2. Agent-facing write schema không expose filename/path/directory/index path.
+3. Identity và canonical path phải deterministic từ semantic scope/name.
+4. `INDEX.md` được generate từ detail metadata; không tạo hai source of truth.
+5. Human-authored Markdown là first-class workflow; checker/reindex dùng cùng core
+   với MCP.
+6. Retrieval deterministic/index-first; context repo/domain chỉ boost ranking.
+7. Update dùng optimistic revision; human external edit không được silent overwrite.
+8. Không thêm `language` field; routing aliases xử lý multilingual terminology.
+9. `sources` bắt buộc cho durable knowledge; guess/hypothesis chưa verified không
+   được persist như fact.
+10. Unit/integrity tests phải bao phủ create/update, stale index, concurrent revision,
+    canonical path/traversal, multilingual alias, empty review và batch failure.
 
 ## Review tối thiểu
 
-Review phải xác nhận:
+Review phải xác nhận cả ba lớp:
 
-- workspace template chỉ expose `delegate_repo_task`;
-- public signature không đổi ngoài quyết định có chủ đích;
-- QiQi-owned prompt + MCP-owned result footer boundary được giữ;
-- QiQi là broker cho upstream → downstream handoff;
-- child không tự đọc workspace knowledge, sibling repository hoặc sibling result;
-- `knowledge/INDEX.md` đủ summary/read routing và `knowledge/README.md` đủ write rules;
-- không còn duplicate root `KNOWLEDGE.md` hoặc proposal lifecycle không cần thiết;
-- START task first line tạo readable English result slug và RESUME giữ cùng path;
-- `model-routing.md` chỉ là exact-route policy;
-- `agent-routing.yaml` là canonical runtime routing source of truth duy nhất;
-- routing examples chỉ nằm trong `docs/examples/` và không bị hiểu là active routes;
-- Codex/Claude đều chạy interactive qua Herdr;
-- native session ID được lấy qua Herdr integration và RESUME identity được kiểm tra;
-- START/RESUME dùng durable session artifact và RESUME append cùng path;
-- success return chỉ có `session_id` + `result_path`;
-- caller policy yêu cầu đọc artifact và cấm report-only RESUME;
-- same Git root/native session conflict bị reject trong cùng server process;
-- different independent Git roots vẫn có thể active đồng thời;
-- Claude stalled-prompt recovery không paste prompt lần hai;
-- transcript không trở thành tool result;
-- checker kiểm đúng workflow hiện tại, không giữ assertion của architecture cũ;
-- README/setup phản ánh đúng bidirectional handoff;
-- workspace/repo-local knowledge boundary không bị phá vỡ.
+- qiqi_delegate public execution contract không bị knowledge service reinterpret;
+- QiQi vẫn broker live upstream → downstream handoff và evidence reuse vẫn trực tiếp
+  answer khi result hiện có đủ;
+- child không tự đọc sibling source/result;
+- Knowledge MCP user/global registration không phụ thuộc repo CWD;
+- Knowledge MCP chỉ expose read/write tools và không expose filesystem decisions;
+- direct human Markdown edit + reindex/check hoạt động;
+- stale revision/index bị reject rõ;
+- content language không ảnh hưởng identity/path và không có `language` field;
+- legacy workspace `knowledge/` store không còn trong workspace template;
+- docs/checkers phản ánh đúng architecture hiện tại, không giữ knowledge lifecycle cũ.

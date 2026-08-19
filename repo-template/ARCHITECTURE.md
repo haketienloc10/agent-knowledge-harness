@@ -1,8 +1,9 @@
 # Architecture
 
-Tài liệu này mô tả kiến trúc **nội bộ** của repository. Quan hệ tổng thể giữa
-nhiều repository thuộc `SYSTEM_MAP.md` tại workspace và không được sao chép đầy
-đủ vào đây.
+Tài liệu này mô tả **live architecture nội bộ** của repository. Quan hệ tổng thể
+giữa nhiều repository thuộc `SYSTEM_MAP.md` tại workspace. Durable reusable
+conclusion được distill qua Shared Knowledge MCP; không copy Shared Knowledge Store
+vào file này.
 
 ## Repository responsibility
 
@@ -23,8 +24,8 @@ nhiều repository thuộc `SYSTEM_MAP.md` tại workspace và không được s
 
 ## Internal data flow
 
-Mô tả luồng chính bên trong repo bằng các bước ngắn và liên kết đến source có
-thể kiểm tra.
+Mô tả luồng chính bên trong repo bằng các bước ngắn và liên kết đến source có thể
+kiểm tra.
 
 ```text
 {{INTERNAL_DATA_FLOW}}
@@ -32,8 +33,9 @@ thể kiểm tra.
 
 ## External boundaries
 
-Chỉ mô tả phần boundary mà repo này trực tiếp sở hữu hoặc tiêu thụ. Chi tiết
-cross-repo đầy đủ thuộc workspace knowledge.
+Chỉ mô tả phần boundary mà repo này trực tiếp sở hữu hoặc tiêu thụ. Live cross-repo
+topology đầy đủ thuộc workspace `SYSTEM_MAP.md`; reusable distilled context có thể
+nằm trong Shared Knowledge Store.
 
 | Boundary | Direction | Contract owner | Local source |
 |---|---|---|---|

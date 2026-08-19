@@ -1,23 +1,20 @@
 # Thiết lập Repository con cho QiQi Workspace
 
 Tài liệu này dùng khi đưa `repo-template/` vào một Git repository nằm trong
-workspace multi-repo. Mục tiêu là giúp execution agent hiểu repo, xác minh thay đổi
-và handoff đúng semantics cho QiQi mà không sao chép protocol do MCP sở hữu.
-
-Không sửa source sản phẩm trong quá trình setup, trừ khi người dùng mở rộng phạm
-vi rõ ràng.
+workspace multi-repo. Shared Knowledge MCP phải được cài ở user/global scope trước
+để fresh repo agent thấy `knowledge_read` / `knowledge_write` independent CWD.
 
 ## Kết quả cần đạt
 
-- `AGENTS.md` định tuyến agent và bảo vệ Git-root boundary;
-- `AGENTS.md` mô tả input từ QiQi và semantics cần handoff ngược về QiQi;
-- MCP footer vẫn là source of truth cho result artifact và result format;
-- `ARCHITECTURE.md` mô tả trách nhiệm, module và boundary nội bộ bằng evidence;
-- `docs/VERIFY.md` chứa command thực tế và side effect;
-- execution agent không tự đọc sibling repository hoặc sibling result artifact để
-  lấy cross-repo context;
-- `bash scripts/repo-check.sh` trả `PASS`;
-- không còn placeholder dạng `{{...}}` trong artifact bắt buộc.
+- `AGENTS.md` bảo vệ Git-root/sibling boundaries;
+- `ARCHITECTURE.md` và `docs/VERIFY.md` có live evidence;
+- execution agent nhận live upstream context từ QiQi, không tự đọc sibling
+  source/result;
+- execution agent query Shared Knowledge MCP sau khi hiểu task;
+- execution agent review/write durable knowledge trước terminal result;
+- agent không tự mở external Knowledge Store filesystem path và không tự chọn
+  knowledge filename/directory;
+- `bash scripts/repo-check.sh` trả `PASS`.
 
 ## Bước 1: Xác nhận Git root
 
@@ -27,101 +24,135 @@ git rev-parse --show-toplevel
 git status --short
 ```
 
-Chỉ tiếp tục khi thư mục cài template đúng bằng Git root. Không chạy Git ở
-workspace root để suy luận trạng thái repository này.
+Template phải nằm đúng Git root.
 
-## Bước 2: Kiểm tra instruction hiện có
+## Bước 2: Xác minh Knowledge MCP user registration
+
+Trong fresh agent session tại repo root, tool inventory phải có:
+
+```text
+knowledge_read
+knowledge_write
+```
+
+CLI registration có thể kiểm tra:
+
+```bash
+codex mcp get knowledge      # nếu dùng Codex
+claude mcp get knowledge     # nếu dùng Claude
+```
+
+Không tạo `.mcp.json`/project knowledge config riêng chỉ để repo này có tool. Store
+phải dùng cùng user-scoped service đã được cài từ `knowledge-template/`.
+
+Knowledge MCP access không nới filesystem boundary: agent dùng content tool trả về,
+không tự tìm/open external store path.
+
+## Bước 3: Merge instruction hiện có
 
 Nếu repo đã có `AGENTS.md` hoặc instruction tương đương:
 
-1. Đọc và phân loại các quy tắc hiện có.
-2. Giữ workflow đặc thù của repo.
-3. Gộp các nguyên tắc tối thiểu từ template: Git-root boundary, đọc
-   `ARCHITECTURE.md`, đọc `docs/VERIFY.md`, input từ QiQi và Cross-repo Impact
-   semantics.
-4. Không sao chép result-handoff mechanics từ MCP footer vào repo instruction.
-5. Không ghi đè toàn bộ file hiện có.
-6. Báo mọi mâu thuẫn không thể hợp nhất an toàn.
+1. giữ workflow đặc thù của repo;
+2. gộp Git-root boundary, `ARCHITECTURE.md`, `docs/VERIFY.md`, QiQi live handoff,
+   Shared Knowledge lifecycle và Cross-repo Impact semantics;
+3. không sao chép qiqi_delegate result mechanics;
+4. không tạo repo-local knowledge store/index mới;
+5. không ghi đè toàn bộ instruction hiện có nếu có thể merge an toàn.
 
-## Bước 3: Khảo sát repository
+## Bước 4: Khảo sát và điền live docs
 
-Thu thập bằng chứng từ:
+Thu thập evidence từ manifest/build, source entrypoint, module/package structure,
+CI/test/config/runtime và docs hiện hữu.
 
-- manifest và build file;
-- source entrypoint;
-- module/package structure;
-- CI configuration;
-- test command;
-- config runtime và deployment;
-- tài liệu hiện hữu.
+`ARCHITECTURE.md` phải mô tả responsibility/module/data flow/boundary bằng evidence.
+`docs/VERIFY.md` phải mô tả command thực tế, side effect và known verified baseline.
 
-Không đoán trách nhiệm, dependency, command hoặc contract chỉ từ tên thư mục.
+Shared Knowledge Store không thay thế hai live docs này.
 
-## Bước 4: Điền `ARCHITECTURE.md`
+## Bước 5: Knowledge read behavior
 
-Hoàn thành tối thiểu:
+Sau khi hiểu concern của task:
 
-- repo sở hữu và không sở hữu chức năng gì;
-- entrypoint;
-- module chính và dependency nội bộ;
-- data flow chính;
-- external boundary mà repo trực tiếp dùng;
-- data ownership và constraint quan trọng;
-- source path hoặc command làm evidence.
+1. tạo nhiều search terms, ưu tiên canonical English concepts;
+2. giữ original-language/project aliases nếu hữu ích;
+3. gọi `knowledge_read`;
+4. `context.repo/domain` chỉ là ranking hint, không permission filter;
+5. relevant knowledge namespace khác vẫn được dùng;
+6. nếu knowledge mâu thuẫn current owner source/test, live source/test thắng sau khi
+   verify.
 
-Không sao chép toàn bộ `SYSTEM_MAP.md` vào repo.
+Read failure không được hiểu thành “knowledge không tồn tại”.
 
-## Bước 5: Điền `docs/VERIFY.md`
+## Bước 6: Live handoff với QiQi
 
-Xác nhận từ CI, manifest hoặc lần chạy thực tế:
+Task prompt của QiQi là nguồn live workspace/upstream context. Repo agent không tự
+đọc sibling source/result.
 
-- prerequisites;
-- bootstrap command;
-- focused check;
-- test liên quan;
-- full verification hoặc build;
-- side effect và thời gian chạy;
-- baseline failure đã được chứng minh nếu có.
+Dependency vẫn là:
 
-Command chưa chạy phải được ghi rõ là chưa xác minh; không biến command dự đoán
-thành source of truth.
+```text
+repo A result
+→ QiQi reconcile
+→ inline relevant live fact/evidence
+→ repo B prompt
+```
 
-## Bước 6: Hiểu handoff với QiQi
+Shared Knowledge MCP chỉ cung cấp durable reusable context; nó không phải mailbox
+cho in-flight result.
 
-Execution agent nhận workspace-level context **chỉ từ task prompt của QiQi**.
-Prompt có thể chứa upstream result, decision và evidence đã xác nhận. Agent không
-tự đi đọc result artifact hoặc source của repository anh em để bổ sung context.
+## Bước 7: Knowledge finalization
 
-Khi chạy qua `qiqi_delegate`, MCP footer cung cấp exact result artifact và format
-cần ghi. Repo instruction không cần định nghĩa lại headings, thứ tự, marker,
-history preservation hoặc Outcome vocabulary.
+Sau work + verification và trước terminal result:
 
-`### Cross-repo Impact` là fact/evidence QiQi cần để điều phối downstream repository
-hoặc workspace. Khi có Cross-repo Impact, nêu affected repository/boundary,
-evidence chính và next action nếu đã rõ. Agent không tự giao task cho repository
-anh em.
+1. review conclusion thực sự reusable/non-trivial/evidence-backed;
+2. search existing knowledge khi có thể là update;
+3. create bằng semantic payload, không filename/path/directory;
+4. update bằng exact ID + expected revision từ `knowledge_read`;
+5. routing metadata dùng canonical concepts, aliases multilingual khi cần;
+6. content tự do về ngôn ngữ, không field `language`;
+7. sources/provenance bắt buộc;
+8. không candidate → `knowledge_write(entries=[])`;
+9. write failure có durable candidate → ghi failure/caveat, không claim persisted.
 
-## Bước 7: Chạy checker
+Current qiqi_delegate result contract vẫn có `### Repo-local Knowledge`. Đây là
+legacy label: ghi Knowledge MCP IDs create/update, `None`, hoặc persistence failure;
+không tạo nghĩa vụ sửa knowledge docs trong Git repo này.
+
+## Bước 8: Cross-repo Impact
+
+Nếu repo khác còn cần action, vẫn ghi `### Cross-repo Impact` với:
+
+- fact/change;
+- affected repository/boundary;
+- evidence từ repo hiện tại;
+- next action nếu rõ.
+
+Persist shared knowledge không thay thế execution handoff.
+
+## Bước 9: Chạy checker
 
 ```bash
 bash scripts/repo-check.sh
 ```
 
-Checker chỉ kiểm tra cấu trúc harness, placeholder, ownership và handoff semantics.
-Nó không kiểm tra lại MCP result format, không chạy test dự án và không thay thế
-verification trong `docs/VERIFY.md`.
+Checker xác nhận Git-root boundary, QiQi live handoff, Shared Knowledge lifecycle và
+MCP result ownership. Nó không chạy product tests; verification thật vẫn theo
+`docs/VERIFY.md`.
 
-## Bước 8: Fresh-session test
+## Bước 10: Fresh-session smoke test
 
-Mở một agent mới tại Git root và xác nhận agent có thể trả lời:
+Xác nhận fresh repo agent có thể:
 
-1. Repo sở hữu chức năng gì?
-2. Command kiểm tra nhanh và đầy đủ là gì?
-3. Agent được phép đọc/sửa phạm vi nào?
-4. Workspace/upstream context đến từ đâu?
-5. Khi nào phải handoff Cross-repo Impact và cần mang theo evidence gì?
-6. Agent có được tự đọc result của repo khác không?
-7. Thành phần nào sở hữu exact result format? — MCP footer, không phải repo policy.
+1. đọc architecture/verification đúng scope;
+2. gọi `knowledge_read` tại repo root;
+3. nhận knowledge ở namespace khác khi keywords match;
+4. không đọc sibling source/result;
+5. với task no-op/read-only không tạo knowledge bừa và finalization dùng empty
+   review khi phù hợp;
+6. với verified reusable test candidate, `knowledge_write` tự derive path và trả
+   ID/path/revision mà agent không truyền path;
+7. stale revision bị reject;
+8. Cross-repo Impact vẫn về QiQi khi downstream repo cần work.
 
-Chỉ báo repo sẵn sàng khi checker pass, artifact đã có evidence và instruction
-hiện có không còn mâu thuẫn chưa xử lý.
+Chỉ coi repo sẵn sàng khi checker pass và fresh-session Knowledge MCP discovery đã
+được xác nhận cho agent family thực sự dùng.

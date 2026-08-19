@@ -1,0 +1,133 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+home="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+project="$home/mcp/knowledge"
+store_root="$home/store"
+bin_dir="${HOME}/.local/bin"
+
+usage() {
+  cat <<'EOF'
+Usage: install-user-mcp.sh [--store-root PATH] [--bin-dir PATH]
+
+Installs a stable user-level `agent-knowledge-mcp` wrapper and registers it with
+available Codex/Claude CLIs. If an MCP registration named `knowledge` already
+exists but does not point at this wrapper, installation fails instead of replacing
+user configuration.
+EOF
+}
+
+while (($#)); do
+  case "$1" in
+    --store-root)
+      [[ $# -ge 2 ]] || { usage >&2; exit 64; }
+      store_root="$2"
+      shift 2
+      ;;
+    --bin-dir)
+      [[ $# -ge 2 ]] || { usage >&2; exit 64; }
+      bin_dir="$2"
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      printf 'ERROR: unknown argument: %s\n' "$1" >&2
+      usage >&2
+      exit 64
+      ;;
+  esac
+done
+
+command -v uv >/dev/null 2>&1 || {
+  printf 'ERROR: missing command: uv\n' >&2
+  exit 69
+}
+command -v python3 >/dev/null 2>&1 || {
+  printf 'ERROR: missing command: python3\n' >&2
+  exit 69
+}
+
+store_root="$(python3 -c 'import os,sys; print(os.path.abspath(os.path.expanduser(sys.argv[1])))' "$store_root")"
+bin_dir="$(python3 -c 'import os,sys; print(os.path.abspath(os.path.expanduser(sys.argv[1])))' "$bin_dir")"
+
+# Install MCP/core dependencies before invoking the maintenance CLI because the CLI
+# imports the same filelock/PyYAML-backed core as the server.
+uv sync --project "$project"
+uv run --project "$project" python "$home/scripts/knowledge.py" init --root "$store_root" >/dev/null
+
+mkdir -p "$bin_dir"
+wrapper="$bin_dir/agent-knowledge-mcp"
+
+HOME_PATH="$home" STORE_PATH="$store_root" python3 - "$wrapper" <<'PY'
+import os
+import shlex
+import sys
+from pathlib import Path
+
+wrapper = Path(sys.argv[1])
+home = os.environ["HOME_PATH"]
+store = os.environ["STORE_PATH"]
+text = "\n".join(
+    [
+        "#!/usr/bin/env bash",
+        "set -euo pipefail",
+        f"export KNOWLEDGE_STORE_ROOT={shlex.quote(store)}",
+        f"exec {shlex.quote(home + '/scripts/knowledge-mcp-server.sh')}",
+        "",
+    ]
+)
+wrapper.write_text(text, encoding="utf-8")
+wrapper.chmod(0o755)
+PY
+
+verify_existing_target() {
+  local client="$1"
+  local output="$2"
+  if ! printf '%s\n' "$output" | grep -Fq -- "$wrapper"; then
+    printf 'ERROR: %s MCP `knowledge` already exists but does not point to %s\n' \
+      "$client" "$wrapper" >&2
+    printf 'Remove/rename the conflicting registration explicitly, then rerun installer.\n' >&2
+    return 78
+  fi
+}
+
+registered=0
+if command -v codex >/dev/null 2>&1; then
+  if existing="$(codex mcp get knowledge 2>&1)"; then
+    verify_existing_target 'Codex' "$existing"
+    printf 'Codex MCP `knowledge` already points to the stable wrapper; keeping registration.\n'
+  else
+    codex mcp add knowledge -- "$wrapper"
+  fi
+  verified="$(codex mcp get knowledge 2>&1)"
+  verify_existing_target 'Codex' "$verified"
+  registered=$((registered + 1))
+else
+  printf 'WARN: codex not found; skipped Codex global registration.\n' >&2
+fi
+
+if command -v claude >/dev/null 2>&1; then
+  if existing="$(claude mcp get knowledge 2>&1)"; then
+    verify_existing_target 'Claude' "$existing"
+    printf 'Claude MCP `knowledge` already points to the stable wrapper; keeping registration.\n'
+  else
+    claude mcp add knowledge --scope user "$wrapper"
+  fi
+  verified="$(claude mcp get knowledge 2>&1)"
+  verify_existing_target 'Claude' "$verified"
+  registered=$((registered + 1))
+else
+  printf 'WARN: claude not found; skipped Claude user registration.\n' >&2
+fi
+
+if ((registered == 0)); then
+  printf 'ERROR: neither codex nor claude was available for MCP registration.\n' >&2
+  exit 69
+fi
+
+printf 'Knowledge MCP wrapper: %s\n' "$wrapper"
+printf 'Knowledge store root: %s\n' "$store_root"
+printf 'Open a fresh agent session to load the user/global MCP registration.\n'

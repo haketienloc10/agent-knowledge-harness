@@ -41,13 +41,14 @@ session ID của agent cũ.
 
 ## Handoff liên repository
 
-Chỉ ghi fact/evidence QiQi đã reconcile và còn giá trị cho downstream work.
+Chỉ ghi **live fact/evidence** QiQi đã reconcile và còn giá trị cho downstream work.
 
 | Từ repository | Fact/evidence cần truyền | Repository nhận | Trạng thái |
 |---|---|---|---|
 
-Không yêu cầu downstream agent tự đọc result artifact hoặc workspace knowledge;
-QiQi phải đưa context cần dùng trực tiếp vào task prompt.
+Không yêu cầu downstream agent tự đọc sibling result/source; QiQi phải đưa live
+context cần dùng trực tiếp vào task prompt. Durable reusable knowledge được agent
+query độc lập qua Shared Knowledge MCP.
 
 ## Blocker hoặc câu hỏi mở
 
@@ -56,13 +57,15 @@ QiQi phải đưa context cần dùng trực tiếp vào task prompt.
 ## Cross-repo impact còn phải xử lý
 
 Chỉ ghi impact còn cần downstream task, user decision hoặc workspace update. Nếu
-impact đã được truyền/lưu xong thì đánh dấu rõ để không xử lý lặp lại.
+impact đã được truyền/xử lý xong thì đánh dấu rõ để không xử lý lặp lại.
 
 ## Kết quả cuối
 
-## Durable knowledge đã cập nhật
+## Shared knowledge updates
 
-- `SYSTEM_MAP.md`:
-- `knowledge/...`:
-- `knowledge/INDEX.md`:
-- Không có, nếu task không tạo tri thức cross-repo có khả năng dùng lại.
+Nếu task file tùy chọn này cần ghi audit pointer, chỉ ghi stable Knowledge MCP IDs
+đã create/update hoặc persistence failure. Không copy knowledge content và không
+ghi external store path.
+
+- Knowledge IDs:
+- Không có, nếu `knowledge_write(entries=[])` hoặc không có persisted change.

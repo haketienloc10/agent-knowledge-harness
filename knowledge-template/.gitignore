@@ -1,0 +1,4 @@
+mcp/knowledge/.venv/
+**/__pycache__/
+*.pyc
+store/.knowledge.lock

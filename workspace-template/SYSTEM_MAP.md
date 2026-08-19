@@ -1,7 +1,8 @@
 # System Map
 
-Tệp này mô tả quan hệ giữa các Git repository trong local workspace. Nó không
-thay thế `ARCHITECTURE.md` hoặc artifact tương ứng của từng repository.
+Tệp này mô tả **live topology** giữa các Git repository trong local workspace. Nó
+không thay thế `ARCHITECTURE.md` của từng repository và không phải Shared Knowledge
+Store.
 
 ## Hình dạng Hệ thống
 
@@ -17,8 +18,8 @@ thay thế `ARCHITECTURE.md` hoặc artifact tương ứng của từng reposito
 | `{{MODULE_1}}` | `{{MODULE_1_ROLE}}` | `{{MODULE_1_PATH}}` | `{{MODULE_1_ENTRYPOINT}}` | `{{MODULE_1_DEPENDENCIES}}` |
 | `{{MODULE_2}}` | `{{MODULE_2_ROLE}}` | `{{MODULE_2_PATH}}` | `{{MODULE_2_ENTRYPOINT}}` | `{{MODULE_2_DEPENDENCIES}}` |
 
-Danh sách phải khớp với `repos.yaml`. Không đưa hạ tầng không phải Git
-repository vào registry.
+Danh sách phải khớp với `repos.yaml`. Không đưa hạ tầng không phải Git repository
+vào registry.
 
 ## Thứ tự Khởi động Local
 
@@ -33,9 +34,9 @@ repository vào registry.
 |---|---|---|---|---|---|
 | `{{CONTRACT_NAME}}` | `{{PRODUCER}}` | `{{CONSUMERS}}` | `HTTP / event / schema` | `{{COMPATIBILITY_RULE}}` | `{{SPEC_OR_CODE_PATH}}` |
 
-Chi tiết contract có khả năng dùng lại có thể được chắt lọc vào
-`knowledge/contracts/`, nhưng bảng này vẫn giữ bản đồ producer–consumer và liên
-kết đến source of truth.
+Bảng này giữ producer–consumer map và link tới live owner source. Durable reusable
+conclusion về contract/flow có thể được distill vào **Shared Knowledge Store** qua
+Knowledge MCP, nhưng không được dùng để thay thế live source-of-truth link tại đây.
 
 ## Ranh giới Dữ liệu và Ownership
 
@@ -43,8 +44,8 @@ kết đến source of truth.
 |---|---|---|---|
 | `{{RESOURCE}}` | `{{OWNER_MODULE}}` | `{{ALLOWED_CONSUMERS}}` | `{{API_EVENT_OR_READ_MODEL}}` |
 
-Không truy cập trực tiếp database, bảng, queue hoặc internal endpoint của repo
-khác trừ khi bảng này cho phép rõ ràng.
+Không truy cập trực tiếp database, bảng, queue hoặc internal endpoint của repo khác
+trừ khi bảng này cho phép rõ ràng.
 
 ## Kiểm thử Integration
 
