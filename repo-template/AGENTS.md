@@ -6,8 +6,8 @@ thay đổi trong **Git root hiện tại**.
 
 QiQi sở hữu context cấp workspace, dependency liên repository và task semantics.
 MCP `qiqi_delegate` sở hữu execution lifecycle, native session và **result-handoff
-protocol**. Repo này sở hữu architecture, domain rule, implementation, test,
-verification và tri thức nội bộ.
+protocol**. Repo này sở hữu architecture, domain rule, implementation, test và
+verification nội bộ.
 
 ## Bắt đầu
 
@@ -28,9 +28,6 @@ Không quét toàn bộ repository hoặc toàn bộ `docs/` khi chưa cần.
 |---|---|
 | Responsibility, module, dependency và data flow nội bộ | `ARCHITECTURE.md` |
 | Bootstrap, test, lint, build và guardrail | `docs/VERIFY.md` |
-| Domain rule hoặc invariant | `docs/domain/` nếu tồn tại |
-| User/API behavior hoặc acceptance criteria | `docs/specs/` nếu tồn tại |
-| Quyết định kỹ thuật lâu bền | `docs/decisions/` nếu tồn tại |
 | Security boundary hoặc dữ liệu nhạy cảm | `docs/SECURITY.md` nếu tồn tại |
 
 Artifact optional không tồn tại thì tiếp tục bằng source, test và tài liệu hiện
@@ -41,8 +38,8 @@ có. Không tạo file rỗng chỉ để hoàn thiện cấu trúc.
 - Chỉ đọc/sửa file trong Git root hiện tại, ngoại trừ exact result artifact mà MCP
   chỉ định cho turn đang chạy.
 - Không tự suy đoán, tìm hoặc mở result artifact khác.
-- Không đọc/sửa workspace `knowledge/`, `repos.yaml`, `SYSTEM_MAP.md`,
-  `.qiqi/tasks/` hoặc workspace control file khác.
+- Không đọc/sửa workspace `repos.yaml`, `SYSTEM_MAP.md`, `.qiqi/tasks/` hoặc
+  workspace control file khác.
 - Không đọc/sửa repository anh em.
 - Không spawn/delegate sang coding agent khác và không gọi MCP orchestration của
   QiQi từ child turn.
@@ -62,14 +59,13 @@ Task prompt của QiQi là nguồn workspace-level duy nhất cho turn hiện t�
 prompt phải chứa trực tiếp context đã được QiQi reconcile, ví dụ:
 
 - outcome, scope và phần ngoài phạm vi;
-- decision/contract/knowledge cross-repo cần cho task;
+- decision/contract cross-repo cần cho task;
 - upstream result từ repository khác cần dùng;
 - evidence hoặc provenance ngắn khi cần để kiểm chứng context;
 - verification hoặc blocker policy có liên quan.
 
-Agent không tự mở workspace knowledge hoặc result/source của repository khác để
-bổ sung context. Từ handoff của QiQi, agent tự khám phá implementation detail bên
-trong Git root hiện tại.
+Agent không tự mở result/source của repository khác để bổ sung context. Từ handoff
+của QiQi, agent tự khám phá implementation detail bên trong Git root hiện tại.
 
 ### Output về QiQi
 
@@ -82,12 +78,8 @@ Exact result artifact dưới workspace `.qiqi/runs/` chỉ được parent exec
 agent nhận task trực tiếp từ QiQi/MCP cập nhật hoặc finalize. Subagent không được
 sửa result artifact này.
 
-Repo policy chỉ bổ sung semantics mà QiQi cần từ kết quả:
-
-- **Repo-local Knowledge**: source of truth nội bộ đã cập nhật hoặc phát hiện có
-  giá trị dùng lại trong repo này.
-- **Cross-repo Impact**: fact/evidence vượt boundary repo hiện tại và cần QiQi điều
-  phối hoặc cân nhắc lưu ở workspace.
+Repo policy chỉ bổ sung semantics cho **Cross-repo Impact**: fact/evidence vượt
+boundary repo hiện tại và cần QiQi điều phối.
 
 Khi có Cross-repo Impact, nêu đủ:
 
@@ -108,43 +100,17 @@ fact/evidence cho QiQi để QiQi quyết định downstream task hoặc workspa
 - Không đổi regression mới thành legacy issue để hoàn thành task.
 - Không ghi secret hoặc dữ liệu nhạy cảm vào tài liệu/result artifact.
 
-## Tri thức Repo-local
-
-Mọi task — investigation, implementation, verification hoặc loại công việc khác —
-đều có thể tạo ra tri thức repo-local.
-
-Trước khi finalize task, tự kiểm tra xem công việc vừa thực hiện có xác nhận tri
-thức không tầm thường và có khả năng hữu ích cho task tương lai hay không. Nếu có,
-cập nhật source of truth phù hợp trong cùng task:
-
-- responsibility/module/data flow → `ARCHITECTURE.md`;
-- verification path ổn định → `docs/VERIFY.md`;
-- domain rule → `docs/domain/` nếu repo dùng artifact này;
-- behavior/contract do repo sở hữu → `docs/specs/` nếu phù hợp;
-- quyết định kỹ thuật lâu bền → `docs/decisions/` nếu phù hợp.
-
-Không cần ghi lại thông tin có thể đọc thấy trực tiếp và rõ ràng từ source/test
-hiện tại. Với tri thức cần tổng hợp, suy luận hoặc xác minh qua nhiều nguồn, lưu
-kết luận, invariant, ownership, flow hoặc constraint đã được evidence xác nhận;
-không lưu working log của quá trình điều tra.
-
-Phát hiện chưa đủ evidence không được ghi như sự thật.
-
-Nếu implementation làm một repo-local source-of-truth document hiện có trở nên
-sai hoặc stale, cập nhật document đó trong cùng task hoặc báo blocker/lý do rõ.
-
 ## Cross-repo Impact
 
 Khi phát hiện ảnh hưởng từ hai repository trở lên, API/event/schema dùng chung,
 upstream/downstream behavior hoặc decision cần QiQi điều phối:
 
-1. Không sửa workspace knowledge.
-2. Không sửa repository khác.
-3. Handoff fact, affected repository/boundary, evidence và next action nếu rõ cho
+1. Không sửa repository khác.
+2. Handoff fact, affected repository/boundary, evidence và next action nếu rõ cho
    QiQi qua result của turn hiện tại.
 
-QiQi chịu trách nhiệm chuyển context đó tới downstream repository hoặc lưu thành
-workspace knowledge khi có khả năng dùng lại.
+QiQi chịu trách nhiệm chuyển context đó tới downstream repository hoặc xử lý ở
+workspace level.
 
 ## Ghi nhận Friction
 
@@ -178,10 +144,8 @@ chưa chạy phải có lý do rõ; không biến suy đoán thành evidence.
 ## Hoàn thành
 
 Task chỉ completed khi outcome đã đạt, verification liên quan đã chạy hoặc phần
-chưa chạy được báo rõ, không có regression mới đã biết, agent đã thực hiện
-knowledge review trước khi finalize, tri thức repo-local không tầm thường đáng giữ
-đã được cập nhật vào source of truth phù hợp, và cross-repo impact cần QiQi biết
-đã được handoff.
+chưa chạy được báo rõ, không có regression mới đã biết, và cross-repo impact cần
+QiQi biết đã được handoff.
 
 Nếu còn decision hoặc dependency không thể tự giải quyết, task chưa completed;
 tuân theo MCP result-handoff protocol của turn để ghi terminal state và blocker.
