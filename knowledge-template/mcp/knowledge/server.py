@@ -77,14 +77,18 @@ mcp = MCPServer(
         "Repository-independent durable knowledge service. Use knowledge_read after "
         "understanding the current work and generating several task-relevant search "
         "terms. The caller may provide repo/domain context only as ranking hints; "
-        "knowledge is not permission-scoped to the current repository. Use "
-        "knowledge_write during finalization only after semantic distillation: "
+        "knowledge is not permission-scoped to the current repository. Before every "
+        "knowledge_write required by agent policy, apply the installed knowledge-distill "
+        "skill to the evidence from the current work. Persist the durable conclusion the "
+        "evidence actually established, not an unverified task, ticket, incident, or bug "
+        "premise; preserve material inference and remaining uncertainty. Use "
+        "knowledge_write during finalization only after that semantic distillation: "
         "persist reusable, non-trivial, evidence-backed knowledge, or pass an empty "
-        "entries list to record that the knowledge review found nothing durable. "
-        "The knowledge_write schema is strict and nested: summary, when_to_read, "
-        "keywords, and aliases belong under routing. Create omits id/revision; update "
-        "uses exact id + expected_revision from knowledge_read. Callers never choose "
-        "a file path, filename, directory, INDEX path, or language field."
+        "entries list when a required review found nothing durable. The knowledge_write "
+        "schema is strict and nested: summary, when_to_read, keywords, and aliases belong "
+        "under routing. Create omits id/revision; update uses exact id + expected_revision "
+        "from knowledge_read. Callers never choose a file path, filename, directory, INDEX "
+        "path, or language field."
     ),
 )
 
@@ -117,7 +121,12 @@ async def knowledge_read(
 
 @mcp.tool()
 async def knowledge_write(entries: WriteEntries) -> KnowledgeWriteResult:
-    """Persist distilled shared knowledge through a strict typed contract.
+    """Persist knowledge only after applying the installed knowledge-distill skill.
+
+    Distill from evidence, not from the task premise: do not create a bug/ticket-named
+    durable claim unless the work actually verified that claim. Preserve important
+    fact-vs-inference boundaries and unresolved uncertainty; compression must not
+    increase certainty. Search the candidate conclusion before create/update.
 
     CREATE: omit `id` and `expected_revision`.
     UPDATE: provide exact `id` + `expected_revision` returned by knowledge_read.
@@ -125,7 +134,8 @@ async def knowledge_write(entries: WriteEntries) -> KnowledgeWriteResult:
     inside the nested `routing` object.
     NEVER provide path/filename/directory/INDEX fields; Knowledge MCP owns them.
     `content` may be Vietnamese, English, or mixed; there is no `language` field.
-    Pass `entries=[]` when finalization review found nothing durable to persist.
+    Pass `entries=[]` only when policy required a finalization review and the
+    knowledge-distill procedure found nothing durable to persist.
     """
     payload = [entry.model_dump(exclude_none=True) for entry in entries]
     try:

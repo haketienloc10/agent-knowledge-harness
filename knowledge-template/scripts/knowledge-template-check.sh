@@ -10,7 +10,7 @@ fail() {
   errors=$((errors + 1))
 }
 
-for command in bash python3 rg; do
+for command in bash python3 rg cmp mktemp; do
   command -v "$command" >/dev/null 2>&1 || fail "missing required command: $command"
 done
 
@@ -24,6 +24,7 @@ required=(
   mcp/knowledge/tests/test_core.py
   mcp/knowledge/tests/test_server_contract.py
   scripts/install-user-mcp.sh
+  scripts/install-user-skill.sh
   scripts/knowledge-cli.sh
   scripts/knowledge-mcp-server.sh
   scripts/knowledge.py
@@ -36,6 +37,7 @@ for path in "${required[@]}"; do
 done
 
 bash -n "$home/scripts/install-user-mcp.sh" || fail 'install-user-mcp.sh: invalid Bash syntax'
+bash -n "$home/scripts/install-user-skill.sh" || fail 'install-user-skill.sh: invalid Bash syntax'
 bash -n "$home/scripts/knowledge-cli.sh" || fail 'knowledge-cli.sh: invalid Bash syntax'
 bash -n "$home/scripts/knowledge-mcp-server.sh" || fail 'knowledge-mcp-server.sh: invalid Bash syntax'
 bash -n "$home/scripts/knowledge-template-check.sh" || fail 'knowledge-template-check.sh: invalid Bash syntax'
@@ -67,6 +69,9 @@ PY
 server="$home/mcp/knowledge/server.py"
 contracts="$home/mcp/knowledge/contracts.py"
 project_file="$home/mcp/knowledge/pyproject.toml"
+skill="$home/skills/knowledge-distill/SKILL.md"
+installer="$home/scripts/install-user-mcp.sh"
+skill_installer="$home/scripts/install-user-skill.sh"
 
 [[ "$(rg -c '^@mcp\.tool\(\)$' "$server" || true)" == "2" ]] || \
   fail 'knowledge server must expose exactly two MCP tools'
@@ -85,6 +90,10 @@ rg -q '\) -> KnowledgeWriteResult:' "$server" || \
 if rg -q 'entries: list\[dict\[str, Any\]\]' "$server"; then
   fail 'knowledge_write must not regress to generic dict input schema'
 fi
+rg -q 'knowledge-distill' "$server" || \
+  fail 'knowledge_write contract must route semantic distillation through knowledge-distill'
+rg -q 'task premise' "$server" || \
+  fail 'knowledge_write contract must reject unverified task-premise persistence'
 rg -q 'extra="forbid"' "$contracts" || \
   fail 'typed knowledge models must reject unknown fields'
 rg -q "routing fields must be nested under the 'routing' object" "$contracts" || \
@@ -93,6 +102,41 @@ rg -q 'filesystem fields are owned by Knowledge MCP' "$contracts" || \
   fail 'typed write schema must explain filesystem ownership'
 rg -q '"pydantic>=2,<3"' "$project_file" || \
   fail 'pydantic must be an explicit runtime dependency'
+
+for pattern in \
+  'Persist what the work established, not what the task assumed' \
+  'Compression must not increase certainty' \
+  'Extract durable candidates from the evidence, not the task title' \
+  'remaining uncertainty' \
+  'immutable commit/revision' \
+  'bug premise' \
+  'knowledge_write(entries=\[\])'; do
+  rg -q "$pattern" "$skill" || fail "knowledge-distill missing quality gate: $pattern"
+done
+
+rg -q '\.agents/skills' "$skill_installer" || \
+  fail 'skill installer must install Codex user-scope skill'
+rg -q '\.claude/skills' "$skill_installer" || \
+  fail 'skill installer must install Claude user-scope skill'
+rg -q 'install-user-skill\.sh' "$installer" || \
+  fail 'main knowledge installer must install the distillation skill'
+
+skill_smoke_root="$(mktemp -d)"
+if ! bash "$skill_installer" \
+  --codex-root "$skill_smoke_root/codex" \
+  --claude-root "$skill_smoke_root/claude" >/dev/null; then
+  fail 'knowledge-distill user-scope installation smoke test failed'
+else
+  cmp -s "$skill" "$skill_smoke_root/codex/knowledge-distill/SKILL.md" || \
+    fail 'Codex installed skill differs from canonical knowledge-distill skill'
+  cmp -s "$skill" "$skill_smoke_root/claude/knowledge-distill/SKILL.md" || \
+    fail 'Claude installed skill differs from canonical knowledge-distill skill'
+  bash "$skill_installer" \
+    --codex-root "$skill_smoke_root/codex" \
+    --claude-root "$skill_smoke_root/claude" >/dev/null || \
+    fail 'knowledge-distill user-scope installation must be idempotent'
+fi
+rm -rf "$skill_smoke_root"
 
 core="$home/mcp/knowledge/core.py"
 for contract in \
@@ -105,7 +149,7 @@ for contract in \
   rg -q "$contract" "$core" || fail "knowledge core missing contract: $contract"
 done
 
-if rg -q '^[[:space:]]*language:' "$home/README.md" "$home/skills/knowledge-distill/SKILL.md"; then
+if rg -q '^[[:space:]]*language:' "$home/README.md" "$skill"; then
   fail 'language field must not be part of the knowledge schema'
 fi
 

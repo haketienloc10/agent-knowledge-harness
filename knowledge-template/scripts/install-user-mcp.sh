@@ -10,10 +10,13 @@ usage() {
   cat <<'EOF'
 Usage: install-user-mcp.sh [--store-root PATH] [--bin-dir PATH]
 
-Installs a stable user-level `agent-knowledge-mcp` wrapper and registers it with
-available Codex/Claude CLIs. If an MCP registration named `knowledge` already
-exists but does not point at this wrapper, installation fails instead of replacing
-user configuration.
+Installs the user-level Shared Knowledge runtime:
+- managed `knowledge-distill` skill for Codex and Claude Code user scope;
+- stable `agent-knowledge-mcp` wrapper;
+- MCP registration named `knowledge` for available Codex/Claude CLIs.
+
+If an MCP registration or skill with the same name is owned by something else,
+installation fails instead of silently replacing user configuration.
 EOF
 }
 
@@ -57,6 +60,11 @@ bin_dir="$(python3 -c 'import os,sys; print(os.path.abspath(os.path.expanduser(s
 # imports the same filelock/PyYAML-backed core as the server.
 uv sync --project "$project"
 uv run --project "$project" python "$home/scripts/knowledge.py" init --root "$store_root" >/dev/null
+
+# Distillation is agent semantic policy, not MCP storage behavior. Install the same
+# user-scoped skill for both supported agent families so QiQi and Herdr-launched
+# children can discover it independent of current repository/CWD.
+bash "$home/scripts/install-user-skill.sh"
 
 mkdir -p "$bin_dir"
 wrapper="$bin_dir/agent-knowledge-mcp"
@@ -106,7 +114,7 @@ if command -v codex >/dev/null 2>&1; then
   verify_existing_target 'Codex' "$verified"
   registered=$((registered + 1))
 else
-  printf 'WARN: codex not found; skipped Codex global registration.\n' >&2
+  printf 'WARN: codex not found; skipped Codex global MCP registration.\n' >&2
 fi
 
 if command -v claude >/dev/null 2>&1; then
@@ -120,7 +128,7 @@ if command -v claude >/dev/null 2>&1; then
   verify_existing_target 'Claude' "$verified"
   registered=$((registered + 1))
 else
-  printf 'WARN: claude not found; skipped Claude user registration.\n' >&2
+  printf 'WARN: claude not found; skipped Claude user MCP registration.\n' >&2
 fi
 
 if ((registered == 0)); then
@@ -130,4 +138,5 @@ fi
 
 printf 'Knowledge MCP wrapper: %s\n' "$wrapper"
 printf 'Knowledge store root: %s\n' "$store_root"
-printf 'Open a fresh agent session to load the user/global MCP registration.\n'
+printf 'Knowledge distillation skill: knowledge-distill\n'
+printf 'Open a fresh agent session to load the user/global MCP registration and skill.\n'

@@ -45,7 +45,13 @@ class KnowledgeServerContractTest(unittest.IsolatedAsyncioTestCase):
         tools = {tool.name: tool for tool in listed.tools}
         self.assertEqual(set(tools), {"knowledge_read", "knowledge_write"})
 
-        schema = tools["knowledge_write"].input_schema
+        write_tool = tools["knowledge_write"]
+        description = write_tool.description or ""
+        self.assertIn("knowledge-distill", description)
+        self.assertIn("task premise", description)
+        self.assertIn("Compression must not increase certainty", description)
+
+        schema = write_tool.input_schema
         entries = schema["properties"]["entries"]
         item_schema = entries["items"]
         if "$ref" in item_schema:
