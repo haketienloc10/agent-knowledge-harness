@@ -753,7 +753,7 @@ def _score_entry(
             best_names = [name for name, value in parts if value == query_score]
             reasons.append(f"{query}: {best_names[0]}")
 
-    if context:
+    if score > 0 and context:
         repo = context.get("repo")
         domain = context.get("domain")
         scope = entry["scope"]

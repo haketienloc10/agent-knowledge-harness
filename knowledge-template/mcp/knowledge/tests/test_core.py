@@ -88,6 +88,59 @@ class KnowledgeCoreTest(unittest.TestCase):
         )
         self.assertEqual(len(result["results"]), 1)
 
+    def test_context_does_not_create_relevance_without_lexical_match(self):
+        write_knowledge(self.root, [create_entry()])
+        result = read_knowledge(
+            self.root,
+            ["unrelated mail delivery"],
+            context={"domain": "checkout.payment"},
+        )
+        self.assertEqual(result["results"], [])
+
+    def test_repo_context_boosts_existing_lexical_match(self):
+        checkout = create_entry(name="checkout-retry", title="Checkout retry")
+        checkout["scope"] = {"kind": "repo", "id": "checkout"}
+        checkout["sources"][0]["locator"] = "checkout:src/payment/retry.ts"
+
+        ledger = create_entry(name="ledger-retry", title="Ledger retry")
+        ledger["scope"] = {"kind": "repo", "id": "ledger"}
+        ledger["sources"][0]["locator"] = "ledger:src/payment/retry.ts"
+
+        write_knowledge(self.root, [checkout, ledger])
+        result = read_knowledge(
+            self.root,
+            ["payment retry"],
+            context={"repo": "checkout"},
+        )
+
+        self.assertEqual(len(result["results"]), 2)
+        self.assertEqual(result["results"][0]["id"], "repo:checkout:checkout-retry")
+        self.assertIn("context: repo scope", result["results"][0]["match_reason"])
+        self.assertGreater(result["results"][0]["score"], result["results"][1]["score"])
+
+    def test_domain_context_boosts_existing_lexical_match(self):
+        payment = create_entry(name="payment-retry", title="Payment retry")
+        payment["scope"] = {"kind": "domain", "id": "checkout.payment"}
+
+        booking = create_entry(name="booking-retry", title="Booking retry")
+        booking["scope"] = {"kind": "domain", "id": "checkout.booking"}
+        booking["sources"][0]["locator"] = "checkout:src/booking/retry.ts"
+
+        write_knowledge(self.root, [payment, booking])
+        result = read_knowledge(
+            self.root,
+            ["payment retry"],
+            context={"domain": "checkout.payment"},
+        )
+
+        self.assertEqual(len(result["results"]), 2)
+        self.assertEqual(
+            result["results"][0]["id"],
+            "domain:checkout.payment:payment-retry",
+        )
+        self.assertIn("context: domain scope", result["results"][0]["match_reason"])
+        self.assertGreater(result["results"][0]["score"], result["results"][1]["score"])
+
     def test_update_requires_revision_and_rejects_stale_write(self):
         created = write_knowledge(self.root, [create_entry()])["changes"][0]
         update = create_entry(title="Updated retry rule")
