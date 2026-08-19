@@ -3,11 +3,26 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Any
 
 from mcp.server import MCPServer
 
-from core import DEFAULT_RESULTS, read_knowledge, resolve_store_root, write_knowledge
+from contracts import (
+    KnowledgeReadContext,
+    KnowledgeReadResult,
+    KnowledgeWriteResult,
+    ReadKeywords,
+    ReadLimit,
+    WriteEntries,
+)
+from core import (
+    DEFAULT_RESULTS,
+    ConflictError,
+    KnowledgeError,
+    ValidationError,
+    read_knowledge,
+    resolve_store_root,
+    write_knowledge,
+)
 
 
 def _store_root() -> Path:
@@ -15,6 +30,45 @@ def _store_root() -> Path:
     if not raw:
         raise RuntimeError("KNOWLEDGE_STORE_ROOT must point to the shared knowledge store")
     return resolve_store_root(raw)
+
+
+def _raise_actionable_error(exc: KnowledgeError) -> None:
+    message = str(exc)
+    lowered = message.lower()
+    if isinstance(exc, ConflictError):
+        if "revision conflict" in lowered or "changed during update" in lowered:
+            raise ValueError(
+                "code=revision_conflict; "
+                f"{message}; action=call knowledge_read again for the exact knowledge id, "
+                "re-distill against the returned content/revision, then retry update with "
+                "that exact expected_revision"
+            ) from exc
+        if "already exists or collides" in lowered:
+            raise ValueError(
+                "code=create_conflict; "
+                f"{message}; action=search/read the existing knowledge first and update it "
+                "with exact id + expected_revision instead of retrying create"
+            ) from exc
+        if "does not exist for update" in lowered:
+            raise ValueError(
+                "code=missing_update_target; "
+                f"{message}; action=call knowledge_read/search again; create only if no "
+                "existing knowledge covers the concept"
+            ) from exc
+        if "index is stale" in lowered or "index points to a different id" in lowered:
+            raise ValueError(
+                "code=stale_index; "
+                f"{message}; action=do not retry unchanged; the store operator must run "
+                "knowledge reindex/check before this knowledge can be read safely"
+            ) from exc
+        raise ValueError(f"code=knowledge_conflict; {message}") from exc
+    if isinstance(exc, ValidationError):
+        raise ValueError(
+            "code=knowledge_validation; "
+            f"{message}; action=inspect the typed tool schema and correct the payload "
+            "instead of guessing filesystem fields or flattening nested routing metadata"
+        ) from exc
+    raise RuntimeError(f"code=knowledge_store_error; {message}") from exc
 
 
 mcp = MCPServer(
@@ -27,39 +81,58 @@ mcp = MCPServer(
         "knowledge_write during finalization only after semantic distillation: "
         "persist reusable, non-trivial, evidence-backed knowledge, or pass an empty "
         "entries list to record that the knowledge review found nothing durable. "
-        "Callers never choose a file path or directory."
+        "The knowledge_write schema is strict and nested: summary, when_to_read, "
+        "keywords, and aliases belong under routing. Create omits id/revision; update "
+        "uses exact id + expected_revision from knowledge_read. Callers never choose "
+        "a file path, filename, directory, INDEX path, or language field."
     ),
 )
 
 
 @mcp.tool()
 async def knowledge_read(
-    keywords: list[str],
-    context: dict[str, str] | None = None,
-    limit: int = DEFAULT_RESULTS,
-) -> dict[str, Any]:
-    """Read relevant shared durable knowledge using caller-generated search terms.
+    keywords: ReadKeywords,
+    context: KnowledgeReadContext | None = None,
+    limit: ReadLimit = DEFAULT_RESULTS,
+) -> KnowledgeReadResult:
+    """Read relevant shared durable knowledge using explicit typed search inputs.
 
-    `keywords` should contain several task-relevant concepts. Canonical English
-    concepts are preferred for routing, with original-language or project aliases
-    included when useful. `context.repo` and `context.domain` are optional ranking
-    hints only; they do not restrict the namespaces that may be returned.
+    Generate several task-relevant concepts before calling. Canonical English
+    concepts are preferred for routing, with original-language/project aliases when
+    useful. `context.repo` and `context.domain` are optional ranking hints only.
+    The result schema exposes stable id/path/revision so updates never guess identity
+    or filesystem location.
     """
-    return read_knowledge(_store_root(), keywords, context, limit)
+    try:
+        result = read_knowledge(
+            _store_root(),
+            keywords,
+            context.model_dump(exclude_none=True) if context is not None else None,
+            limit,
+        )
+    except KnowledgeError as exc:
+        _raise_actionable_error(exc)
+    return KnowledgeReadResult.model_validate(result)
 
 
 @mcp.tool()
-async def knowledge_write(entries: list[dict[str, Any]]) -> dict[str, Any]:
-    """Persist distilled shared knowledge without exposing filesystem decisions.
+async def knowledge_write(entries: WriteEntries) -> KnowledgeWriteResult:
+    """Persist distilled shared knowledge through a strict typed contract.
 
-    Create entries omit `id`/`expected_revision`. Update entries include the exact
-    `id` and `expected_revision` returned by knowledge_read. Every entry supplies a
-    canonical_name, semantic scope, routing metadata, free-form Markdown content,
-    and provenance sources. Paths, filenames, directories, front matter, and
-    INDEX.md are owned by this MCP. An empty list records a completed knowledge
-    review with no durable update.
+    CREATE: omit `id` and `expected_revision`.
+    UPDATE: provide exact `id` + `expected_revision` returned by knowledge_read.
+    ROUTING: put `summary`, `when_to_read`, `keywords`, and optional `aliases`
+    inside the nested `routing` object.
+    NEVER provide path/filename/directory/INDEX fields; Knowledge MCP owns them.
+    `content` may be Vietnamese, English, or mixed; there is no `language` field.
+    Pass `entries=[]` when finalization review found nothing durable to persist.
     """
-    return write_knowledge(_store_root(), entries)
+    payload = [entry.model_dump(exclude_none=True) for entry in entries]
+    try:
+        result = write_knowledge(_store_root(), payload)
+    except KnowledgeError as exc:
+        _raise_actionable_error(exc)
+    return KnowledgeWriteResult.model_validate(result)
 
 
 if __name__ == "__main__":

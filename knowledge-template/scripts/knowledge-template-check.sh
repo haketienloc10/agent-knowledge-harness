@@ -16,10 +16,13 @@ done
 
 required=(
   README.md
+  mcp/knowledge/contracts.py
   mcp/knowledge/core.py
   mcp/knowledge/server.py
   mcp/knowledge/pyproject.toml
+  mcp/knowledge/tests/test_contracts.py
   mcp/knowledge/tests/test_core.py
+  mcp/knowledge/tests/test_server_contract.py
   scripts/install-user-mcp.sh
   scripts/knowledge-cli.sh
   scripts/knowledge-mcp-server.sh
@@ -42,7 +45,11 @@ if [[ -x "$project/.venv/bin/python" ]]; then
   python_runtime="$project/.venv/bin/python"
 fi
 
-"$python_runtime" - "$home/mcp/knowledge/core.py" "$home/mcp/knowledge/server.py" "$home/scripts/knowledge.py" <<'PY' || fail 'knowledge Python source: invalid syntax'
+"$python_runtime" - \
+  "$home/mcp/knowledge/contracts.py" \
+  "$home/mcp/knowledge/core.py" \
+  "$home/mcp/knowledge/server.py" \
+  "$home/scripts/knowledge.py" <<'PY' || fail 'knowledge Python source: invalid syntax'
 import pathlib
 import sys
 for raw in sys.argv[1:]:
@@ -50,16 +57,42 @@ for raw in sys.argv[1:]:
     compile(path.read_text(encoding="utf-8"), str(path), "exec")
 PY
 
-"$python_runtime" - <<'PY' || fail 'knowledge core dependencies missing; run uv sync --project mcp/knowledge or provide filelock + PyYAML in current Python'
+"$python_runtime" - <<'PY' || fail 'knowledge runtime dependencies missing; run uv sync --project mcp/knowledge'
 import filelock
+import mcp
+import pydantic
 import yaml
 PY
 
 server="$home/mcp/knowledge/server.py"
+contracts="$home/mcp/knowledge/contracts.py"
+project_file="$home/mcp/knowledge/pyproject.toml"
+
 [[ "$(rg -c '^@mcp\.tool\(\)$' "$server" || true)" == "2" ]] || \
   fail 'knowledge server must expose exactly two MCP tools'
 rg -q '^async def knowledge_read\(' "$server" || fail 'missing knowledge_read tool'
 rg -q '^async def knowledge_write\(' "$server" || fail 'missing knowledge_write tool'
+rg -q 'keywords: ReadKeywords' "$server" || \
+  fail 'knowledge_read must expose typed keyword constraints'
+rg -q 'context: KnowledgeReadContext \| None' "$server" || \
+  fail 'knowledge_read context must use closed typed schema'
+rg -q 'entries: WriteEntries' "$server" || \
+  fail 'knowledge_write must expose typed nested entry schema'
+rg -q '\) -> KnowledgeReadResult:' "$server" || \
+  fail 'knowledge_read must expose structured output schema'
+rg -q '\) -> KnowledgeWriteResult:' "$server" || \
+  fail 'knowledge_write must expose structured output schema'
+if rg -q 'entries: list\[dict\[str, Any\]\]' "$server"; then
+  fail 'knowledge_write must not regress to generic dict input schema'
+fi
+rg -q 'extra="forbid"' "$contracts" || \
+  fail 'typed knowledge models must reject unknown fields'
+rg -q "routing fields must be nested under the 'routing' object" "$contracts" || \
+  fail 'typed write schema must explain flat routing mistakes'
+rg -q 'filesystem fields are owned by Knowledge MCP' "$contracts" || \
+  fail 'typed write schema must explain filesystem ownership'
+rg -q '"pydantic>=2,<3"' "$project_file" || \
+  fail 'pydantic must be an explicit runtime dependency'
 
 core="$home/mcp/knowledge/core.py"
 for contract in \
@@ -77,7 +110,7 @@ if rg -q '^[[:space:]]*language:' "$home/README.md" "$home/skills/knowledge-dist
 fi
 
 if ! "$python_runtime" -m unittest discover -s "$project/tests" -v; then
-  fail 'knowledge unit tests failed'
+  fail 'knowledge unit/server-contract tests failed'
 fi
 
 if ! "$python_runtime" "$home/scripts/knowledge.py" check --root "$home/store"; then
