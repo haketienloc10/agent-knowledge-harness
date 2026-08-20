@@ -1,8 +1,10 @@
 # Completed Tasks
 
-Chỉ chuyển task từ `active/` sang đây khi kết quả và verification bắt buộc đã đủ.
-Dùng `mv` để giữ nguyên bối cảnh thay vì tạo bản tóm tắt thay thế.
+Thư mục này hiện **không thuộc workflow bắt buộc của QiQi**.
 
-Trước khi hoàn tất, ghi rõ proposal hoặc durable document đã cập nhật. Nếu task
-không tạo tri thức dùng lại, ghi rõ `Không có`; không tạo knowledge document chỉ
-để đáp ứng hình thức.
+QiQi không phải move task từ `active/` sang đây khi user task hoàn tất. Terminal
+history thuộc `.qiqi/runs/`; reusable durable knowledge thuộc Shared Knowledge
+Store độc lập và được truy cập/persist qua user-scoped Knowledge MCP.
+
+Chỉ dùng thư mục này nếu một workspace cụ thể chủ động bổ sung archive riêng ngoài
+contract mặc định của template.

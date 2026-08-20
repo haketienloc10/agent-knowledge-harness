@@ -18,11 +18,6 @@ require_file() {
   [[ -f "$path" ]] || fail "missing file: ${path#$workspace_root/}"
 }
 
-require_dir() {
-  local path="$1"
-  [[ -d "$path" ]] || fail "missing directory: ${path#$workspace_root/}"
-}
-
 for command in git rg uv python3 yq herdr; do
   require_command "$command"
 done
@@ -32,12 +27,6 @@ required_files=(
   identity.md
   SYSTEM_MAP.md
   repos.yaml
-  knowledge/README.md
-  knowledge/INDEX.md
-  knowledge/glossary.md
-  .qiqi/tasks/TEMPLATE.md
-  .qiqi/tasks/active/README.md
-  .qiqi/tasks/completed/README.md
   instructions/agent-routing.yaml
   instructions/model-routing.md
   .codex/config.toml
@@ -51,25 +40,6 @@ required_files=(
 for path in "${required_files[@]}"; do
   require_file "$workspace_root/$path"
 done
-
-required_dirs=(
-  knowledge/systems
-  knowledge/contracts
-  knowledge/decisions
-  .qiqi/tasks/active
-  .qiqi/tasks/completed
-)
-
-for path in "${required_dirs[@]}"; do
-  require_dir "$workspace_root/$path"
-done
-
-if [[ -e "$workspace_root/KNOWLEDGE.md" ]]; then
-  fail 'KNOWLEDGE.md: duplicate knowledge router is not part of the MVP workflow'
-fi
-if [[ -e "$workspace_root/knowledge/proposals" ]]; then
-  fail 'knowledge/proposals: proposal lifecycle is not part of the MVP workflow'
-fi
 
 for legacy_example in \
   instructions/agent-routing.codex.example.yaml \
@@ -133,32 +103,36 @@ if [[ -f "$agents_md" ]]; then
     '`identity\.md`' \
     '`repos\.yaml`' \
     '`SYSTEM_MAP\.md`' \
-    '`knowledge/README\.md`' \
-    '`knowledge/INDEX\.md`' \
     '`instructions/agent-routing\.yaml`' \
     '`instructions/model-routing\.md`' \
     '`delegate_repo_task`' \
     '`session_id`' \
     '`result_path`' \
     '`\.qiqi/runs/' \
-    '`\.qiqi/tasks/' \
     '## Workflow Workspace ↔ Repository' \
     '## Delegation Silence' \
     '## Dependency và Delegation Waves'; do
     rg -q "$pattern" "$agents_md" || fail "AGENTS.md: missing required policy: $pattern"
   done
+
   rg -q 'handoff broker duy nhất giữa các repository' "$agents_md" || \
     fail 'AGENTS.md: QiQi must be the only cross-repo handoff broker'
-  rg -U -q 'không yêu cầu execution agent tự mở workspace `knowledge/`.*result[[:space:]]+artifact của repository khác' "$agents_md" || \
-    fail 'AGENTS.md: child must receive workspace/upstream context through the QiQi prompt'
   rg -U -q 'producer `result_path`.*consumer task prompt|producer result.*consumer task prompt' "$agents_md" || \
     fail 'AGENTS.md: producer result must flow through QiQi into the consumer prompt'
-  rg -U -q 'knowledge/INDEX\.md.*trong cùng[[:space:]]+thay đổi' "$agents_md" || \
-    fail 'AGENTS.md: durable workspace knowledge must update INDEX.md in the same change'
   rg -q 'đọc.*`result_path`|đọc.*result artifact' "$agents_md" || \
     fail 'AGENTS.md: QiQi must read result_path before deciding the next step'
-  rg -q 'không.*RESUME.*report|không.*RESUME.*báo cáo' "$agents_md" || \
-    fail 'AGENTS.md: missing no-report-only RESUME invariant'
+  rg -q --fixed-strings 'Trước khi chọn START hay RESUME, QiQi kiểm tra relevant result/evidence đã có.' "$agents_md" || \
+    fail 'AGENTS.md: START/RESUME must be gated by existing evidence'
+  rg -q --fixed-strings 'evidence đó và trả lời trực tiếp; không tạo repo delegation.' "$agents_md" || \
+    fail 'AGENTS.md: sufficient existing evidence must be answered without delegation'
+  rg -q --fixed-strings 'QiQi **không START hoặc RESUME repo delegation** chỉ để lấy lại, diễn giải lại,' "$agents_md" || \
+    fail 'AGENTS.md: report-only START/RESUME must be forbidden when result evidence already exists'
+  rg -q --fixed-strings 'Delegation mới chỉ hợp lệ khi QiQi xác định được repo-local work/evidence gap cụ' "$agents_md" || \
+    fail 'AGENTS.md: new delegation requires a concrete repo-local work/evidence gap'
+  rg -q --fixed-strings 'QiQi có thể rút gọn result artifact nhưng phải giữ các finding, evidence, caveat,' "$agents_md" || \
+    fail 'AGENTS.md: user report must preserve material result findings'
+  rg -q --fixed-strings 'uncertainty, verification, blocker hoặc decision có khả năng làm thay đổi cách' "$agents_md" || \
+    fail 'AGENTS.md: user report must preserve material caveats and decision evidence'
   rg -q 'prompt.*QiQi|QiQi.*prompt' "$agents_md" || \
     fail 'AGENTS.md: missing QiQi-owned task prompt invariant'
   rg -U -q 'progress[[:space:]]+commentary' "$agents_md" || \
@@ -171,66 +145,8 @@ if [[ -f "$agents_md" ]]; then
     fail 'AGENTS.md: missing no-polling child-state invariant'
   rg -q 'QiQi không trực tiếp gọi `codex`, `claude` hoặc coding-agent CLI khác' "$agents_md" || \
     fail 'AGENTS.md: missing direct-agent-CLI bypass prohibition'
-  rg -U -q 'Không[[:space:]]+fallback sang shell-based `codex`, `claude`' "$agents_md" || \
+  rg -U -q 'Không[[:space:]]+fallback[[:space:]]+sang[[:space:]]+shell-based[[:space:]]+`codex`,[[:space:]]+`claude`' "$agents_md" || \
     fail 'AGENTS.md: missing MCP-failure shell fallback prohibition'
-  rg -q 'Mọi \*\*task thực thi\*\* tại workspace phải có task file' "$agents_md" || \
-    fail 'AGENTS.md: every stateful workspace execution task must create a task file'
-  rg -U -q 'tổng hợp, biên tập hoặc lưu workspace document từ result/evidence đã có, khi[[:space:]]+không cần delegation mới hoặc continuation state' "$agents_md" || \
-    fail 'AGENTS.md: missing stateless existing-evidence documentation exception'
-  rg -U -q 'Nếu công việc cần investigation, implementation, verification, delegation hoặc[[:space:]]+phát sinh state phải tiếp tục qua lượt khác, tạo task file trước phần thực thi đó' "$agents_md" || \
-    fail 'AGENTS.md: new execution or continuation state must create a task file'
-  rg -q 'Task chỉ chạm một repository, hoàn thành trong một lượt hoặc' "$agents_md" || \
-    fail 'AGENTS.md: single-repo/single-turn execution work must still create a task file'
-  rg -q 'Nếu công việc có task file' "$agents_md" || \
-    fail 'AGENTS.md: Definition of Done task-file requirement must be conditional'
-  rg -q 'chuyển file sang `.qiqi/tasks/completed/`' "$agents_md" || \
-    fail 'AGENTS.md: completed recorded tasks must move out of active/'
-fi
-
-active_tasks_readme="$workspace_root/.qiqi/tasks/active/README.md"
-if [[ -f "$active_tasks_readme" ]]; then
-  rg -q '^# Active Tasks$' "$active_tasks_readme" || \
-    fail '.qiqi/tasks/active/README.md: missing title'
-  rg -q 'Mọi \*\*task thực thi\*\* tại workspace phải có một file' "$active_tasks_readme" || \
-    fail '.qiqi/tasks/active/README.md: must require stateful execution tasks to be recorded'
-  rg -U -q 'tổng hợp, biên tập hoặc lưu workspace document từ result/evidence đã có, khi[[:space:]]+không cần delegation mới hoặc continuation state' "$active_tasks_readme" || \
-    fail '.qiqi/tasks/active/README.md: missing stateless existing-evidence documentation exception'
-  rg -U -q 'Nếu công việc cần investigation, implementation, verification, delegation hoặc[[:space:]]+phát sinh state phải tiếp tục qua lượt khác, tạo active task trước phần thực thi đó' "$active_tasks_readme" || \
-    fail '.qiqi/tasks/active/README.md: new execution or continuation state must create an active task'
-  rg -U -q 'chỉ chạm[[:space:]]+một repository, hoàn thành trong một lượt' "$active_tasks_readme" || \
-    fail '.qiqi/tasks/active/README.md: single-repo/single-turn task rule missing'
-  rg -q 'Tạo file mới từ `../TEMPLATE.md` trước khi bắt đầu task' "$active_tasks_readme" || \
-    fail '.qiqi/tasks/active/README.md: task file must be created before execution'
-fi
-
-knowledge_readme="$workspace_root/knowledge/README.md"
-if [[ -f "$knowledge_readme" ]]; then
-  rg -q '^# Workspace Knowledge$' "$knowledge_readme" || \
-    fail 'knowledge/README.md: missing workspace knowledge guide title'
-  rg -q '`INDEX\.md`' "$knowledge_readme" || \
-    fail 'knowledge/README.md: must route reads through INDEX.md'
-  rg -U -q 'Execution agent.*không tự đọc thư mục này' "$knowledge_readme" || \
-    fail 'knowledge/README.md: child must not read workspace knowledge directly'
-  rg -U -q 'cập nhật[[:space:]]+`INDEX\.md` trong cùng thay đổi' "$knowledge_readme" || \
-    fail 'knowledge/README.md: knowledge writes must update INDEX.md atomically'
-fi
-
-knowledge_index="$workspace_root/knowledge/INDEX.md"
-if [[ -f "$knowledge_index" ]]; then
-  rg -q '^# Knowledge Index$' "$knowledge_index" || \
-    fail 'knowledge/INDEX.md: missing index title'
-  rg -q --fixed-strings '| Tài liệu | Summary | Khi nào cần đọc | Phạm vi |' "$knowledge_index" || \
-    fail 'knowledge/INDEX.md: missing MVP read-routing columns'
-  rg -q 'không quét toàn bộ `knowledge/`' "$knowledge_index" || \
-    fail 'knowledge/INDEX.md: must prevent scanning the whole knowledge library'
-fi
-
-task_template="$workspace_root/.qiqi/tasks/TEMPLATE.md"
-if [[ -f "$task_template" ]]; then
-  rg -q '^## Handoff liên repository$' "$task_template" || \
-    fail '.qiqi/tasks/TEMPLATE.md: missing cross-repo handoff section'
-  rg -U -q 'Không yêu cầu downstream agent tự đọc result artifact hoặc workspace knowledge' "$task_template" || \
-    fail '.qiqi/tasks/TEMPLATE.md: downstream context must be brokered by QiQi'
 fi
 
 codex_config="$workspace_root/.codex/config.toml"
@@ -387,6 +303,7 @@ else
   integration_status="$(herdr integration status 2>&1 || true)"
   mapfile -t agent_names < <(yq -r '.agents | keys | .[]' "$routing" 2>/dev/null || true)
   checked_adapters=()
+
   for agent_name in "${agent_names[@]}"; do
     command_name="$(AGENT_NAME="$agent_name" yq -r '.agents[env(AGENT_NAME)].command' "$routing")"
     adapter="$(AGENT_NAME="$agent_name" yq -r '.agents[env(AGENT_NAME)].adapter' "$routing")"

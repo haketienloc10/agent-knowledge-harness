@@ -1,0 +1,20 @@
+{
+  "version": 3,
+  "from_ref": "894bc0affca00717ccabcbc22189fcb6fb7d4729",
+  "to_ref": "ec231dd7bffd6b7bc1ead18d30df66b88467b49c",
+  "description": "make repo checker tolerate Shared Knowledge policy line wrapping",
+  "workspace": {
+    "merge": [],
+    "replace": [],
+    "delete": [],
+    "manual_review": []
+  },
+  "repo": {
+    "merge": [],
+    "replace": [
+      "repo-template/scripts/repo-check.sh"
+    ],
+    "delete": [],
+    "manual_review": []
+  }
+}

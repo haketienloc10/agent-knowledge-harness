@@ -27,9 +27,6 @@ required_files=(
   ARCHITECTURE.md
   docs/VERIFY.md
   docs/REPO_SETUP.md
-  docs/domain/README.md
-  docs/specs/README.md
-  docs/decisions/README.md
   docs/friction/README.md
   scripts/repo-check.sh
 )
@@ -51,12 +48,10 @@ managed_files=(
   "$repo_root/ARCHITECTURE.md"
   "$repo_root/docs/VERIFY.md"
 )
-
 existing_managed_files=()
 for path in "${managed_files[@]}"; do
   [[ -f "$path" ]] && existing_managed_files+=("$path")
 done
-
 if ((${#existing_managed_files[@]} > 0)) && \
   rg -n '\{\{[^}]+\}\}' "${existing_managed_files[@]}"; then
   fail 'unresolved placeholder(s) found in required artifact'
@@ -70,38 +65,47 @@ fi
 
 agents="$repo_root/AGENTS.md"
 if [[ -f "$agents" ]]; then
-  rg -q '`ARCHITECTURE\.md`' "$agents" || fail 'AGENTS.md: must route to ARCHITECTURE.md'
-  rg -q '`docs/VERIFY\.md`' "$agents" || fail 'AGENTS.md: must route to docs/VERIFY.md'
-  rg -q 'Git root hiện tại' "$agents" || fail 'AGENTS.md: missing Git-root boundary'
-  rg -q 'Không đọc/sửa repository anh em' "$agents" || fail 'AGENTS.md: missing sibling-repository boundary'
-  rg -q 'exact result artifact' "$agents" || fail 'AGENTS.md: missing MCP result-artifact exception'
-  rg -q 'Không tự suy đoán, tìm hoặc mở result artifact khác' "$agents" || \
-    fail 'AGENTS.md: result artifact must come only from MCP handoff'
-  rg -q '^## Handoff với QiQi$' "$agents" || fail 'AGENTS.md: missing QiQi handoff policy'
-  rg -q '^## Tri thức Repo-local$' "$agents" || fail 'AGENTS.md: missing repo-local knowledge rules'
-  rg -q '^## Cross-repo Impact$' "$agents" || fail 'AGENTS.md: missing cross-repo impact rules'
-  rg -U -q 'không tự mở workspace knowledge hoặc result/source của[[:space:]]+repository khác' "$agents" || \
-    fail 'AGENTS.md: child must not read workspace knowledge or sibling repository results'
+  for pattern in \
+    '`ARCHITECTURE\.md`' \
+    '`docs/VERIFY\.md`' \
+    'Git root hiện tại' \
+    'Không đọc/sửa repository anh em' \
+    'exact result artifact' \
+    'Không tự suy đoán, tìm hoặc mở result artifact khác' \
+    '^## Handoff với QiQi$' \
+    '^## Shared Knowledge MCP$' \
+    '^## Cross-repo Impact$' \
+    'knowledge_read' \
+    'knowledge_write' \
+    'entries=\[\]' \
+    'expected_revision' \
+    'legacy heading name' \
+    'MCP footer là source of truth duy nhất'; do
+    rg -q "$pattern" "$agents" || fail "AGENTS.md: missing required policy: $pattern"
+  done
+
+  rg -U -q 'Knowledge MCP là tool exception.*không phải filesystem exception' "$agents" || \
+    fail 'AGENTS.md: shared knowledge must not become an external filesystem exception'
+  rg -q 'không tự mở result/source của repository khác' "$agents" || \
+    fail 'AGENTS.md: child must not read sibling repository results or source'
   rg -q 'QiQi là handoff broker' "$agents" || \
-    fail 'AGENTS.md: QiQi must broker cross-repo handoff'
-  rg -q 'MCP footer là source of truth duy nhất' "$agents" || \
-    fail 'AGENTS.md: MCP footer must own result-handoff mechanics'
-  rg -q 'Repo-local Knowledge' "$agents" || \
-    fail 'AGENTS.md: missing repo-local knowledge handoff semantics'
+    fail 'AGENTS.md: QiQi must broker live cross-repo handoff'
+  rg -U -q 'context\.repo.*context\.domain.*ranking hint|context\.repo.*ranking hint' "$agents" || \
+    fail 'AGENTS.md: repo/domain context must be ranking-only for shared knowledge'
+  rg -U -q '(?s)(live source/test|source/test).*?thắng' "$agents" || \
+    fail 'AGENTS.md: live owner source/test must override stale shared knowledge'
+  rg -U -q 'không truyền filename, path,[[:space:]]+directory' "$agents" || \
+    fail 'AGENTS.md: agent must not own knowledge filesystem layout'
+  rg -q 'Không tạo field `language`' "$agents" || \
+    fail 'AGENTS.md: language field must not be part of shared knowledge schema'
   rg -q 'repository/boundary nào bị ảnh hưởng' "$agents" || \
     fail 'AGENTS.md: Cross-repo Impact must identify affected boundary'
   rg -q 'evidence chính từ repository hiện tại' "$agents" || \
     fail 'AGENTS.md: Cross-repo Impact must carry evidence'
   rg -q 'next action nếu đã rõ' "$agents" || \
     fail 'AGENTS.md: Cross-repo Impact must carry next action when known'
-  rg -q 'đều có thể tạo ra tri thức repo-local' "$agents" || \
-    fail 'AGENTS.md: every task type must be allowed to produce repo-local knowledge'
-  rg -q 'Trước khi finalize task, tự kiểm tra' "$agents" || \
-    fail 'AGENTS.md: missing pre-finalize repo-local knowledge review'
-  rg -U -q 'Không cần ghi lại thông tin có thể đọc thấy trực tiếp và rõ ràng từ source/test' "$agents" || \
-    fail 'AGENTS.md: trivial directly-readable source/test facts should not be persisted'
-  rg -q 'knowledge review trước khi finalize' "$agents" || \
-    fail 'AGENTS.md: Definition of Done must include repo-local knowledge review'
+  rg -U -q 'knowledge review.*gọi `knowledge_write`' "$agents" || \
+    fail 'AGENTS.md: Definition of Done must include knowledge review/write'
 
   if rg -q '^## Final Result Contract$' "$agents"; then
     fail 'AGENTS.md: must not duplicate MCP-owned final result protocol'
@@ -109,9 +113,11 @@ if [[ -f "$agents" ]]; then
   if rg -q 'Newest Result section bắt buộc|Giữ nguyên toàn bộ history|newest pending Result section' "$agents"; then
     fail 'AGENTS.md: MCP-owned marker/history/finalization mechanics are duplicated'
   fi
-
   if rg -q 'Caller có thể ép output bằng JSON Schema|final result missing field|`git_state`|`repo_local_knowledge`' "$agents"; then
     fail 'AGENTS.md: legacy logical JSON result contract found'
+  fi
+  if rg -q 'workspace `knowledge/`|knowledge/INDEX\.md' "$agents"; then
+    fail 'AGENTS.md: legacy workspace-local knowledge store reference found'
   fi
 fi
 
