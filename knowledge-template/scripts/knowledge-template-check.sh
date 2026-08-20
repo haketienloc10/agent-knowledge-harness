@@ -110,7 +110,7 @@ for pattern in \
   'remaining uncertainty' \
   'immutable commit/revision' \
   'bug premise' \
-  'knowledge_write(entries=\[\])' \
+  'knowledge_write\(entries=\[\]\)' \
   'Run payload readiness before calling knowledge_write' \
   'routing.summary.*retrieval abstract' \
   'non-empty `sources` list' \

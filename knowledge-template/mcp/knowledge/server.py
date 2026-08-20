@@ -125,7 +125,7 @@ async def knowledge_write(entries: WriteEntries) -> KnowledgeWriteResult:
 
     Distill from evidence, not from the task premise: do not create a bug/ticket-named
     durable claim unless the work actually verified that claim. Preserve important
-    fact-vs-inference boundaries and unresolved uncertainty; compression must not
+    fact-vs-inference boundaries and unresolved uncertainty. Compression must not
     increase certainty. Search the candidate conclusion before create/update.
 
     CREATE: omit `id` and `expected_revision`.
