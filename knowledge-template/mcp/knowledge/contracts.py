@@ -78,7 +78,9 @@ class KnowledgeScope(StrictModel):
 class KnowledgeRouting(StrictModel):
     summary: Summary = Field(
         description=(
-            "Concise canonical summary, normally using English technical terminology."
+            "Retrieval abstract, not the full investigation. Hard maximum is 500 "
+            "characters; before knowledge_write target 300 characters or less and "
+            "measure deterministically when possible."
         )
     )
     when_to_read: Annotated[
@@ -126,7 +128,11 @@ class KnowledgeSource(StrictModel):
     )
     note: SourceNote | None = Field(
         default=None,
-        description="Optional provenance context.",
+        description=(
+            "Optional compact provenance pointer, not an evidence dump. Hard maximum "
+            "is 1000 characters; before knowledge_write target 600 characters or less "
+            "and measure deterministically when possible."
+        ),
     )
 
 

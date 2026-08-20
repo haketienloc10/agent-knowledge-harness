@@ -109,8 +109,11 @@ branch-only ref is weaker provenance; use it only when an immutable revision can
 be established and keep the resulting certainty appropriately bounded.
 
 Use source notes to identify the relevant behavior/boundary when that helps a future
-reader verify the conclusion. Do not persist guesses or unsupported hypotheses as
-facts merely because a source was attached.
+reader verify the conclusion. A source note is a compact provenance pointer, not an
+evidence dump or file-by-file investigation log. Put detailed evidence in `content`
+and use additional source entries only when they represent genuinely distinct
+provenance. Do not persist guesses or unsupported hypotheses as facts merely because
+a source was attached.
 
 ### 7. Preserve fact, implication, and uncertainty in content
 
@@ -156,8 +159,8 @@ Do not flatten routing fields at the entry top level.
 
 After semantic distillation is complete, convert each surviving candidate into the
 current typed `knowledge_write` payload and inspect the tool schema before the call.
-The typed schema is authoritative for required fields and field limits if they
-change; do not rely on remembered numeric limits from this skill.
+The typed schema is authoritative for required fields and hard field limits if they
+change.
 
 **`routing.summary` is a retrieval abstract, not overflow storage for the
 investigation.** Keep only the smallest durable distinction that helps a future
@@ -165,20 +168,31 @@ agent decide whether to read the document. Put supporting evidence, ruled-out
 hypotheses, caveats, detailed reasoning, and materially relevant uncertainty in
 `content`.
 
-#### Summary budget gate
+#### Summary and source-note budget gate
 
-Write `content` first. Draft `routing.summary` last.
+Write `content` first. Draft `routing.summary` and `sources[].note` last.
 
 A good `routing.summary` normally contains one reusable boundary or decision in one
-or two short sentences. Keep it roughly 300 characters or less for the current
-schema rather than filling the available field. If the schema maximum changes, aim
-for about 60-70% of that maximum so wording has safety margin.
+or two short sentences. For the current schema, **do not call `knowledge_write`
+until the summary is 300 characters or less**. Each `sources[].note` should be a
+compact provenance pointer and must be 600 characters or less before the call.
+These are conservative preflight budgets below the schema's hard limits.
 
-Do not mechanically truncate an oversized summary. Rewrite it as:
+When the execution environment can count characters, measure these fields
+**deterministically** before the tool call (`len(...)` or an equivalent exact count);
+do not estimate by eye. If exact counting is unavailable, use a stricter fallback:
+summary about 200 characters or less and each source note about 400 characters or
+less.
+
+Do not mechanically truncate an oversized field. Rewrite `routing.summary` as:
 
 `durable conclusion + critical boundary`
 
-Move evidence enumeration, implementation walkthroughs, source or method names,
+For an oversized source note, keep only:
+
+`stable provenance location + exact behavior/boundary verified there`
+
+Move evidence enumeration, implementation walkthroughs, long source/method lists,
 ruled-out branches, and detailed uncertainty into `content`. Keep only an uncertainty
 qualifier that is essential to prevent future misinterpretation.
 
@@ -188,18 +202,18 @@ must not delete provenance or uncertainty merely to satisfy a field limit.
 Before the call, verify at minimum:
 
 1. the candidate describes what the evidence established, not the task premise;
-2. `routing` is nested and `routing.summary` is concise enough for the current typed
-   schema and passes the summary budget gate;
-3. `sources` is present and non-empty, with provenance sufficient to audit material
-   claims;
-4. detailed evidence and uncertainty live in `content`, not in `routing.summary`;
+2. `routing` is nested and `routing.summary` passes the deterministic summary budget;
+3. `sources` is present and non-empty, each source note passes its budget, and
+   provenance remains sufficient to audit material claims;
+4. detailed evidence and uncertainty live in `content`, not in routing/source-note
+   metadata;
 5. create/update identity and revision follow the current typed schema;
 6. no filesystem-owned or unsupported fields are present.
 
 If validation still fails, inspect the typed schema/error, repair only the fields
-named by that error, and retry once. Do not probe alternative payload shapes by
-trial and error, and do not weaken or silently truncate the durable claim merely to
-make validation pass.
+named by that error, re-run the deterministic length preflight, and retry once. Do
+not probe alternative payload shapes by trial and error, and do not weaken or
+silently truncate the durable claim merely to make validation pass.
 
 ### 11. Decide whether to write
 

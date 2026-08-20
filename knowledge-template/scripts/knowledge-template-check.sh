@@ -94,12 +94,26 @@ rg -q 'knowledge-distill' "$server" || \
   fail 'knowledge_write contract must route semantic distillation through knowledge-distill'
 rg -q 'task premise' "$server" || \
   fail 'knowledge_write contract must reject unverified task-premise persistence'
+rg -q 'PRECALL LENGTH GATE' "$server" || \
+  fail 'knowledge_write contract must expose the pre-call length gate'
+rg -q '300 characters or less' "$server" || \
+  fail 'knowledge_write contract must expose the summary preflight budget'
+rg -q '600 characters or less' "$server" || \
+  fail 'knowledge_write contract must expose the source-note preflight budget'
 rg -q 'extra="forbid"' "$contracts" || \
   fail 'typed knowledge models must reject unknown fields'
 rg -q "routing fields must be nested under the 'routing' object" "$contracts" || \
   fail 'typed write schema must explain flat routing mistakes'
 rg -q 'filesystem fields are owned by Knowledge MCP' "$contracts" || \
   fail 'typed write schema must explain filesystem ownership'
+rg -q 'Hard maximum is 500' "$contracts" || \
+  fail 'routing.summary schema must expose its hard maximum'
+rg -q 'target 300 characters or less' "$contracts" || \
+  fail 'routing.summary schema must expose its conservative preflight budget'
+rg -q 'is 1000 characters' "$contracts" || \
+  fail 'source.note schema must expose its hard maximum'
+rg -q 'target 600 characters or less' "$contracts" || \
+  fail 'source.note schema must expose its conservative preflight budget'
 rg -q '"pydantic>=2,<3"' "$project_file" || \
   fail 'pydantic must be an explicit runtime dependency'
 
@@ -116,14 +130,16 @@ for pattern in \
   'non-empty `sources` list' \
   'typed `knowledge_write` payload' \
   'repair only the fields' \
-  'do not weaken or silently truncate' \
-  'Summary budget gate' \
+  'do not weaken' \
+  'Summary and source-note budget gate' \
   'Write `content` first' \
-  'Draft `routing.summary` last' \
-  'roughly 300 characters or less' \
-  '60-70% of that maximum' \
+  'Draft `routing.summary` and `sources\[\]\.note` last' \
+  '300 characters or less' \
+  '600 characters or less' \
+  'deterministically' \
   'Do not mechanically truncate' \
-  'durable conclusion.*critical boundary'; do
+  'durable conclusion.*critical boundary' \
+  'stable provenance location.*exact behavior/boundary'; do
   rg -q "$pattern" "$skill" || fail "knowledge-distill missing quality gate: $pattern"
 done
 

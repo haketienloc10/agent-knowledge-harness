@@ -50,6 +50,9 @@ class KnowledgeServerContractTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("knowledge-distill", description)
         self.assertIn("task premise", description)
         self.assertIn("Compression must not increase certainty", description)
+        self.assertIn("PRECALL LENGTH GATE", description)
+        self.assertIn("300 characters or less", description)
+        self.assertIn("600 characters or less", description)
 
         schema = write_tool.input_schema
         entries = schema["properties"]["entries"]

@@ -128,6 +128,11 @@ async def knowledge_write(entries: WriteEntries) -> KnowledgeWriteResult:
     fact-vs-inference boundaries and unresolved uncertainty. Compression must not
     increase certainty. Search the candidate conclusion before create/update.
 
+    PRECALL LENGTH GATE: measure bounded prose fields before calling when possible.
+    Keep `routing.summary` at 300 characters or less and each `sources[].note` at
+    600 characters or less. These are conservative budgets below the typed schema's
+    hard limits; rewrite instead of mechanically truncating oversized fields.
+
     CREATE: omit `id` and `expected_revision`.
     UPDATE: provide exact `id` + `expected_revision` returned by knowledge_read.
     ROUTING: put `summary`, `when_to_read`, `keywords`, and optional `aliases`
