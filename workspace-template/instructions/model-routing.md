@@ -74,8 +74,8 @@ Không chọn Codex chỉ để retry một environment/runtime failure của ro
 3. Ưu tiên `claude-balanced` khi không có tín hiệu rõ cho fast/deep/verifier hoặc
    Codex.
 4. Truyền **exact route name** vào `delegate_repo_task`; không truyền profile name.
-5. Không đặt executable, model ID, permission mode, effort hoặc raw CLI flags vào
-   task hay MCP arguments.
+5. Không đặt executable, model ID, permission mode, effort, hook config hoặc raw CLI
+   flags vào TaskPacket hay public MCP arguments.
 6. Nếu route không tồn tại trong `agent-routing.yaml`, route đó không khả dụng dù
    được nhắc ở tài liệu hay ví dụ khác.
 7. Không đổi route chỉ để né blocker về environment, dependency, permission hoặc
@@ -92,8 +92,9 @@ QiQi nên chọn route nào cho task này?
 Các concern sau **không thuộc route-selection policy** và được mô tả ở artifact
 sở hữu tương ứng:
 
-- task/prompt semantics → `AGENTS.md` + `identity.md`;
-- agent/model/native argv → `agent-routing.yaml`;
-- START/RESUME, Herdr lifecycle, native session identity, result artifact → MCP;
+- TaskPacket/prompt semantics → `AGENTS.md` + `identity.md`;
+- agent/model/native argv + `{handoff_args}` insertion point → `agent-routing.yaml`;
+- START/RESUME, Herdr lifecycle, native session identity, Stop-hook capture và
+  SQLite runtime state → MCP;
 - dependency/concurrency/delegation waves → `AGENTS.md`;
 - setup và smoke test → `docs/WORKSPACE_SETUP.md`.
