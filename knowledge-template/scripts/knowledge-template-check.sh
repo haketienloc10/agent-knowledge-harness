@@ -116,7 +116,14 @@ for pattern in \
   'non-empty `sources` list' \
   'typed `knowledge_write` payload' \
   'repair only the fields' \
-  'do not weaken or silently truncate'; do
+  'do not weaken or silently truncate' \
+  'Summary budget gate' \
+  'Write `content` first' \
+  'Draft `routing.summary` last' \
+  'roughly 300 characters or less' \
+  '60-70% of that maximum' \
+  'Do not mechanically truncate' \
+  'durable conclusion.*critical boundary'; do
   rg -q "$pattern" "$skill" || fail "knowledge-distill missing quality gate: $pattern"
 done
 

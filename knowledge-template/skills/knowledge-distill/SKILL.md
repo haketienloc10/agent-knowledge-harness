@@ -165,6 +165,23 @@ agent decide whether to read the document. Put supporting evidence, ruled-out
 hypotheses, caveats, detailed reasoning, and materially relevant uncertainty in
 `content`.
 
+#### Summary budget gate
+
+Write `content` first. Draft `routing.summary` last.
+
+A good `routing.summary` normally contains one reusable boundary or decision in one
+or two short sentences. Keep it roughly 300 characters or less for the current
+schema rather than filling the available field. If the schema maximum changes, aim
+for about 60-70% of that maximum so wording has safety margin.
+
+Do not mechanically truncate an oversized summary. Rewrite it as:
+
+`durable conclusion + critical boundary`
+
+Move evidence enumeration, implementation walkthroughs, source or method names,
+ruled-out branches, and detailed uncertainty into `content`. Keep only an uncertainty
+qualifier that is essential to prevent future misinterpretation.
+
 Every persisted entry must include a non-empty `sources` list. Metadata compression
 must not delete provenance or uncertainty merely to satisfy a field limit.
 
@@ -172,7 +189,7 @@ Before the call, verify at minimum:
 
 1. the candidate describes what the evidence established, not the task premise;
 2. `routing` is nested and `routing.summary` is concise enough for the current typed
-   schema;
+   schema and passes the summary budget gate;
 3. `sources` is present and non-empty, with provenance sufficient to audit material
    claims;
 4. detailed evidence and uncertainty live in `content`, not in `routing.summary`;
