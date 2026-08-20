@@ -8,11 +8,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
-TASK_PACKET_MAX_CHARS = 120_000
-TASK_TEXT_MAX_CHARS = 60_000
-TASK_LIST_MAX_ITEMS = 100
-TASK_ITEM_MAX_CHARS = 20_000
-AGENT_RESPONSE_MAX_CHARS = 2_000_000
+# Preserve the existing qiqi_delegate task-size safety boundary. The previous
+# public contract rejected task strings above 100,000 characters; the structured
+# packet keeps that same aggregate bound instead of inventing per-field limits.
+TASK_PACKET_MAX_CHARS = 100_000
 CONTEXT_CERTAINTIES = {"verified", "user-provided", "authoritative-decision"}
 
 
@@ -65,8 +64,6 @@ def _clean_required_text(value: Any, label: str) -> str:
     result = value.strip()
     if not result:
         raise ValueError(f"{label} must not be empty")
-    if len(result) > TASK_TEXT_MAX_CHARS:
-        raise ValueError(f"{label} is too large")
     return result
 
 
@@ -78,8 +75,6 @@ def _clean_string_list(
 ) -> tuple[str, ...]:
     if not isinstance(value, list):
         raise ValueError(f"{label} must be a list of strings")
-    if len(value) > TASK_LIST_MAX_ITEMS:
-        raise ValueError(f"{label} has too many items")
     result: list[str] = []
     for index, item in enumerate(value):
         if not isinstance(item, str):
@@ -87,8 +82,6 @@ def _clean_string_list(
         cleaned = item.strip()
         if not cleaned:
             raise ValueError(f"{label}[{index}] must not be empty")
-        if len(cleaned) > TASK_ITEM_MAX_CHARS:
-            raise ValueError(f"{label}[{index}] is too large")
         result.append(cleaned)
     if require_non_empty and not result:
         raise ValueError(f"{label} must contain at least one item")
@@ -98,8 +91,6 @@ def _clean_string_list(
 def _clean_context(value: Any) -> tuple[ContextFact, ...]:
     if not isinstance(value, list):
         raise ValueError("required_context must be a list of objects")
-    if len(value) > TASK_LIST_MAX_ITEMS:
-        raise ValueError("required_context has too many items")
     result: list[ContextFact] = []
     required_keys = {"fact", "source", "certainty"}
     for index, item in enumerate(value):
@@ -114,9 +105,13 @@ def _clean_context(value: Any) -> tuple[ContextFact, ...]:
                 detail.append("missing " + ", ".join(missing))
             if extra:
                 detail.append("unsupported " + ", ".join(extra))
-            raise ValueError(f"required_context[{index}] has invalid fields: {'; '.join(detail)}")
+            raise ValueError(
+                f"required_context[{index}] has invalid fields: {'; '.join(detail)}"
+            )
         fact = _clean_required_text(item["fact"], f"required_context[{index}].fact")
-        source = _clean_required_text(item["source"], f"required_context[{index}].source")
+        source = _clean_required_text(
+            item["source"], f"required_context[{index}].source"
+        )
         certainty = _clean_required_text(
             item["certainty"], f"required_context[{index}].certainty"
         )
@@ -174,7 +169,9 @@ def render_task_prompt(packet: TaskPacket) -> str:
                 f"- [{item.certainty}] {item.fact}\n  Provenance: {item.source}"
             )
     else:
-        context_lines.append("- No workspace/upstream facts are required for this turn.")
+        context_lines.append(
+            "- No workspace/upstream facts are required for this turn."
+        )
 
     return f"""Repository task delegated by QiQi
 
@@ -262,13 +259,18 @@ def normalize_hook_payload(
     else:
         state = "failed"
         error_value = payload.get("error")
-        error = error_value if isinstance(error_value, str) and error_value else "unknown"
+        error = (
+            error_value
+            if isinstance(error_value, str) and error_value
+            else "unknown"
+        )
         if not response:
             details = payload.get("error_details")
-            response = details if isinstance(details, str) and details else f"Claude turn failed: {error}"
-
-    if len(response) > AGENT_RESPONSE_MAX_CHARS:
-        raise ValueError("native final assistant message exceeds configured safety bound")
+            response = (
+                details
+                if isinstance(details, str) and details
+                else f"Claude turn failed: {error}"
+            )
 
     native_turn_id = payload.get("turn_id")
     if native_turn_id is not None and not isinstance(native_turn_id, str):
@@ -289,7 +291,9 @@ def normalize_hook_payload(
         "agent_response": response,
         "error": error,
         "cwd": cwd,
-        "captured_at_ns": captured_at_ns if captured_at_ns is not None else time.time_ns(),
+        "captured_at_ns": (
+            captured_at_ns if captured_at_ns is not None else time.time_ns()
+        ),
     }
 
 
@@ -382,6 +386,26 @@ class SessionStore:
             ).fetchone()
         return dict(row) if row is not None else None
 
+    def register_session(self, session_id: str, repository: str, agent: str) -> bool:
+        now = time.time_ns()
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT repository, agent FROM sessions WHERE session_id = ?",
+                (session_id,),
+            ).fetchone()
+            if row is not None:
+                if row["repository"] != repository or row["agent"] != agent:
+                    raise RuntimeError(
+                        "session identity conflicts with existing ownership"
+                    )
+                return False
+            conn.execute(
+                "INSERT INTO sessions(session_id, repository, agent, created_at_ns, updated_at_ns) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (session_id, repository, agent, now, now),
+            )
+        return True
+
     def require_resume(self, session_id: str, repository: str, agent: str) -> None:
         session = self.get_session(session_id)
         if session is None:
@@ -400,20 +424,10 @@ class SessionStore:
                 f"{session['agent']!r}, selected route uses {agent!r}"
             )
 
-    def import_legacy_session(self, session_id: str, repository: str, agent: str) -> bool:
-        now = time.time_ns()
-        with self._connect() as conn:
-            existing = conn.execute(
-                "SELECT 1 FROM sessions WHERE session_id = ?", (session_id,)
-            ).fetchone()
-            if existing is not None:
-                return False
-            conn.execute(
-                "INSERT INTO sessions(session_id, repository, agent, created_at_ns, updated_at_ns) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (session_id, repository, agent, now, now),
-            )
-        return True
+    def import_legacy_session(
+        self, session_id: str, repository: str, agent: str
+    ) -> bool:
+        return self.register_session(session_id, repository, agent)
 
     def record_turn(
         self,
