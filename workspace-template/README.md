@@ -19,10 +19,14 @@ instructions/agent-routing.yaml   # Canonical runtime route registry
 instructions/model-routing.md     # QiQi exact-route selection policy
 .codex/config.toml                # Project-scoped qiqi_delegate only
 mcp/qiqi_delegate/
+├── core.py                       # TaskPacket + native capture validation + SQLite state
+├── result_hook.py                # Native Stop-hook sink
+├── server.py                     # Herdr-backed MCP execution boundary
 ├── pyproject.toml
-└── server.py
+└── tests/
 .qiqi/tasks/                      # Optional workspace-local task artifacts
-.qiqi/runs/                       # Durable execution result artifacts
+.qiqi/state/                      # Runtime SQLite state; generated, gitignored
+.qiqi/runs/                       # Legacy-only migration input; generated path gitignored
 docs/
 ├── WORKSPACE_SETUP.md
 └── examples/
@@ -37,7 +41,7 @@ hai cạnh Shared Knowledge Store.
 
 ```text
 qiqi_delegate
-= repo execution / native session / result handoff
+= repo execution / native session / structured input / native final response
 
 knowledge
 = reusable durable knowledge retrieval / persistence
@@ -55,24 +59,32 @@ substantive work phải review/write.
 
 ```text
 QiQi
-  ↓ understand task
+  ↓ understand user intent
   ↓ conditional knowledge_read nếu durable context có thể đổi orchestration/answer
-  ↓ live SYSTEM_MAP / existing result evidence
-  ↓ self-contained task prompt + route + optional session_id
+  ↓ live SYSTEM_MAP / previous native response evidence
+  ↓ structured TaskPacket
+     - original user_request
+     - objective + scope
+     - required_context + provenance
+     - constraints + acceptance + verification + unknowns
 qiqi_delegate
+  ↓ validate packet + render closed-world prompt
   ↓ Herdr workspace + real interactive Codex/Claude
 Execution agent
   ↓ understand repo-local concern
   ↓ conditional knowledge_read theo repo AGENTS.md
   ↓ live repo investigation / implementation / verification
   ↓ conditional knowledge review/write nếu substantive work tạo reusable conclusion
-  ↓ terminal Result vào .qiqi/runs/...md
+  ↓ native final assistant response
+native Stop hook
+  ↓ exact final message → invocation-private sink
 qiqi_delegate
-  ↓ validate result + native identity
-  ↓ return {session_id, result_path}
+  ↓ validate native session identity
+  ↓ persist MCP-owned session/turn state
+  ↓ return {session_id, turn_id, state, agent_response}
 QiQi
-  ↓ read/reconcile result
-  ↓ downstream live handoff nếu cần
+  ↓ read/reconcile full agent_response
+  ↓ downstream required_context nếu cần
   ↓ conditional knowledge review/write cho durable system/global conclusion
 ```
 
@@ -84,21 +96,21 @@ Shared knowledge là context, không mạnh hơn live owner source/test. Current
 QiQi là handoff broker duy nhất giữa repositories đối với **live execution
 evidence**.
 
-Producer → consumer dependency vẫn là:
+Producer → consumer dependency:
 
 ```text
-repo A terminal result
+repo A native agent_response
 → QiQi đọc + reconcile
-→ relevant fact/evidence trong repo B task prompt
+→ relevant fact/evidence + provenance trong repo B required_context
 → repo B
 ```
 
-Repo B không tự mở repo A source/result. Repo B được phép independently query
+Repo B không tự mở repo A source/runtime state. Repo B được phép independently query
 Shared Knowledge MCP vì đó là durable curated context, không phải live child state.
 
-`### Cross-repo Impact` trong result vẫn là execution-impact signal: persist knowledge
-không thay thế handoff khi repository khác còn cần investigation/implementation/
-verification.
+Nếu QiQi đã dùng một durable knowledge fact để quyết định repository, scope,
+constraint, dependency hoặc acceptance criterion, fact đó phải được inline vào
+`required_context`; child không được kỳ vọng tự query lại đúng premise đó.
 
 ## Shared Knowledge Lifecycle
 
@@ -111,7 +123,7 @@ Sau khi hiểu concern, agent áp dụng decision rule:
   từ evidence đã đủ hoặc mechanical work nơi durable context không thể đổi action.
 
 QiQi không cần duplicate repo-agent query nếu knowledge chỉ có thể ảnh hưởng
-repo-local implementation và không ảnh hưởng orchestration/task prompt.
+repo-local implementation và không ảnh hưởng orchestration/TaskPacket.
 
 Với substantive work có khả năng tạo hoặc xác nhận reusable conclusion, agent
 review durable knowledge và gọi:
@@ -131,46 +143,83 @@ Nếu durable candidate tồn tại nhưng write lỗi, không silently report n
 
 ## Public qiqi_delegate Contract
 
+Public tool dùng structured fields:
+
 ```text
-delegate_repo_task(repository, task, route, session_id?)
+delegate_repo_task(
+  repository,
+  route,
+  user_request,
+  objective,
+  scope,
+  out_of_scope,
+  required_context,
+  constraints,
+  acceptance_criteria,
+  verification,
+  known_unknowns,
+  session_id?
+)
 ```
 
+- `scope` và `acceptance_criteria` phải non-empty;
+- `required_context` item có đúng `fact`, `source`, `certainty`;
+- certainty là `verified`, `user-provided` hoặc `authoritative-decision`;
 - không có `session_id` → START native Codex/Claude session mới;
 - có `session_id` → RESUME đúng native session đó;
-- cross-agent resume bị từ chối;
+- cross-agent/repository resume bị từ chối;
 - tool synchronous tới terminal turn hoặc failure;
-- success chỉ trả native `session_id` + workspace-relative `result_path`.
+- success trả native `session_id`, QiQi `turn_id`, `state` và exact
+  `agent_response`.
 
-QiQi phải đọc `result_path` trước khi quyết định bước tiếp theo. Relevant artifact
-đã đủ evidence thì trả lời trực tiếp; không START/RESUME chỉ để lấy lại hoặc trình
-bày lại report.
+Relevant native response đã đủ evidence thì QiQi trả lời trực tiếp; không START/
+RESUME chỉ để lấy lại hoặc trình bày lại report.
 
-## Prompt Ownership
+## Structured Input / Closed-world Context
 
-Task prompt do QiQi sở hữu: outcome, scope, live dependency evidence, constraints và
-verification. Shared durable knowledge không cần được copy toàn bộ vào prompt vì
-child agent có Knowledge MCP; **live producer result vẫn phải inline qua QiQi**.
-
-Với START, dòng không rỗng đầu tiên của `task` là English title ngắn (3–8 từ,
-ưu tiên ASCII) để MCP derive readable result slug. RESUME giữ exact result artifact.
-
-## Result Artifact
-
-Newest Result hiện giữ compatibility headings:
+QiQi luôn giữ cả hai lớp:
 
 ```text
-### Outcome
-### Changes
-### Verification
-### Git State
-### Blockers
-### Repo-local Knowledge
-### Cross-repo Impact
+original user_request
++ QiQi repo-local objective / explicit required context
 ```
 
-`Repo-local Knowledge` là legacy label: repo policy dùng section này để ghi Shared
-Knowledge MCP IDs create/update, `None`, hoặc persistence failure. Nó không còn tạo
-nghĩa vụ ghi durable knowledge vào repository.
+Child agent không chia sẻ hidden conversation, hidden reasoning, workspace control
+context hoặc sibling-repository state của QiQi. Đối với external/live facts, những
+gì không có trong TaskPacket không được giả định là child đã biết.
+
+`required_context` là required premise, không phải search hint. Shared Knowledge MCP
+của child dùng cho discovery/enrichment/verification khác; nó không thay thế fact
+QiQi đã dùng để quyết định semantics của delegation.
+
+Không còn English-title convention để tạo result filename vì storage concern không
+nằm trong task semantics.
+
+## Native Result Handoff
+
+Execution agent không bị ép vào result schema hay fixed headings. Final assistant
+response của agent là semantic handoff và được capture qua native Stop hook.
+
+MCP **không** dùng:
+
+- terminal viewport/scrollback;
+- pane capture làm result transport;
+- transcript JSONL parsing;
+- agent-written Markdown result artifact.
+
+Vì vậy response dài hơn một screen không bị mất phần đã scroll khỏi viewport.
+QiQi nhận nguyên văn message native mà hook cung cấp và đánh giá completion bằng
+TaskPacket + evidence trong response.
+
+Runtime ownership/history nằm trong MCP-owned:
+
+```text
+.qiqi/state/qiqi_delegate.sqlite3
+```
+
+QiQi và child không đọc/sửa database này. `.qiqi/runs/` chỉ còn compatibility
+bridge cho ownership metadata của session legacy khi RESUME; turn mới không đọc hay
+ghi Markdown result tại đó.
 
 ## Herdr Runtime
 
@@ -185,6 +234,17 @@ herdr integration status
 MCP yêu cầu adapter integration `current`, tạo workspace tại exact Git root, launch
 real interactive TUI, wait terminal state, lấy native identity rồi cleanup.
 
+Để capture exact final response, MCP inject invocation-scoped native Stop hook:
+
+- Claude: `--settings` inline JSON chứa `Stop`/`StopFailure` command hooks;
+- Codex: command `Stop` hook qua `-c hooks.Stop=...`, bật `features.hooks=true` và
+  dùng invocation-scoped `--dangerously-bypass-hook-trust` cho hook command do MCP
+  tự tạo.
+
+Codex trust bypass chỉ được MCP inject cho invocation này; không đặt flag đó trong
+route policy hay user prompt. Nếu native hook không trả final message hợp lệ, MCP
+fail rõ và **không fallback** sang screen/transcript.
+
 ## Setup
 
 Cài Shared Knowledge MCP **trước** từ `knowledge-template/`, mở fresh agent session,
@@ -195,4 +255,4 @@ uv sync --project mcp/qiqi_delegate
 bash scripts/workspace-check.sh
 ```
 
-Chi tiết và smoke tests nằm trong `docs/WORKSPACE_SETUP.md`.
+Chi tiết, security note và smoke tests nằm trong `docs/WORKSPACE_SETUP.md`.
