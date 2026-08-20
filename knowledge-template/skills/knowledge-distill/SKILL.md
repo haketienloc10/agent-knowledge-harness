@@ -88,6 +88,9 @@ incident/ticket wording that initiated investigation.
 - Use `global`, `system`, `repo`, or `domain` according to where the conclusion is
   reusable; current repository is not a permission boundary.
 - `canonical_name` is concise lowercase kebab-case canonical terminology.
+- `scope.id` uses the same lowercase convention, with `.` or `-` as the only
+  separators (for example `search-air`, `payment.retry`). Never use `_`, `/`, or a
+  filesystem-style path.
 - Do not make ticket IDs, temporary branch names, or an unverified bug hypothesis
   the semantic identity. Keep useful ticket/legacy terms in aliases or provenance.
 
@@ -208,7 +211,9 @@ Before the call, verify at minimum:
 4. detailed evidence and uncertainty live in `content`, not in routing/source-note
    metadata;
 5. create/update identity and revision follow the current typed schema;
-6. no filesystem-owned or unsupported fields are present.
+6. no filesystem-owned or unsupported fields are present;
+7. `scope.id` and `canonical_name` use only lowercase letters/numbers with `.` or
+   `-` separators (no `_`, no `/`).
 
 If validation still fails, inspect the typed schema/error, repair only the fields
 named by that error, re-run the deterministic length preflight, and retry once. Do

@@ -73,6 +73,22 @@ class KnowledgeContractsTest(unittest.TestCase):
             KnowledgeWriteEntry.model_validate(payload)
         self.assertIn("language is not part of the knowledge schema", str(raised.exception))
 
+    def test_scope_id_underscore_fails_with_actionable_hint(self):
+        payload = create_payload()
+        payload["scope"]["id"] = "search_air"
+        with self.assertRaises(ValidationError) as raised:
+            KnowledgeWriteEntry.model_validate(payload)
+        self.assertIn("not '_'", str(raised.exception))
+        self.assertIn("'search-air'", str(raised.exception))
+
+    def test_summary_over_budget_fails_with_actionable_hint(self):
+        payload = create_payload()
+        payload["routing"]["summary"] = "x" * 501
+        with self.assertRaises(ValidationError) as raised:
+            KnowledgeWriteEntry.model_validate(payload)
+        self.assertIn("exceeds 500 characters", str(raised.exception))
+        self.assertIn("Summary budget gate", str(raised.exception))
+
     def test_create_omits_id_and_revision(self):
         entry = KnowledgeWriteEntry.model_validate(create_payload())
         self.assertIsNone(entry.id)

@@ -74,6 +74,20 @@ class KnowledgeScope(StrictModel):
     )
     id: ScopeId
 
+    @model_validator(mode="before")
+    @classmethod
+    def explain_scope_id_separator_mistake(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        scope_id = value.get("id")
+        if isinstance(scope_id, str) and "_" in scope_id:
+            raise ValueError(
+                "scope.id must use lowercase letters/numbers with '.' or '-' "
+                f"separators, not '_': got {scope_id!r}. Use "
+                f"{scope_id.replace('_', '-')!r} instead."
+            )
+        return value
+
 
 class KnowledgeRouting(StrictModel):
     summary: Summary = Field(
@@ -83,6 +97,23 @@ class KnowledgeRouting(StrictModel):
             "measure deterministically when possible."
         )
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def explain_summary_budget_overflow(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        summary = value.get("summary")
+        if isinstance(summary, str) and len(summary) > 500:
+            raise ValueError(
+                f"routing.summary exceeds 500 characters ({len(summary)} given). "
+                "routing.summary is a retrieval abstract, not overflow storage: move "
+                "evidence, reasoning, and detailed uncertainty into content, then "
+                "rewrite summary as 'durable conclusion + critical boundary' per the "
+                "knowledge-distill Summary budget gate."
+            )
+        return value
+
     when_to_read: Annotated[
         list[WhenToRead],
         Field(
