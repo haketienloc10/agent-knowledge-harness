@@ -1,6 +1,8 @@
 # <Tên task>
 
-## Yêu cầu
+## Yêu cầu người dùng
+
+Giữ wording/constraint quan trọng từ original user request.
 
 ## Kết quả mong muốn
 
@@ -12,7 +14,7 @@
 ## Bối cảnh và quyết định đã chốt
 
 Chỉ ghi thông tin cần để tiếp tục task mà không phải điều tra lại phần đã hoàn
-tất.
+tất. Fact nào sẽ trở thành required premise cho delegation phải có provenance rõ.
 
 ## Dependency và contract
 
@@ -23,18 +25,20 @@ working transcript, live child state hoặc progress polling.
 
 ## Delegation đã hoàn tất
 
-| Repository | Agent | Route | Native session ID | Result artifact | Outcome | Verification chính |
+| Repository | Agent | Route | Native session ID | Turn ID | State | Verification chính |
 |---|---|---|---|---|---|---|
 
-Chỉ ghi delegation sau khi `delegate_repo_task` đã return thành công và QiQi đã
-đọc `result_path`.
+Chỉ ghi delegation sau khi `delegate_repo_task` đã return thành công và QiQi đã đọc
+toàn bộ `agent_response`.
 
 - `Native session ID` là ID thật do Codex/Claude trả về và chỉ dùng làm argument
   `session_id` cho RESUME thật sự của cùng native conversation.
-- `Result artifact` là workspace-relative `result_path` dưới `.qiqi/runs/`; đây là
-  handoff history của session và phải được đọc trước khi quyết định bước tiếp.
-- Không RESUME chỉ để yêu cầu agent lặp lại/cung cấp report đã có trong artifact.
-- Không ghi Herdr pane/workspace, process state, transcript hoặc progress.
+- `Turn ID` là audit pointer do qiqi_delegate tạo; không phải path result.
+- Native `agent_response` là terminal semantic handoff nhưng không copy toàn bộ vào
+  task file này. Chỉ chắt lọc durable workspace facts cần cho continuation.
+- Không RESUME chỉ để yêu cầu agent lặp lại/cung cấp report đã có trong response.
+- Không ghi Herdr pane/workspace, process state, transcript, screen capture hoặc
+  `.qiqi/state/` database content.
 
 Nếu chuyển sang agent khác, tạo START mới và ghi row mới; không tái sử dụng native
 session ID của agent cũ.
@@ -43,12 +47,14 @@ session ID của agent cũ.
 
 Chỉ ghi **live fact/evidence** QiQi đã reconcile và còn giá trị cho downstream work.
 
-| Từ repository | Fact/evidence cần truyền | Repository nhận | Trạng thái |
+| Từ repository | Fact/evidence + provenance cần truyền | Repository nhận | Trạng thái |
 |---|---|---|---|
 
-Không yêu cầu downstream agent tự đọc sibling result/source; QiQi phải đưa live
-context cần dùng trực tiếp vào task prompt. Durable reusable knowledge được agent
-query độc lập qua Shared Knowledge MCP.
+Không yêu cầu downstream agent tự đọc sibling source/runtime state. QiQi phải đưa
+live context cần dùng trực tiếp vào `required_context`. Nếu QiQi đã dùng một Shared
+Knowledge fact để quyết định semantics, fact đó cũng phải inline kèm Knowledge ID/
+revision hoặc provenance phù hợp; child knowledge query không thay thế required
+input.
 
 ## Blocker hoặc câu hỏi mở
 
