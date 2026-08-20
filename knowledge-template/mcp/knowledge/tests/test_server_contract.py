@@ -46,7 +46,7 @@ class KnowledgeServerContractTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(set(tools), {"knowledge_read", "knowledge_write"})
 
         write_tool = tools["knowledge_write"]
-        description = write_tool.description or ""
+        description = " ".join((write_tool.description or "").split())
         self.assertIn("knowledge-distill", description)
         self.assertIn("task premise", description)
         self.assertIn("Compression must not increase certainty", description)
