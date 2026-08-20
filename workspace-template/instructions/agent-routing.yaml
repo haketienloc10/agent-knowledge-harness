@@ -1,20 +1,19 @@
 # Canonical machine-readable runtime routing registry for qiqi_delegate.
 # This is the only file under instructions/ loaded by the MCP server.
 #
-# QiQi owns task semantics, route selection, and the START vs RESUME decision.
-# This registry owns only agent executable/adapter, interactive START/RESUME argv,
-# model selection, and route-specific native CLI flags.
-# MCP owns Herdr workspace/agent lifecycle, native session identity, prompt/wait,
-# result artifact lifecycle, validation, and cleanup.
+# QiQi owns task semantics, route selection, and START vs RESUME.
+# This registry owns only executable/adapter/model/native CLI arguments.
+# qiqi_delegate owns the native result-capture hook and injects it through the
+# {handoff_args} placeholder on every START/RESUME invocation.
 #
-# Flags belong here, not in QiQi prompts or MCP tool arguments.
-# `start_args` and `resume_args` are interactive agent arguments passed after
-# `herdr agent start ... --`; they must not use non-interactive execution modes.
+# Do not put result paths, result schemas, hook commands, or handoff persistence
+# mechanics in this file. {handoff_args} must appear exactly once in both the
+# START and RESUME templates for every agent.
 #
-# {route_args} expands to the selected route's args list. Scalar placeholders:
-# {model}, {session_id}, {result_dir}.
+# Scalar placeholders: {model}, {session_id}.
+# List placeholders: {route_args}, {handoff_args}.
 
-version: 1
+version: 2
 
 agents:
   codex:
@@ -22,43 +21,39 @@ agents:
     adapter: codex
 
     start_args:
+      - "{handoff_args}"
       - --dangerously-bypass-approvals-and-sandbox
       - --model
       - "{model}"
-      - --add-dir
-      - "{result_dir}"
       - "{route_args}"
 
-    # Codex's `-c` config overrides are top-level CLI options, so route args
-    # intentionally precede the interactive `resume` subcommand.
+    # Codex -c overrides and hook-trust flags are top-level options, so both
+    # route_args and handoff_args intentionally precede the resume subcommand.
     resume_args:
       - "{route_args}"
+      - "{handoff_args}"
       - resume
       - "{session_id}"
       - --dangerously-bypass-approvals-and-sandbox
       - --model
       - "{model}"
-      - --add-dir
-      - "{result_dir}"
 
   claude:
     command: claude
     adapter: claude
 
     start_args:
+      - "{handoff_args}"
       - --model
       - "{model}"
-      - --add-dir
-      - "{result_dir}"
       - "{route_args}"
 
     resume_args:
+      - "{handoff_args}"
       - --resume
       - "{session_id}"
       - --model
       - "{model}"
-      - --add-dir
-      - "{result_dir}"
       - "{route_args}"
 
 routes:
