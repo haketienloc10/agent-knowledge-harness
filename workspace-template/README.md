@@ -21,7 +21,7 @@ instructions/model-routing.md     # QiQi route-selection policy
 mcp/qiqi_delegate/
 ├── core.py                       # TaskPacket + hook normalization + SQLite state
 ├── result_hook.py                # native Stop-hook capture helper
-├── server.py                     # Herdr execution boundary
+├── server.py                     # Herdr execution boundary + human hook approval
 ├── pyproject.toml
 └── tests/
 .qiqi/
@@ -57,6 +57,7 @@ QiQi
   ↓ SYSTEM_MAP / reconciled live evidence
   ↓ structured TaskPacket
 qiqi_delegate
+  ↓ MCP elicitation: operator approve native result hook
   ↓ Herdr START/RESUME tại exact Git root
 Execution agent
   ↓ repo-local investigation / implementation / verification
@@ -72,11 +73,13 @@ QiQi
   ↓ forward gần nguyên văn hoặc reconcile khi cần
 ```
 
-Không dùng Markdown result artifact làm semantic transport cho turn mới.
+Human approval xảy ra **trước mỗi delegation**. Resolver-owned approval không nằm
+trong model-visible tool schema, nên QiQi/model không thể tự approve hook. Không dùng
+Markdown result artifact làm semantic transport cho turn mới.
 
 ## Structured TaskPacket
 
-Public tool:
+Model-visible tool input:
 
 ```text
 delegate_repo_task(
@@ -100,7 +103,8 @@ delegate_repo_task(
 - certainty là `verified`, `user-provided` hoặc `authoritative-decision`;
 - không có `session_id` → START native session mới;
 - có `session_id` → RESUME exact native session;
-- cross-agent/repository resume bị từ chối.
+- cross-agent/repository resume bị từ chối;
+- `hook_approval` là MCP resolver-owned value, **không phải model-visible input**.
 
 ### Closed-world context
 
@@ -205,7 +209,7 @@ create/update để dedupe.
 Shared knowledge không mạnh hơn current owner source/test. Khi conflict, live owner
 evidence thắng cho task hiện tại; verified durable conclusion mới mới được persist.
 
-## Herdr runtime
+## Herdr runtime và hook trust
 
 ```bash
 herdr integration install codex
@@ -217,10 +221,15 @@ MCP yêu cầu selected integration `current`, tạo workspace tại exact Git r
 launch real interactive TUI, wait terminal state, lấy native session identity rồi
 cleanup.
 
-Native result capture là invocation-scoped:
+Trước khi launch child, qiqi_delegate yêu cầu operator approve native result hook qua
+MCP elicitation. Decline/cancel phải dừng call trước child execution.
+
+Native result capture sau approval là invocation-scoped:
 
 - Claude: inline `--settings` với `Stop`/`StopFailure` command hook;
-- Codex: MCP-owned native `Stop` command hook + hooks feature enablement.
+- Codex: MCP-owned native `Stop` hook. Vì dynamic command chứa private sink + nonce
+  nên trust hash thay đổi theo turn; child invocation dùng hook-trust bypass **chỉ
+  sau khi human approval của turn đó đã được accept**.
 
 Hook sink là private temporary directory; helper ghi event atomic `0600`. Route args
 không được sở hữu hook configuration.
@@ -240,10 +249,11 @@ adapter family thực sự dùng. Unit test không thay thế native CLI smoke.
 
 Smoke phải cover ít nhất:
 
-1. START response Unicode dài vượt viewport vẫn giữ marker đầu/cuối;
-2. exact-session RESUME;
-3. native hook capture fail-closed, không screen/transcript fallback;
-4. blocked continuity khi môi trường có deterministic blocked fixture.
+1. human approval gate: decline không launch child; accept mới chạy, cho cả Codex và Claude;
+2. START response Unicode dài vượt viewport vẫn giữ marker đầu/cuối;
+3. exact-session RESUME và approval mới cho turn RESUME;
+4. native hook capture fail-closed, không screen/transcript fallback;
+5. blocked continuity khi môi trường có deterministic blocked fixture.
 
 Chi tiết ở `docs/WORKSPACE_SETUP.md`.
 
@@ -256,5 +266,5 @@ uv sync --project mcp/qiqi_delegate
 bash scripts/workspace-check.sh
 ```
 
-Không coi workspace production-ready chỉ vì checker pass; native CLI smoke gate vẫn
-bắt buộc cho adapter thực sự dùng.
+Không coi workspace production-ready chỉ vì checker pass; human-approval + native
+CLI smoke gate vẫn bắt buộc cho adapter thực sự dùng.
