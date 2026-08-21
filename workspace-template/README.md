@@ -19,8 +19,8 @@ instructions/agent-routing.yaml   # canonical runtime route registry v2
 instructions/model-routing.md     # QiQi route-selection policy
 .codex/config.toml                # project-scoped qiqi_delegate only
 mcp/qiqi_delegate/
-├── core.py                       # TaskPacket + hook normalization + SQLite state
-├── result_hook.py                # native Stop-hook capture helper
+├── core.py                       # TaskPacket + hook identity + SQLite state
+├── result_hook.py                # static native Stop-hook capture helper
 ├── server.py                     # Herdr execution boundary
 ├── pyproject.toml
 └── tests/
@@ -57,16 +57,20 @@ QiQi
   ↓ SYSTEM_MAP / reconciled live evidence
   ↓ structured TaskPacket
 qiqi_delegate
+  ↓ register private active-capture descriptor
+  ↓ inject static QiQi result hook
   ↓ Herdr START/RESUME tại exact Git root
 Execution agent
   ↓ repo-local investigation / implementation / verification
   ↓ conditional Shared Knowledge read/write
   ↓ native final assistant response
-native Stop hook
+static native Stop hook
+  ↓ resolve per-turn sink/nonce from MCP state using adapter + cwd
   ↓ exact message + native session identity
 qiqi_delegate
   ↓ validate nonce/adapter/session
   ↓ persist session/turn ownership in SQLite
+  ↓ remove active-capture descriptor
 QiQi
   ↓ read full agent_response
   ↓ forward gần nguyên văn hoặc reconcile khi cần
@@ -160,19 +164,49 @@ giải quyết và không invent blocker question từ screen/transcript.
 Nếu Stop hook fail sau khi session identity đã được biết, MCP fail rõ và error ghi
 session ID còn resumable; không silently fallback sang transport khác.
 
-## Runtime state
+## Static hook identity + dynamic capture state
 
-MCP-owned runtime state:
+Hook command của QiQi là static: command chỉ chứa Python executable,
+`result_hook.py`, adapter và `.qiqi/state` root. Sink và nonce không xuất hiện trên
+child argv.
+
+Trước mỗi delegation, MCP tạo private descriptor:
+
+```text
+.qiqi/state/active-captures/<sha256(adapter + repo-root)>.json
+```
+
+Descriptor giữ sink/nonce của turn và `expected_session_id` khi RESUME. Hook dùng
+native `cwd` + `session_id` để resolve descriptor. Descriptor được xóa trong cleanup.
+Toàn bộ `.qiqi/state/` được gitignore và không phải semantic source cho QiQi/child.
+
+MCP-owned durable runtime state vẫn là:
 
 ```text
 .qiqi/state/qiqi_delegate.sqlite3
 ```
 
-QiQi/child không đọc hoặc sửa database này. `.qiqi/state/` được gitignore.
-
 `.qiqi/runs/` chỉ có thể tồn tại như **legacy ownership-import bridge** cho session
 được tạo bởi architecture cũ. New turn không ghi result Markdown và không dùng runs
 làm history/source of truth.
+
+## Hook trust isolation
+
+### Codex
+
+QiQi inject session config cho đúng static Stop hook của nó và thêm `trusted_hash`
+chỉ cho exact SessionFlags hook key đó. Vì hook command static, fingerprint ổn định
+trong workspace path.
+
+QiQi **không dùng `--dangerously-bypass-hook-trust`**, không gọi trust-all và không
+ghi persistent hook trust vào user config. User/project/plugin hook khác giữ nguyên
+native Codex trust state; một hook đang `untrusted` hoặc `modified` không được QiQi
+biến thành trusted.
+
+### Claude
+
+QiQi inject `--settings` chỉ với static `Stop`/`StopFailure` hook của result handoff.
+QiQi không thay đổi trust/permission state của unrelated Claude hooks.
 
 ## Workspace ↔ Repository handoff
 
@@ -217,13 +251,7 @@ MCP yêu cầu selected integration `current`, tạo workspace tại exact Git r
 launch real interactive TUI, wait terminal state, lấy native session identity rồi
 cleanup.
 
-Native result capture là invocation-scoped:
-
-- Claude: inline `--settings` với `Stop`/`StopFailure` command hook;
-- Codex: MCP-owned native `Stop` command hook + hooks feature enablement.
-
-Hook sink là private temporary directory; helper ghi event atomic `0600`. Route args
-không được sở hữu hook configuration.
+Route args không được sở hữu hook configuration hoặc hook trust state.
 
 ## Verification
 
@@ -240,10 +268,11 @@ adapter family thực sự dùng. Unit test không thay thế native CLI smoke.
 
 Smoke phải cover ít nhất:
 
-1. START response Unicode dài vượt viewport vẫn giữ marker đầu/cuối;
-2. exact-session RESUME;
-3. native hook capture fail-closed, không screen/transcript fallback;
-4. blocked continuity khi môi trường có deterministic blocked fixture.
+1. Codex selective trust: QiQi hook chạy nhưng child argv không có global hook-trust bypass;
+2. START response Unicode dài vượt viewport vẫn giữ marker đầu/cuối;
+3. exact-session RESUME;
+4. native hook capture fail-closed, không screen/transcript fallback;
+5. blocked continuity khi môi trường có deterministic blocked fixture.
 
 Chi tiết ở `docs/WORKSPACE_SETUP.md`.
 
