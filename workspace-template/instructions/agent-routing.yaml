@@ -27,7 +27,7 @@ agents:
       - "{model}"
       - "{route_args}"
 
-    # Codex -c overrides and hook-trust flags are top-level options, so both
+    # Codex -c session config overrides are top-level options, so both
     # route_args and handoff_args intentionally precede the resume subcommand.
     resume_args:
       - "{route_args}"
