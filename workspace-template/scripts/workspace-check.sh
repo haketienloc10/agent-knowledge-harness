@@ -80,7 +80,7 @@ for pattern in \
   '`agent_response`' \
   'native Stop hook' \
   '`\.qiqi/state/qiqi_delegate\.sqlite3`' \
-  'producer.*`required_context`' \
+  '[Pp]roducer.*`required_context`' \
   'gần nguyên văn' \
   '## Delegation Silence'; do
   rg -U -q "$pattern" "$agents_md" || fail "AGENTS.md: missing required policy: $pattern"
