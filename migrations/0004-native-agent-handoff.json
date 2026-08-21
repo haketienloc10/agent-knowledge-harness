@@ -1,8 +1,8 @@
 {
   "version": 4,
   "from_ref": "ec231dd7bffd6b7bc1ead18d30df66b88467b49c",
-  "to_ref": "678676f0986fedb1bcec9454101509ff21426dbe",
-  "description": "structured TaskPacket input, native Stop-hook response handoff, and SQLite session ownership",
+  "to_ref": "3109a01e1a64e3e2723b95475fb1e6c39703d773",
+  "description": "structured TaskPacket input, selectively trusted static native Stop-hook handoff, and SQLite session ownership",
   "workspace": {
     "merge": [
       "workspace-template/identity.md"
