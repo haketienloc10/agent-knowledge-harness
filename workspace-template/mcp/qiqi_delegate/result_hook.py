@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import sys
@@ -29,21 +30,74 @@ def _write_event(sink: Path, event: dict[str, object]) -> None:
     os.replace(temp, destination)
 
 
+def _active_capture_path(state_root: Path, adapter: str, cwd: str) -> Path:
+    repo = Path(cwd).resolve()
+    key = hashlib.sha256(f"{adapter}\0{repo}".encode("utf-8")).hexdigest()
+    return state_root / "active-captures" / f"{key}.json"
+
+
+def _load_active_capture(
+    state_root: Path, adapter: str, payload: dict[str, object]
+) -> tuple[Path, str]:
+    cwd = payload.get("cwd")
+    if not isinstance(cwd, str) or not cwd.strip():
+        raise ValueError("hook payload is missing cwd required for active-capture routing")
+    repo = Path(cwd).resolve()
+    path = _active_capture_path(state_root, adapter, str(repo))
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(raw, dict) or raw.get("version") != 1:
+        raise ValueError("active-capture descriptor is invalid")
+    if raw.get("adapter") != adapter:
+        raise ValueError("active-capture adapter mismatch")
+    if raw.get("repo") != str(repo):
+        raise ValueError("active-capture repository mismatch")
+    sink_value = raw.get("sink")
+    nonce = raw.get("nonce")
+    if not isinstance(sink_value, str) or not sink_value:
+        raise ValueError("active-capture descriptor has no sink")
+    if not isinstance(nonce, str) or not nonce:
+        raise ValueError("active-capture descriptor has no nonce")
+    expected_session_id = raw.get("expected_session_id")
+    actual_session_id = payload.get("session_id")
+    if expected_session_id is not None:
+        if not isinstance(expected_session_id, str) or not expected_session_id:
+            raise ValueError("active-capture expected_session_id is invalid")
+        if actual_session_id != expected_session_id:
+            raise ValueError("active-capture native session mismatch")
+    return Path(sink_value), nonce
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--adapter", required=True, choices=("claude", "codex"))
-    parser.add_argument("--sink", required=True)
-    parser.add_argument("--nonce", required=True)
+    parser.add_argument("--state-root")
+    parser.add_argument("--sink")
+    parser.add_argument("--nonce")
     args = parser.parse_args()
 
     try:
         payload = json.load(sys.stdin)
+        if not isinstance(payload, dict):
+            raise ValueError("hook input must be a JSON object")
+
+        if args.state_root:
+            if args.sink or args.nonce:
+                raise ValueError("--state-root cannot be combined with --sink/--nonce")
+            sink, nonce = _load_active_capture(
+                Path(args.state_root).resolve(), args.adapter, payload
+            )
+        else:
+            if not args.sink or not args.nonce:
+                raise ValueError("provide --state-root or both --sink and --nonce")
+            sink = Path(args.sink)
+            nonce = args.nonce
+
         event = normalize_hook_payload(
             adapter=args.adapter,
-            nonce=args.nonce,
+            nonce=nonce,
             payload=payload,
         )
-        _write_event(Path(args.sink), event)
+        _write_event(sink, event)
     except Exception as exc:
         # Result capture must never make the native Stop hook continue/block a turn.
         # The MCP detects the missing/invalid event and fails the delegation explicitly.
