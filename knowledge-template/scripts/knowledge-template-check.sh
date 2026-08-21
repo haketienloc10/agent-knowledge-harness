@@ -152,7 +152,8 @@ for pattern in \
   'input JSON failed to parse' \
   'do .*not.*resend.*same multi-entry batch' \
   'one typed tool call with exactly one' \
-  'preserve.*exact `id` and.*`expected_revision`' \
+  'preserve.*exact `id`' \
+  '`expected_revision` obtained from `knowledge_read`' \
   'do not manually construct.*JSON string' \
   'not persisted'; do
   rg -q "$pattern" "$skill" || fail "knowledge-distill missing quality gate: $pattern"
