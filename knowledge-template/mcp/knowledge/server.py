@@ -87,8 +87,11 @@ mcp = MCPServer(
         "entries list when a required review found nothing durable. The knowledge_write "
         "schema is strict and nested: summary, when_to_read, keywords, and aliases belong "
         "under routing. Create omits id/revision; update uses exact id + expected_revision "
-        "from knowledge_read. Callers never choose a file path, filename, directory, INDEX "
-        "path, or language field."
+        "from knowledge_read. If tool input cannot be parsed as JSON before this MCP runs, "
+        "do not resend the same multi-entry batch: retry surviving candidates one entry "
+        "per typed tool call without expanding them, and preserve exact update identity. "
+        "Callers never choose a file path, filename, directory, INDEX path, or language "
+        "field."
     ),
 )
 
@@ -132,6 +135,14 @@ async def knowledge_write(entries: WriteEntries) -> KnowledgeWriteResult:
     Keep `routing.summary` at 300 characters or less and each `sources[].note` at
     600 characters or less. These are conservative budgets below the typed schema's
     hard limits; rewrite instead of mechanically truncating oversized fields.
+
+    SERIALIZATION RECOVERY: an `input JSON failed to parse` / `could not be parsed as
+    JSON` error occurs before this tool body and means nothing was validated or written
+    by that call. Do not resend the same multi-entry batch. Retry surviving candidates
+    one entry per typed `knowledge_write` call, preserve exact update `id` and
+    `expected_revision`, do not expand the content while retrying, and do not manually
+    construct a JSON string. If one single-entry call still cannot serialize, report
+    that candidate as not persisted instead of probing alternative payload shapes.
 
     CREATE: omit `id` and `expected_revision`.
     UPDATE: provide exact `id` + `expected_revision` returned by knowledge_read.
