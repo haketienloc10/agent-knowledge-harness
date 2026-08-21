@@ -2,14 +2,13 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 import sys
 import uuid
 from pathlib import Path
 
-from core import normalize_hook_payload
+from core import active_capture_filename, normalize_hook_payload
 
 
 def _write_event(sink: Path, event: dict[str, object]) -> None:
@@ -31,9 +30,7 @@ def _write_event(sink: Path, event: dict[str, object]) -> None:
 
 
 def _active_capture_path(state_root: Path, adapter: str, cwd: str) -> Path:
-    repo = Path(cwd).resolve()
-    key = hashlib.sha256(f"{adapter}\0{repo}".encode("utf-8")).hexdigest()
-    return state_root / "active-captures" / f"{key}.json"
+    return state_root / "active-captures" / active_capture_filename(adapter, Path(cwd))
 
 
 def _load_active_capture(
