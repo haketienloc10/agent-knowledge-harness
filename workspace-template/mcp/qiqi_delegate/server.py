@@ -63,9 +63,12 @@ mcp = MCPServer(
         "share QiQi's hidden context. The MCP launches/resumes the native Codex or "
         "Claude session through Herdr and captures the native final assistant message "
         "through a per-turn Stop hook; it never scrapes terminal scrollback or parses "
-        "agent transcripts. Success returns session_id, turn_id, state, and the exact "
-        "agent_response. Runtime session/turn ownership is persisted in MCP-owned "
-        "SQLite state, not in a Markdown result artifact."
+        "agent transcripts. Settled/failed native turns return session_id, turn_id, "
+        "state, and the exact agent_response. If Herdr reports blocked before a native "
+        "final response exists, the MCP persists session ownership and returns state "
+        "blocked with agent_response null so QiQi can RESUME the exact session. Runtime "
+        "session ownership is persisted in MCP-owned SQLite state, not in a Markdown "
+        "result artifact."
     ),
 )
 
@@ -613,9 +616,11 @@ async def delegate_repo_task(
     Omit `session_id` to START. Pass a returned `session_id` to RESUME that exact
     native conversation. Session ownership is stored in `.qiqi/state/qiqi_delegate.sqlite3`.
 
-    The synchronous terminal handoff is `session_id`, QiQi-owned `turn_id`, `state`
-    (`settled` or `failed`), and exact native `agent_response`. There is no Markdown
-    result artifact and no terminal-screen/transcript fallback.
+    Settled/failed native turns return `session_id`, QiQi-owned `turn_id`, `state`,
+    and exact native `agent_response`. If Herdr reaches `blocked` before the agent
+    emits a native final response, the MCP first persists native session ownership,
+    then returns `state="blocked"`, `agent_response=None`, and
+    `blocker_type="agent_blocked"`. No terminal-screen/transcript fallback is used.
     """
     repository = repository.strip()
     route = route.strip()
@@ -666,9 +671,29 @@ async def delegate_repo_task(
             _validate_reported_session_if_present(started_agent, adapter, session_id)
             status, prompted_agent = await _prompt_and_wait(managed_name, prompt, adapter)
             native_session_id = await _wait_for_native_session(managed_name, adapter, prompted_agent, session_id)
+
+            # Persist ownership as soon as the native identity is known. This is
+            # intentionally before result capture / blocked handling so a START that
+            # reaches an interactive blocker never loses the only RESUME key.
+            _store.register_session(native_session_id, repository, agent_name)
+
             if status == "blocked":
-                raise RuntimeError("interactive agent entered a blocked/input state instead of finalizing a native response; resolve the missing external input and RESUME the same session")
-            event = await _wait_for_result_capture(sink, nonce, adapter, native_session_id)
+                return {
+                    "session_id": native_session_id,
+                    "turn_id": qiqi_turn_id,
+                    "state": "blocked",
+                    "agent_response": None,
+                    "blocker_type": "agent_blocked",
+                }
+
+            try:
+                event = await _wait_for_result_capture(sink, nonce, adapter, native_session_id)
+            except RuntimeError as exc:
+                raise RuntimeError(
+                    f"{exc}; native session ownership was preserved and can be resumed "
+                    f"with session_id={native_session_id!r}"
+                ) from exc
+
             state = event["state"]
             response = event["agent_response"]
             native_turn_id = event.get("native_turn_id")
@@ -683,7 +708,12 @@ async def delegate_repo_task(
                 packet=packet,
                 agent_response=response,
             )
-            return {"session_id": native_session_id, "turn_id": qiqi_turn_id, "state": state, "agent_response": response}
+            return {
+                "session_id": native_session_id,
+                "turn_id": qiqi_turn_id,
+                "state": state,
+                "agent_response": response,
+            }
     finally:
         if workspace_id:
             await _close_herdr_workspace(workspace_id)
