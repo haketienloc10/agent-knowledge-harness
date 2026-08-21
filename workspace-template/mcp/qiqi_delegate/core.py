@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 import sqlite3
 import time
 import uuid
@@ -13,6 +15,48 @@ from typing import Any, Iterable
 # packet keeps that same aggregate bound instead of inventing per-field limits.
 TASK_PACKET_MAX_CHARS = 100_000
 CONTEXT_CERTAINTIES = {"verified", "user-provided", "authoritative-decision"}
+SUPPORTED_HOOK_ADAPTERS = {"claude", "codex"}
+
+
+def active_capture_filename(adapter: str, repo: Path) -> str:
+    if adapter not in SUPPORTED_HOOK_ADAPTERS:
+        raise ValueError(f"unsupported adapter: {adapter}")
+    key = hashlib.sha256(f"{adapter}\0{repo.resolve()}".encode("utf-8")).hexdigest()
+    return f"{key}.json"
+
+
+def codex_stop_hook_hash(command: str) -> str:
+    if not isinstance(command, str) or not command.strip():
+        raise ValueError("Codex hook command must not be empty")
+    # Mirrors Codex's NormalizedHookIdentity -> TOML -> canonical JSON
+    # fingerprint for one Stop command hook with timeout=10 and default
+    # async=false. Optional TOML fields with None are omitted before hashing.
+    identity = {
+        "event_name": "stop",
+        "hooks": [
+            {
+                "async": False,
+                "command": command,
+                "timeout": 10,
+                "type": "command",
+            }
+        ],
+    }
+    canonical = json.dumps(
+        identity, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    )
+    digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    return f"sha256:{digest}"
+
+
+def codex_session_hook_key() -> str:
+    # Current Codex hook discovery assigns SessionFlags a synthetic config path
+    # and persists per-hook state as <source>:<event>:<group>:<handler>.
+    if os.name == "nt":
+        source = r"C:\<session-flags>\config.toml"
+    else:
+        source = "/<session-flags>/config.toml"
+    return f"{source}:stop:0:0"
 
 
 @dataclass(frozen=True)
@@ -232,7 +276,7 @@ def normalize_hook_payload(
     payload: Any,
     captured_at_ns: int | None = None,
 ) -> dict[str, Any]:
-    if adapter not in {"claude", "codex"}:
+    if adapter not in SUPPORTED_HOOK_ADAPTERS:
         raise ValueError(f"unsupported adapter: {adapter}")
     if not isinstance(payload, dict):
         raise ValueError("hook input must be a JSON object")
