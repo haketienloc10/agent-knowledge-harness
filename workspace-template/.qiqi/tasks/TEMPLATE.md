@@ -28,14 +28,18 @@ working transcript, live child state hoặc progress polling.
 | Repository | Agent | Route | Native session ID | Turn ID | State | Verification chính |
 |---|---|---|---|---|---|---|
 
-Chỉ ghi delegation sau khi `delegate_repo_task` đã return thành công và QiQi đã đọc
-toàn bộ `agent_response`.
+Ghi row sau khi `delegate_repo_task` đã return terminal state.
 
+- Với `settled`/`failed`, QiQi phải đọc toàn bộ non-null `agent_response` trước bước
+  tiếp theo.
+- Với `blocked`, `agent_response` có thể là `null`; row giữ native session ID để
+  RESUME sau khi blocker được giải quyết. Không invent blocker content từ screen/
+  transcript.
 - `Native session ID` là ID thật do Codex/Claude trả về và chỉ dùng làm argument
   `session_id` cho RESUME thật sự của cùng native conversation.
-- `Turn ID` là audit pointer do qiqi_delegate tạo; không phải path result.
-- Native `agent_response` là terminal semantic handoff nhưng không copy toàn bộ vào
-  task file này. Chỉ chắt lọc durable workspace facts cần cho continuation.
+- `Turn ID` là audit/correlation pointer do qiqi_delegate tạo; không phải result path.
+- Native `agent_response` là semantic handoff khi nó thực sự tồn tại nhưng không copy
+  toàn bộ vào task file này. Chỉ chắt lọc durable workspace facts cần continuation.
 - Không RESUME chỉ để yêu cầu agent lặp lại/cung cấp report đã có trong response.
 - Không ghi Herdr pane/workspace, process state, transcript, screen capture hoặc
   `.qiqi/state/` database content.
@@ -57,6 +61,10 @@ revision hoặc provenance phù hợp; child knowledge query không thay thế r
 input.
 
 ## Blocker hoặc câu hỏi mở
+
+Blocked runtime state chỉ xác nhận agent chưa finalize native response. Ghi blocker
+semantics ở đây chỉ khi đã có evidence thật từ user, prior response hoặc external
+source; không suy ra câu hỏi từ việc Herdr báo `blocked`.
 
 ## Verification evidence
 
