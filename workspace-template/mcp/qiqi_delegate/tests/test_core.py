@@ -159,6 +159,12 @@ class SessionStoreTests(unittest.TestCase):
         self.assertEqual(turn["agent_response"], response)
         self.assertFalse(any(Path(self.temp.name).glob("*.md")))
 
+    def test_registered_blocked_session_can_resume_without_fake_turn_result(self):
+        created = self.store.register_session("blocked-session", "repo-a", "claude")
+        self.assertTrue(created)
+        self.store.require_resume("blocked-session", "repo-a", "claude")
+        self.assertIsNone(self.store.get_turn("blocked-turn"))
+
     def test_resume_rejects_repository_or_agent_mismatch(self):
         self.store.import_legacy_session("s", "repo-a", "claude")
         with self.assertRaisesRegex(RuntimeError, "repository mismatch"):
