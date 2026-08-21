@@ -15,6 +15,7 @@ user/global scope từ `knowledge-template/`.
   `required_context` kèm provenance/certainty;
 - child áp dụng closed-world context rule và không đọc sibling source/result/runtime;
 - native final assistant response đi thẳng về QiQi qua Stop hook;
+- Codex chỉ auto-trust exact QiQi result hook, không bypass trust cho hook khác;
 - blocked START/RESUME không làm mất native `session_id`;
 - runtime state nằm dưới `.qiqi/state/`, không dùng Markdown artifact làm transport;
 - Herdr integrations ở trạng thái `current`;
@@ -116,9 +117,13 @@ Runtime state được tạo tại:
 
 ```text
 .qiqi/state/qiqi_delegate.sqlite3
+.qiqi/state/active-captures/*.json
 ```
 
-Path này gitignored. QiQi/child không đọc hoặc sửa database trực tiếp.
+SQLite giữ session/turn ownership. `active-captures/` chỉ là private, ephemeral
+routing metadata cho native hook của turn đang chạy; descriptor được tạo atomic
+`0600` và xóa khi delegation kết thúc. Toàn bộ `.qiqi/state/` được gitignore.
+QiQi/child không đọc hoặc sửa các file state này trực tiếp.
 
 `.qiqi/runs/` có thể còn tồn tại từ architecture cũ. MCP chỉ được đọc metadata
 legacy ở đó để import session ownership khi RESUME exact session cũ; turn mới không
@@ -237,26 +242,59 @@ fallback sang screen/transcript.
 
 ## Bước 10: Stop-hook security model
 
+### Static hook identity, dynamic capture state
+
+Hook command **không chứa** per-turn sink hoặc nonce. Command chỉ gồm Python executable,
+`result_hook.py`, adapter và static workspace state root. Vì vậy identity của QiQi
+hook ổn định trong một workspace path.
+
+Ngay trước launch, MCP ghi descriptor riêng cho `(adapter, exact repo root)` dưới:
+
+```text
+.qiqi/state/active-captures/<sha256>.json
+```
+
+Descriptor chứa private sink, nonce, QiQi turn id và `expected_session_id` khi đó là
+RESUME. Hook nhận `cwd` + native `session_id` từ payload, resolve đúng descriptor rồi
+mới ghi event. Repository lock của MCP bảo đảm không có hai delegation đồng thời trên
+cùng repo. Descriptor được cleanup ở `finally`.
+
+### Codex — selective session trust
+
+MCP inject ba session-config overrides:
+
+```text
+-c features.hooks=true
+-c hooks.Stop=<exact QiQi static Stop hook>
+-c hooks.state={<exact QiQi hook key>={trusted_hash=<computed current hash>}}
+```
+
+`trusted_hash` được tính theo current Codex normalized-hook fingerprint contract cho
+chính command QiQi. Trust state nằm trong `SessionFlags`, chỉ match exact hook key +
+hash đó.
+
+**Không được launch Codex child với `--dangerously-bypass-hook-trust`.** Flag đó
+bypass trust check cho toàn session và có thể làm hook khác chạy ngoài ý operator.
+Server chỉ được nhắc literal flag này trong policy để reject nếu route cố inject nó.
+
+User/project/plugin hooks khác không được QiQi thêm vào `hooks.state`. Hook nào đang
+`untrusted` hoặc `modified` vẫn chịu native Codex trust policy; QiQi không gọi
+"trust all" và không ghi persistent user hook trust.
+
 ### Claude
 
-MCP inject invocation-scoped `--settings <inline-json>` chứa command hook cho `Stop`
-và `StopFailure`. Hook command là `mcp/qiqi_delegate/result_hook.py` chạy bằng cùng
-Python executable của MCP.
+MCP inject invocation-scoped `--settings <inline-json>` chứa **chỉ** QiQi command hook
+cho `Stop` và `StopFailure`. Command cũng dùng static state-root routing như Codex.
+Không có broad trust-bypass flag tương đương được QiQi bật, và qiqi_delegate không
+thay đổi trust/permission state của unrelated Claude hooks. Unrelated project/user
+hooks vẫn theo native Claude configuration/trust behavior.
 
-### Codex
+### Capture file security
 
-MCP inject invocation-scoped native hook configuration để enable `features.hooks`
-và đăng ký MCP-owned `hooks.Stop`. Hook trust bypass chỉ được dùng cho exact
-MCP-constructed invocation; không đặt hook configuration vào TaskPacket hoặc route
-args.
-
-Operator phải review/remove untrusted custom hooks trước khi chấp nhận Codex
-runtime. Handoff hook không được trở thành cách nới trust cho arbitrary workspace
-hook.
-
-Hook sink nằm trong private temporary directory của turn. Event được ghi atomic,
-permission `0600`; malformed hook input không được block agent turn. MCP validate
-nonce/adapter/session identity trước khi nhận event.
+Private sink vẫn nằm trong temporary directory của turn. Event được ghi atomic,
+permission `0600`; malformed/missing descriptor hoặc hook input không được block
+agent turn. MCP validate nonce/adapter/session identity trước khi nhận event và fail
+closed nếu không có valid capture; không fallback sang screen/transcript.
 
 ## Bước 11: Knowledge MCP trong Herdr child
 
@@ -272,10 +310,25 @@ MCP registration; không workaround bằng per-repo knowledge store/config.
 
 ## Bước 12: Acceptance smoke — installed Claude/Codex thật
 
-**Unit test không thay thế bước này.** Native hook payload/CLI option là external
-contract của installed agent CLI.
+**Unit test không thay thế bước này.** Native hook payload/CLI option và Codex hook
+fingerprint/trust behavior là external contract của installed agent CLI.
 
 Với **mỗi adapter family thực sự dùng**, chạy trên một test repository an toàn.
+
+### Smoke 0 — selective hook trust
+
+Với Codex, quan sát actual child launch và hook behavior.
+
+Acceptance:
+
+1. child argv **không có** `--dangerously-bypass-hook-trust`;
+2. argv có `features.hooks=true`, QiQi `hooks.Stop` và QiQi-only `hooks.state`;
+3. QiQi native response vẫn capture thành công mà không cần operator trust hook mỗi turn;
+4. một unrelated hook đang `untrusted`/`modified` không được QiQi chuyển thành trusted;
+5. QiQi không ghi persistent `hooks.state` vào user config.
+
+Với Claude, xác nhận `--settings` chỉ inject QiQi Stop/StopFailure hook và không thay
+unrelated hook permission/trust configuration.
 
 ### Smoke A — full response vượt viewport
 
@@ -293,7 +346,8 @@ Acceptance:
 3. Unicode không hỏng;
 4. tail content sau viewport vẫn còn;
 5. không có `.qiqi/runs/*.md` mới;
-6. SQLite session ownership được tạo nhưng QiQi không đọc DB trực tiếp.
+6. SQLite session ownership được tạo nhưng QiQi không đọc DB trực tiếp;
+7. active-capture descriptor không còn sau call kết thúc.
 
 ### Smoke B — RESUME exact session
 
@@ -305,12 +359,13 @@ Acceptance:
 1. return cùng native `session_id`;
 2. `turn_id` mới;
 3. `agent_response` chỉ phản ánh turn mới;
-4. RESUME session với repository hoặc agent family khác bị reject.
+4. RESUME session với repository hoặc agent family khác bị reject;
+5. static hook router reject payload có native session khác `expected_session_id`.
 
 ### Smoke C — native capture fail-closed
 
-Trong test checkout riêng, làm native result hook unavailable/invalid theo cách có
-thể hoàn nguyên, không chạm production workspace.
+Trong test checkout riêng, làm active-capture descriptor hoặc native result hook
+unavailable/invalid theo cách có thể hoàn nguyên, không chạm production workspace.
 
 Acceptance:
 
@@ -363,6 +418,7 @@ Chỉ coi environment production-ready khi:
 2. relevant repo checkers pass;
 3. Knowledge Store checker pass;
 4. Shared Knowledge discovery trong fresh child pass;
-5. Native Handoff Smoke A/B/C pass cho **từng adapter family thực sự dùng**;
+5. Selective Hook Trust Smoke 0 + Native Handoff Smoke A/B/C pass cho **từng adapter
+   family thực sự dùng**;
 6. Smoke D pass nếu môi trường có deterministic blocked fixture, hoặc được ghi rõ là
    chưa chạy vì không có fixture — không được thay bằng claim từ unit test.
