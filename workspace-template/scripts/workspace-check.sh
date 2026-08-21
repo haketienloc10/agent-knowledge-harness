@@ -141,6 +141,9 @@ fi
 
 for pattern in \
   'json\.load\(sys\.stdin\)' \
+  'def _load_active_capture' \
+  'active-captures' \
+  'expected_session_id' \
   'os\.fsync' \
   'os\.replace' \
   'os\.chmod\(temp, 0o600\)'; do
@@ -150,12 +153,20 @@ done
 for pattern in \
   'MCPServer' \
   'STATE_DB' \
+  'ACTIVE_CAPTURES_DIR' \
   'LEGACY_RUNS_DIR' \
   'RESULT_HOOK_PATH' \
   'SessionStore' \
   'def _build_handoff_args' \
+  'def _codex_stop_hook_hash' \
+  'def _codex_session_hook_key' \
   'features\.hooks=true' \
   'hooks\.Stop=' \
+  'hooks\.state=' \
+  'trusted_hash' \
+  'def _register_active_capture' \
+  'expected_session_id' \
+  '"--state-root"' \
   'def _wait_for_result_capture' \
   'refusing to fall back to terminal screen or transcript parsing' \
   'user_request: str' \
@@ -165,6 +176,14 @@ for pattern in \
   'def delegate_repo_task'; do
   rg -q "$pattern" "$server" || fail "qiqi_delegate/server.py: missing contract: $pattern"
 done
+
+bypass_count="$(rg -o --fixed-strings -- '--dangerously-bypass-hook-trust' "$server" | wc -l | tr -d ' ')"
+[[ "$bypass_count" == "1" ]] || \
+  fail "qiqi_delegate/server.py: hook-trust bypass must appear only in route-arg rejection policy, found $bypass_count occurrences"
+if rg -q '"--sink"|"--nonce"' "$server"; then
+  fail 'qiqi_delegate/server.py: native hook command must be static; sink/nonce belong in active-capture state'
+fi
+
 for forbidden in \
   'REQUIRED_RESULT_HEADINGS' \
   '_validate_result_section' \
@@ -223,7 +242,7 @@ for name, route in routes.items():
     assert route.get("agent") in agents, f"{name}: unknown agent"
     args = route.get("args", [])
     assert isinstance(args, list)
-    assert not any(value in {"--settings", "--enable", "--disable"} or value.startswith("hooks.") for value in args), f"{name}: handoff config must be MCP-owned"
+    assert not any(value in {"--settings", "--dangerously-bypass-hook-trust", "--enable", "--disable"} or value.startswith("hooks.") for value in args), f"{name}: handoff config must be MCP-owned"
 PY
   fail 'agent-routing.yaml: structured native-handoff validation failed'
 fi
