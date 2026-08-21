@@ -53,6 +53,10 @@ class KnowledgeServerContractTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("PRECALL LENGTH GATE", description)
         self.assertIn("300 characters or less", description)
         self.assertIn("600 characters or less", description)
+        self.assertIn("SERIALIZATION RECOVERY", description)
+        self.assertIn("Do not resend the same multi-entry batch", description)
+        self.assertIn("one entry per typed `knowledge_write` call", description)
+        self.assertIn("not persisted", description)
 
         schema = write_tool.input_schema
         entries = schema["properties"]["entries"]
