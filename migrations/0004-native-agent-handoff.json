@@ -1,7 +1,7 @@
 {
   "version": 4,
   "from_ref": "d845a939aeefd671b7d9aa24d201c53087c4078d",
-  "to_ref": "052042533f3b15a540011c8273575d897c55f78b",
+  "to_ref": "4e280a705561a7e74596405322a0435346622818",
   "description": "structured TaskPacket input, native Stop-hook response handoff, and SQLite session ownership",
   "workspace": {
     "merge": [
