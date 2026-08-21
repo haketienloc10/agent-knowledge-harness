@@ -9,7 +9,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from core import (
     SessionStore,
+    active_capture_filename,
     build_task_packet,
+    codex_session_hook_key,
+    codex_stop_hook_hash,
     normalize_hook_payload,
     render_task_prompt,
     select_capture_event,
@@ -66,6 +69,31 @@ class TaskPacketTests(unittest.TestCase):
         kwargs["required_context"][0]["certainty"] = "probably"
         with self.assertRaisesRegex(ValueError, "certainty must be one of"):
             build_task_packet(**kwargs)
+
+
+class HookIdentityTests(unittest.TestCase):
+    def test_codex_stop_hook_hash_matches_current_contract(self):
+        command = (
+            "/tmp/qiqi/.venv/bin/python3 /tmp/qiqi/result_hook.py "
+            "--adapter codex --state-root /tmp/qiqi/.qiqi/state"
+        )
+        self.assertEqual(
+            codex_stop_hook_hash(command),
+            "sha256:c6808b60515aaa474478895528d24f597a5a0ccbd70509b104351bada756efcb",
+        )
+
+    def test_codex_session_hook_key_targets_only_session_stop_handler(self):
+        key = codex_session_hook_key()
+        self.assertIn("<session-flags>", key)
+        self.assertTrue(key.endswith(":stop:0:0"))
+
+    def test_active_capture_filename_is_adapter_and_repo_scoped(self):
+        repo = Path("/tmp/qiqi-capture-key-test")
+        codex_name = active_capture_filename("codex", repo)
+        claude_name = active_capture_filename("claude", repo)
+        self.assertNotEqual(codex_name, claude_name)
+        self.assertRegex(codex_name, r"^[0-9a-f]{64}\.json$")
+        self.assertRegex(claude_name, r"^[0-9a-f]{64}\.json$")
 
 
 class HookPayloadTests(unittest.TestCase):
