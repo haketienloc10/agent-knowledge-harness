@@ -100,6 +100,14 @@ rg -q '300 characters or less' "$server" || \
   fail 'knowledge_write contract must expose the summary preflight budget'
 rg -q '600 characters or less' "$server" || \
   fail 'knowledge_write contract must expose the source-note preflight budget'
+rg -q 'SERIALIZATION RECOVERY' "$server" || \
+  fail 'knowledge_write contract must expose caller-side serialization recovery'
+rg -q 'Do not resend the same multi-entry batch' "$server" || \
+  fail 'knowledge_write serialization recovery must forbid unchanged batch retry'
+rg -q 'one entry per typed `knowledge_write` call' "$server" || \
+  fail 'knowledge_write serialization recovery must require single-entry fallback'
+rg -q 'not persisted' "$server" || \
+  fail 'knowledge_write serialization recovery must not claim failed entries persisted'
 rg -q 'extra="forbid"' "$contracts" || \
   fail 'typed knowledge models must reject unknown fields'
 rg -q "routing fields must be nested under the 'routing' object" "$contracts" || \
@@ -139,7 +147,14 @@ for pattern in \
   'deterministically' \
   'Do not mechanically truncate' \
   'durable conclusion.*critical boundary' \
-  'stable provenance location.*exact behavior/boundary'; do
+  'stable provenance location.*exact behavior/boundary' \
+  'Tool-call JSON serialization recovery' \
+  'input JSON failed to parse' \
+  'do .*not.*resend.*same multi-entry batch' \
+  'one typed tool call with exactly one' \
+  'preserve.*exact `id` and.*`expected_revision`' \
+  'do not manually construct.*JSON string' \
+  'not persisted'; do
   rg -q "$pattern" "$skill" || fail "knowledge-distill missing quality gate: $pattern"
 done
 
