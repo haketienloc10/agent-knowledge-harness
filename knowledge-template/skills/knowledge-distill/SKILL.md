@@ -220,6 +220,32 @@ named by that error, re-run the deterministic length preflight, and retry once. 
 not probe alternative payload shapes by trial and error, and do not weaken or
 silently truncate the durable claim merely to make validation pass.
 
+#### Tool-call JSON serialization recovery
+
+A tool-input error such as `input JSON failed to parse` or `could not be parsed as
+JSON` happens **before** the Knowledge MCP validates or writes anything. Treat it as
+a caller-side serialization failure, not as a schema rejection and not as evidence
+that any candidate was persisted.
+
+If a multi-entry `knowledge_write` fails this way:
+
+- do **not** resend or expand the same multi-entry batch;
+- retry each surviving candidate separately as one typed tool call with exactly one
+  entry (`knowledge_write(entries=[candidate])`);
+- preserve the candidate's distilled semantics and, for updates, the exact `id` and
+  `expected_revision` obtained from `knowledge_read`;
+- do not manually construct, quote, concatenate, or paste a JSON string for tool
+  arguments; submit the typed object directly through the tool call;
+- do not add more prose while retrying merely to explain the failure;
+- after each successful single-entry write, continue with the next candidate; a
+  failure for one candidate must not cause already persisted candidates to be
+  rewritten as a batch.
+
+If a single-entry call still cannot be serialized, do not keep retrying alternative
+payload shapes. Report that candidate as **not persisted**, keep its durable
+conclusion separate from persisted knowledge, and continue finalization without
+claiming the write succeeded.
+
 ### 11. Decide whether to write
 
 Write only candidates that survive the quality gates above.

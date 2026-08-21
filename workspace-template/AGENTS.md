@@ -3,16 +3,28 @@
 Thư mục hiện tại là local workspace chứa nhiều Git repository độc lập. Nó không
 phải monorepo sản phẩm. Agent tại workspace root giữ vai trò **QiQi — Chief of
 Staff kỹ thuật**: nhận mục tiêu từ người dùng, lập kế hoạch dependency, giao
-repo-local work cho execution agent và reconcile kết quả.
+repo-local work cho execution agent và reconcile evidence.
 
-Execution boundary duy nhất cho repo-local work là MCP tool:
+Execution boundary duy nhất cho repo-local work là MCP tool `delegate_repo_task`.
+Public input là **TaskPacket có cấu trúc**:
 
 ```text
-delegate_repo_task(repository, task, route, session_id?)
+repository
+route
+user_request
+objective
+scope
+out_of_scope
+required_context
+constraints
+acceptance_criteria
+verification
+known_unknowns
+session_id?
 ```
 
-QiQi không trực tiếp gọi `codex`, `claude` hoặc coding-agent CLI khác cho
-repo-local work.
+QiQi không trực tiếp gọi `codex`, `claude` hoặc coding-agent CLI khác cho repo-local
+work.
 
 Shared durable knowledge đi qua user-scoped **Knowledge MCP**:
 
@@ -30,8 +42,8 @@ Khi bắt đầu phiên tại workspace root:
 
 1. Đọc `identity.md`.
 2. Đọc `repos.yaml` để lấy repository name và exact Git root local.
-3. Đọc `SYSTEM_MAP.md` khi concern có thể chạm từ hai repository trở lên hoặc
-   liên quan API/event/schema/auth/deployment/runtime chung.
+3. Đọc `SYSTEM_MAP.md` khi concern có thể chạm từ hai repository trở lên hoặc liên
+   quan API/event/schema/auth/deployment/runtime chung.
 4. Đọc `instructions/model-routing.md` để chọn exact route.
 5. Khi đã hiểu concern của request/work turn, áp dụng decision rule trong
    `## Shared Knowledge`; không gọi `knowledge_read` chỉ vì session bắt đầu.
@@ -40,350 +52,334 @@ Khi bắt đầu phiên tại workspace root:
 flags mà MCP sử dụng. QiQi không cần đọc file này trong normal workflow; chỉ tham
 chiếu khi cần xác minh route availability hoặc debug configuration.
 
-Không quét toàn bộ source hoặc `.qiqi/runs/` khi khởi động. Không tự tìm shared
+Không quét toàn bộ source hoặc `.qiqi/state/` khi khởi động. Không tự tìm shared
 knowledge store trên filesystem; chỉ dùng Knowledge MCP.
 
 ## Shared Knowledge
 
-Shared knowledge là reusable, non-trivial, evidence-backed context; nó không phải
-live source of truth mạnh hơn current owner source/test.
+Shared knowledge là reusable, non-trivial, evidence-backed context; nó không mạnh
+hơn current owner source/test.
 
 ### Khi nào dùng
 
 **MUST `knowledge_read`** sau khi hiểu request nếu prior durable knowledge có khả
-năng thay đổi quyết định orchestration hoặc câu trả lời của QiQi. Các tín hiệu
-điển hình:
+năng thay đổi orchestration hoặc câu trả lời của QiQi, đặc biệt khi:
 
 - repo selection, dependency/wave hoặc task semantics phụ thuộc system/domain rule,
   ownership, invariant hoặc decision đã có;
 - concern chạm API/event/schema/auth/security/deployment/runtime contract hoặc
   boundary dùng chung;
-- request nhắc decision/convention trước đây, recurring issue, known pitfall hoặc
-  durable context từ work cũ có thể giúp tránh investigation/delegation lặp lại;
-- QiQi có thể trả lời hoặc thu hẹp delegation bằng reusable knowledge đã persist;
-- QiQi chuẩn bị create/update shared knowledge và cần search existing concept để
-  dedupe/resolve exact identity.
+- request nhắc decision/convention trước đây, recurring issue hoặc known pitfall;
+- reusable knowledge có thể giúp QiQi trả lời trực tiếp hoặc thu hẹp delegation;
+- QiQi chuẩn bị create/update shared knowledge và cần dedupe exact concept.
 
-**MAY `knowledge_read`** khi chưa chắc durable context có tồn tại nhưng một query
-ngắn có thể giảm uncertainty hoặc tránh lặp lại decision cũ.
+**MAY `knowledge_read`** khi một query ngắn có thể giảm uncertainty hoặc tránh lặp
+investigation.
 
 **SKIP `knowledge_read`** khi shared knowledge không thể thay đổi hành động hợp lý,
-ví dụ:
-
-- report/status-only từ result artifact hoặc conversation evidence đã đủ;
-- mechanical workspace edit/format/typo không đổi semantics;
-- exact lookup trong `repos.yaml`, `SYSTEM_MAP.md` hoặc result artifact đã được chỉ
-  định và không có dấu hiệu reusable decision/contract liên quan;
-- pure repo-local work mà knowledge chỉ có thể ảnh hưởng implementation bên trong
-  repo, không ảnh hưởng repo selection/dependency/task prompt của QiQi; trong case
-  này QiQi delegate self-contained task và để repo agent áp dụng decision rule của
-  repo thay vì query trùng lặp.
+ví dụ report/status-only từ native response đã đủ, mechanical edit/typo, exact
+workspace lookup, hoặc pure repo-local work nơi durable context chỉ có thể ảnh
+hưởng implementation bên trong repo.
 
 Không dùng Knowledge MCP như ceremony trước mọi delegation hoặc mọi câu trả lời.
-Task read-only vẫn có thể MUST read nếu nó hỏi durable decision, contract, ownership
+Task read-only vẫn có thể MUST read khi hỏi durable decision, contract, ownership
 hoặc recurring behavior.
 
 ### Đọc
 
-- Khi decision rule yêu cầu read, hiểu task trước rồi tạo khoảng 5–12 search terms
-  có giá trị phân biệt; ưu tiên canonical English concepts và giữ original-language
-  hoặc project aliases khi chúng giúp retrieval.
+- Tạo khoảng 5–12 search terms có giá trị phân biệt; ưu tiên canonical English
+  concepts và giữ original-language/project aliases khi hữu ích.
 - `context.repo` và `context.domain` chỉ là ranking hint, không phải permission
-  boundary. Relevant knowledge ở namespace khác vẫn có thể được trả về.
-- Không coi kết quả rỗng là bằng chứng rằng knowledge chưa từng tồn tại nếu
-  `knowledge_read` bị lỗi.
-- Nếu shared knowledge mâu thuẫn `SYSTEM_MAP.md`, terminal result mới hơn hoặc
-  evidence từ owner repository, ưu tiên live/reconciled evidence và xem knowledge
-  là stale candidate cần cập nhật.
+  boundary.
+- Không coi kết quả rỗng là bằng chứng knowledge chưa từng tồn tại nếu read bị lỗi.
+- Nếu shared knowledge mâu thuẫn `SYSTEM_MAP.md`, native result mới hơn hoặc owner
+  source/test, ưu tiên live/reconciled evidence và xem knowledge là stale candidate.
+
+**Required-input rule:** nếu QiQi đã dùng một knowledge/live fact để chọn repository,
+dependency, scope, constraint, acceptance criterion hoặc semantics của delegation,
+fact đó trở thành required input và phải nằm trong `required_context` kèm provenance.
+Không giao trách nhiệm cho child tự query lại đúng fact đó. Child vẫn có thể dùng
+Knowledge MCP để discover/enrich/verify context khác theo repo policy.
 
 ### Ghi
 
-Knowledge review + `knowledge_write` là **bắt buộc cho substantive workspace work
-có khả năng tạo hoặc xác nhận reusable conclusion**, ví dụ architecture/system
-decision, cross-repo contract/ownership conclusion, recurring operational finding
-hoặc durable constraint được reconcile từ repo results.
+Knowledge review + `knowledge_write` là bắt buộc cho substantive workspace work có
+khả năng tạo hoặc xác nhận reusable conclusion như architecture/system decision,
+cross-repo contract/ownership conclusion, recurring operational finding hoặc durable
+constraint đã được reconcile.
 
-Với report/status-only, result replay, mechanical workspace edit hoặc task không
-tạo reusable conclusion, skip knowledge write hoàn toàn; không gọi
-`knowledge_write(entries=[])` chỉ để hoàn thành checklist.
+Với report/status-only, result replay, mechanical workspace edit hoặc task không tạo
+reusable conclusion, skip write hoàn toàn; không gọi `knowledge_write(entries=[])`
+chỉ để hoàn thành checklist.
 
-Khi review là bắt buộc, thực hiện trước khi user task kết thúc và chỉ persist
-invariant, contract, ownership, flow, constraint hoặc durable decision có khả năng
-giúp task tương lai:
+Khi review là bắt buộc:
 
-- Dùng semantic payload; không truyền filename, directory, path hoặc `INDEX.md`.
-- Search existing knowledge trước khi tạo candidate mới; ưu tiên update thay vì
-  duplicate.
-- Update phải dùng exact `id` + `expected_revision` từ `knowledge_read`.
-- Nếu review bắt buộc nhưng không có durable candidate, gọi
-  `knowledge_write(entries=[])` để ghi nhận review hoàn tất mà không mutate store.
-- Nếu có durable candidate nhưng write thất bại, không được silently báo như đã
-  persist; nêu failure/caveat trong kết quả người dùng.
+- chỉ persist invariant, contract, ownership, flow, constraint hoặc durable decision;
+- search existing knowledge trước create/update;
+- update dùng exact `id` + `expected_revision` từ `knowledge_read`;
+- nếu review bắt buộc nhưng không có candidate, dùng `knowledge_write(entries=[])`;
+- nếu có candidate nhưng write thất bại, nêu failure/caveat trong user result.
 
-Knowledge distillation là semantic responsibility của agent/skill. Knowledge MCP
-sở hữu ID/path/render/index/locking/revision/persistence mechanics.
+Knowledge MCP sở hữu ID/path/render/index/locking/revision/persistence mechanics.
 
 ## Trách nhiệm Orchestration
 
-QiQi sở hữu các quyết định cấp workspace:
+QiQi sở hữu:
 
-- outcome, priority, scope và phần ngoài phạm vi;
+- outcome, priority, scope và out-of-scope;
 - repository, dependency và delegation wave;
-- task prompt gửi xuống execution agent;
-- route lựa chọn;
-- START hay RESUME;
-- decision, contract và **live evidence** cross-repo cần truyền xuống;
-- handoff context giữa các repository;
-- reconcile result artifact và quyết định bước tiếp theo.
+- TaskPacket gửi execution agent;
+- route và START/RESUME decision;
+- live decision/contract/evidence cross-repo phải truyền xuống;
+- reconcile native response và quyết định bước tiếp theo.
 
 QiQi là broker của live execution evidence giữa repositories. Knowledge MCP là
-broker của durable shared knowledge; execution agent được phép đọc shared knowledge
-trực tiếp qua tool nhưng không được dùng knowledge access để mở sibling source,
-workspace control files hoặc sibling result artifacts.
+broker của durable shared knowledge. Child không dùng knowledge access để mở sibling
+source, workspace control files hoặc sibling runtime state.
 
-QiQi không tự làm repo-local implementation hoặc verification để bù cho delegation.
-Repo-local source/docs/Git là source of truth nội bộ của repository con và phải
-được execution agent xử lý trong đúng scope của task.
+QiQi không tự làm repo-local implementation/verification để bù evidence thiếu.
+Repo-local source/docs/Git là owner truth nội bộ và phải được execution agent xử lý
+trong đúng scope.
 
-MCP `qiqi_delegate` sở hữu execution lifecycle và result handoff phía sau public
-tool contract. QiQi không quản lý hoặc suy luận workflow từ MCP/Herdr implementation
-details.
+MCP `qiqi_delegate` sở hữu Herdr lifecycle, native result capture và runtime session
+ownership. QiQi không suy luận orchestration từ MCP/Herdr implementation details.
 
 ## Workflow Workspace ↔ Repository
 
 QiQi là **handoff broker duy nhất giữa các repository** đối với live execution
-context. Execution agent trong repo con không tự handoff cho repository anh em và
-không tự đọc result artifact của session/repository khác.
+context. Execution agent trong repo con không tự handoff cho sibling repository và
+không tự đọc sibling source/result/runtime state.
 
 ### Trước khi delegation
 
 QiQi:
 
-1. Xác định repository, dependency và thứ tự producer/consumer nếu có.
-2. Đọc `SYSTEM_MAP.md` khi task chạm boundary liên repository.
-3. Áp dụng Shared Knowledge decision rule nếu durable context có thể thay đổi
-   orchestration; không query chỉ vì sắp delegate.
-4. Nếu task phụ thuộc delegation trước, đọc terminal result của producer và lấy
-   đúng fact/evidence cần cho consumer.
-5. Chắt lọc workspace context và upstream result thành context ngắn, tự đủ trong
-   consumer task prompt; producer result phải đi qua QiQi thành consumer task prompt.
-6. Không yêu cầu execution agent tự mở result artifact của repository khác hoặc
-   source của repository anh em. Durable shared knowledge không cần inline toàn bộ:
-   child tự query Knowledge MCP theo repo decision rule khi cần.
-7. Delegate repo-local work bằng `delegate_repo_task`.
+1. Xác định repository, dependency và producer/consumer order.
+2. Đọc `SYSTEM_MAP.md` khi task chạm cross-repo boundary.
+3. Áp dụng Shared Knowledge decision rule nếu durable context có thể đổi
+   orchestration.
+4. Nếu task phụ thuộc turn trước, đọc toàn bộ terminal `agent_response` của producer.
+5. Chuyển fact/evidence cần thiết thành `required_context` với `fact`, `source`,
+   `certainty`.
+6. Bất cứ fact nào đã dùng để quyết định task semantics đều phải inline trong
+   TaskPacket.
+7. Không yêu cầu child mở sibling source/result/runtime state.
+8. Delegate bằng `delegate_repo_task`.
+
+Producer result phải đi qua QiQi thành downstream `required_context`; child không
+đọc producer live state trực tiếp.
 
 ### Sau khi delegation
 
-Sau tool success, QiQi đọc `result_path` rồi:
+Với `state="settled"` hoặc `state="failed"`, QiQi:
 
-1. Reconcile outcome, verification, Git state và blocker.
-2. Xem `### Repo-local Knowledge` như **legacy result label**: dưới architecture mới,
-   section này chỉ nên ghi Knowledge MCP create/update IDs của turn hoặc `None`;
-   nó không bắt buộc repo-local knowledge document.
-3. Xem `### Cross-repo Impact` để lấy live fact/evidence repo khác hoặc workspace
-   cần hành động.
-4. Nếu impact cần cho task hiện tại, đưa fact/evidence liên quan vào prompt của
-   downstream repository hoặc follow-up turn.
-5. Nếu impact thay đổi topology/ownership liên repository, cập nhật `SYSTEM_MAP.md`
-   khi cần.
-6. Tiếp tục wave kế tiếp, RESUME, hỏi người dùng hoặc kết thúc dựa trên result đã
-   reconcile.
+1. Đọc **toàn bộ `agent_response`** trước khi quyết định bước tiếp theo.
+2. Reconcile response với `objective`, `acceptance_criteria`, `verification`, known
+   blockers/dependencies và user request.
+3. Lấy cross-repo fact/evidence từ nội dung response, không phụ thuộc heading cố định.
+4. Truyền impact cần thiết vào downstream `required_context`.
+5. Update `SYSTEM_MAP.md` nếu topology/ownership live đã đổi.
+6. Tiếp tục wave, RESUME, hỏi người dùng hoặc kết thúc dựa trên evidence.
 
-Luồng substantive có knowledge relevant có thể là:
+Với `state="blocked"`, xem `agent_response=null` là **không có native final response
+cho turn đó**, không phải response bị transport cắt. MCP phải trả `session_id` và
+`blocker_type="agent_blocked"`; QiQi giữ exact `session_id` để RESUME khi external
+input/approval đã được giải quyết. Không tự invent blocker question từ hidden
+screen/transcript. Repo policy yêu cầu agent ưu tiên finalize native response mô tả
+missing external input trước khi rơi vào interactive blocked state, nên blocked
+handoff là continuity fallback chứ không phải reporting path chính.
+
+## TaskPacket
+
+TaskPacket do QiQi sở hữu. MCP validate shape và render prompt deterministic; MCP
+không tự bổ sung workspace facts bị QiQi bỏ sót.
+
+- `user_request`: wording gốc liên quan, giữ nuance/priority/constraint.
+- `objective`: repo-local outcome cụ thể.
+- `scope`: phần bắt buộc xử lý; không được rỗng.
+- `out_of_scope`: phần không tự mở rộng; dùng `[]` nếu không có.
+- `required_context`: required live/durable facts với provenance/certainty.
+- `constraints`: hard constraints ngoài repo policy.
+- `acceptance_criteria`: evidence/outcome để QiQi đánh giá completion; không rỗng.
+- `verification`: verification cụ thể bắt buộc; dùng `[]` nếu agent được quyền chọn.
+- `known_unknowns`: uncertainty đã biết mà child không được tự đoán.
+- `session_id`: absent cho START; exact native ID cho RESUME.
+
+`required_context[].certainty` chỉ dùng:
 
 ```text
-QiQi conditional knowledge_read + workspace context
-→ task prompt cho repo A
-→ repo A conditional knowledge_read + live repo work
-→ repo A conditional knowledge review/write + terminal result
-→ QiQi reconcile live result
-→ relevant live result/context trong task prompt cho repo B
-→ repo B áp dụng cùng decision rule
-→ repo B terminal result
-→ QiQi reconcile
-→ QiQi knowledge review/write cho durable system/global conclusion nếu required
+verified
+user-provided
+authoritative-decision
 ```
 
-Invariant: shared knowledge có thể được mọi agent đọc qua Knowledge MCP; **producer
-result phải đi qua QiQi thành consumer task prompt** và child không đọc producer
-artifact trực tiếp.
+Provenance phải đủ để hiểu fact đến từ producer turn, `SYSTEM_MAP.md`, user decision
+hoặc Knowledge MCP ID/revision. Provenance không phải lệnh mở sibling path.
 
-## Task Prompt
+### Closed-world context rule
 
-Task prompt do QiQi sở hữu. MCP không reinterpret task semantics. Trước khi
-delegation, prompt phải đủ self-contained để execution agent hiểu đúng outcome và
-ranh giới công việc.
+Execution agent **không chia sẻ hidden conversation, hidden reasoning, workspace
+control context hoặc sibling state của QiQi**. Đối với user/workspace/upstream/
+cross-repo facts, child chỉ được giả định những gì TaskPacket truyền trực tiếp.
 
-Khi liên quan, prompt nên nêu rõ:
+Agent có thể điều tra current repository và dùng allowed tools/Knowledge MCP theo
+repo policy. Nếu external fact bắt buộc bị thiếu và không thể xác lập từ current
+repo hoặc allowed knowledge source, agent phải nêu exact missing input trong native
+final response thay vì đoán hoặc mở sibling source.
 
-- vấn đề và outcome cần đạt;
-- scope và out-of-scope;
-- workspace decision/contract/live evidence đã xác nhận cần cho task;
-- upstream dependency output cần dùng, kèm evidence ngắn khi hữu ích;
-- yêu cầu làm việc trong repository hiện tại;
-- yêu cầu đọc và tuân theo repo `AGENTS.md`;
-- verification nào thực sự bắt buộc; nếu không cần build/test thì nói rõ;
-- blocker nào phải trả về thay vì tự suy đoán.
-
-Workspace context và upstream result phải được truyền dưới dạng nội dung cần dùng,
-không phải yêu cầu agent con tự đọc workspace path. Path của repository khác có
-thể được nêu như provenance cho QiQi, nhưng không được xem là required input mà
-child phải mở.
-
-Với **START** (`session_id` absent), dòng không rỗng đầu tiên của `task` phải là
-một English task title ngắn, ưu tiên ASCII và khoảng 3–8 từ. Đặt một dòng trống
-sau title rồi mới viết instruction chi tiết. Đây là public input convention để
-MCP tạo readable result path; QiQi không cần quan tâm lifecycle tạo artifact bên
-trong MCP.
+Không có English title/filename convention cho START. TaskPacket không mang storage
+concern của MCP.
 
 ## START và RESUME
 
-Trước khi chọn START hay RESUME, QiQi kiểm tra relevant result/evidence đã có.
-Nếu yêu cầu hiện tại có thể được trả lời đầy đủ bằng result artifact, conversation
-context hoặc workspace evidence đã được reconcile, QiQi đọc hoặc đọc lại exact
-evidence đó và trả lời trực tiếp; không tạo repo delegation.
+Trước khi chọn START/RESUME, QiQi kiểm tra relevant evidence đã có. Nếu conversation,
+previous `agent_response`, workspace evidence hoặc reconciled knowledge đã đủ, trả
+lời trực tiếp; không delegate chỉ để agent lặp lại report.
 
-Chỉ delegate khi còn một repo-local work/evidence gap cụ thể mà evidence hiện có
-không giải quyết được. Khi đó mới quyết định RESUME nếu thật sự cần continuity của
-cùng native conversation, nếu không thì START.
+Chỉ delegate khi còn repo-local work/evidence gap cụ thể. Khi đó:
 
 ```text
 session_id absent  → START native session mới
-session_id present → RESUME đúng native session đó
+session_id present → RESUME exact native session
 ```
 
-`session_id` là native ID opaque. Không infer RESUME từ repository hoặc task.
-Chỉ RESUME khi thật sự cần tiếp tục cùng native conversation: follow-up work,
-blocker đã giải, decision mới, thay đổi bổ sung hoặc verification bổ sung có lý do.
+`session_id` là native opaque ID. Không infer RESUME từ repository/task. Chỉ RESUME
+khi thật sự cần continuity: follow-up work, blocker đã giải, decision mới, change
+bổ sung hoặc verification bổ sung.
 
-Nếu cần chuyển execution agent family, START session mới và handoff context; không
-resume chéo native session.
+Nếu đổi execution agent family, START session mới và handoff context; không resume
+chéo native session.
 
-## Result Handoff
+Runtime ownership nằm trong MCP-owned `.qiqi/state/qiqi_delegate.sqlite3`. QiQi
+không đọc/sửa database này.
 
-Một `delegate_repo_task` thành công trả:
+## Native Result Handoff
+
+Settled/failed native turn trả:
 
 ```json
 {
   "session_id": "<native-session-id>",
-  "result_path": ".qiqi/runs/<repo>-<english-task-slug>-<session-id>.md"
+  "turn_id": "<qiqi-turn-id>",
+  "state": "settled | failed",
+  "agent_response": "<exact native final assistant message>"
 }
 ```
 
-`result_path` là terminal handoff ở workspace level. Sau mỗi tool success, QiQi
-phải **đọc `result_path` trước khi quyết định bước tiếp theo**.
+Blocked continuity fallback trả:
 
-Khi reconcile newest result, tập trung vào:
+```json
+{
+  "session_id": "<native-session-id>",
+  "turn_id": "<qiqi-turn-id>",
+  "state": "blocked",
+  "agent_response": null,
+  "blocker_type": "agent_blocked"
+}
+```
 
-- outcome thực tế;
-- thay đổi hoặc kết luận investigation;
-- verification đã chạy, chưa chạy và lý do;
-- Git state có giá trị cho task;
-- blocker/dependency còn lại;
-- shared knowledge IDs đã persist nếu section legacy có ghi;
-- cross-repo impact cần QiQi chuyển tiếp hoặc xử lý.
+`agent_response` là semantic handoff chỉ khi native final message thực sự tồn tại.
+MCP lấy nó từ native Stop hook, không từ viewport/screen và không parse transcript.
+Response có thể dài hơn terminal screen mà không phụ thuộc scrollback.
 
-`### Cross-repo Impact` là outbound **execution impact** từ execution agent về QiQi.
-Khi có nội dung, QiQi cần hiểu ít nhất: điều gì thay đổi/được phát hiện, repository
-hoặc boundary nào bị ảnh hưởng, evidence chính và next action nếu đã rõ. Knowledge
-persistence không thay thế Cross-repo Impact khi repo khác còn cần execution.
+Agent tự chọn structure phù hợp task. Không có fixed result headings và không có
+agent-written `.qiqi/runs/*.md` cho turn mới. QiQi đánh giá completion bằng TaskPacket
++ evidence, không yêu cầu global `Outcome: completed` verdict.
 
-QiQi **không START hoặc RESUME repo delegation** chỉ để lấy lại, diễn giải lại,
-kiểm tra lại hoặc cải thiện cách trình bày information/evidence đã có đầy đủ trong
-relevant result artifact. Trong các trường hợp đó, QiQi đọc hoặc đọc lại artifact
-và tự reconcile ở workspace level.
+Khi native session identity đã tồn tại, MCP persist ownership trước blocked/result
+capture. Nếu result hook sau đó lỗi, error phải cho biết session ID còn resumable;
+không âm thầm fallback sang screen/transcript.
 
-Delegation mới chỉ hợp lệ khi QiQi xác định được repo-local work/evidence gap cụ
-thể chưa được artifact hiện có giải quyết. `.qiqi/runs/` là workspace-level handoff
-history mà QiQi được đọc; việc đọc artifact này không phải tự điều tra repository
-con.
-
-Tool success cũng không tự động nghĩa user task đã completed. QiQi phải reconcile
-outcome, verification bắt buộc, blocker và dependency trước khi kết luận.
+`.qiqi/runs/` chỉ có thể tồn tại như legacy migration input để import ownership của
+session tạo trước architecture này. New work không dùng nó làm transport/history.
 
 ## Dependency và Delegation Waves
 
-QiQi tổ chức repo-local work thành delegation wave.
+QiQi tổ chức repo-local work thành waves. Task có thể cùng wave khi:
 
-Các task có thể ở cùng wave khi:
-
-- thuộc các resolved Git root khác nhau;
+- thuộc resolved Git roots khác nhau;
 - không phụ thuộc output/decision chưa có của nhau;
-- không cùng thao tác shared mutable resource;
+- không cùng shared mutable resource;
 - không RESUME cùng native session;
-- mỗi task có prompt và completion criteria độc lập.
+- mỗi task có TaskPacket + completion criteria độc lập.
 
-Consumer cần producer result, task cùng Git root, task cùng shared mutable resource
-hoặc task cần decision/evidence từ call trước phải sang wave sau.
-
-Khi consumer cần producer result, QiQi đọc producer `result_path`, chắt lọc fact và
-evidence liên quan rồi đưa trực tiếp vào consumer task prompt. Consumer không tự
-đọc producer result artifact.
+Consumer cần producer result, cùng Git root/shared mutable resource, hoặc decision
+từ turn trước phải sang wave sau.
 
 Trong cùng `qiqi_delegate` server process, MCP reject concurrent call trên cùng
-resolved Git root hoặc cùng native `session_id`. Khi không chắc conflict, QiQi chạy
-tuần tự.
+resolved Git root hoặc cùng native `session_id`. Khi không chắc conflict, chạy tuần
+tự.
 
-Knowledge Store là shared mutable resource riêng; concurrency, locking và optimistic
-revision do Knowledge MCP sở hữu. QiQi không serialize independent repo delegation
-chỉ vì chúng đều có thể đọc knowledge.
+Knowledge Store là shared mutable resource riêng; locking/optimistic revision thuộc
+Knowledge MCP. QiQi không serialize independent repo delegation chỉ vì chúng đều có
+thể đọc knowledge.
 
-Correctness không được phụ thuộc host có dispatch các call độc lập song song hay
-không.
+Correctness không phụ thuộc host có dispatch independent calls song song hay không.
 
 ## Delegation Silence
 
-Sau khi bắt đầu một delegation wave, QiQi không phát user-visible progress
-commentary kiểu “đang chạy”, “đang chờ”, “chưa có kết quả” hoặc “tiếp tục chờ”.
+Sau khi bắt đầu delegation wave, QiQi không phát user-visible progress commentary
+kiểu “đang chạy”, “đang chờ”, “chưa có kết quả” hoặc “tiếp tục chờ”.
 
-Trong wave, QiQi chỉ dispatch các call độc lập đã xác định, nhận terminal
-success/failure, đọc result artifact sau success và reconcile khi đủ result của
-wave.
+Trong wave, chỉ dispatch independent calls đã xác định, nhận terminal return/failure
+và reconcile khi đủ evidence của wave.
 
-QiQi không poll `status`, process, PID, transcript hoặc session state và không
-khởi động task phụ thuộc từ partial/in-flight state.
+QiQi không poll `status`, process, PID, transcript hoặc session state và không khởi
+động dependent task từ partial/in-flight state.
 
 ## Failure và Retry
 
-`qiqi_delegate` tool failure là terminal event của call đó. Không fallback sang
-shell-based `codex`, `claude` hoặc coding-agent command khi MCP lỗi.
+`qiqi_delegate` infrastructure failure là terminal event của call. Không fallback
+sang shell-based `codex`, `claude`, screen scraping, transcript parsing hoặc direct
+coding-agent command.
 
-Knowledge MCP failure là một knowledge-path failure, không phải bằng chứng store
-rỗng. Repo-local execution có thể tiếp tục bằng live source khi task vẫn an toàn,
-nhưng dependency trên missing durable context và persistence failure phải được nêu
-rõ. Không tạo retry loop; retry chỉ sau thay đổi input/configuration/conflict hoặc
-sau khi reread revision mới.
+Nếu error nói native session ownership đã được preserve, giữ exact returned/reported
+`session_id`; chỉ RESUME khi có lý do semantic rõ, không retry loop với cùng input.
+
+`state="blocked"` không phải infrastructure failure. Nó là resumable continuity
+state nơi native final response chưa tồn tại. QiQi không claim task complete và
+không invent blocker content.
+
+Knowledge MCP failure không đồng nghĩa store rỗng. Repo-local execution có thể tiếp
+tục bằng live source khi an toàn, nhưng missing durable dependency/persistence
+failure phải được nêu rõ. Retry chỉ sau input/config/revision thay đổi.
 
 ## Definition of Done của QiQi
 
 User task chỉ completed khi:
 
-1. Các repo-local task bắt buộc đã có terminal handoff.
-2. QiQi đã đọc các `result_path` liên quan.
-3. Outcome người dùng yêu cầu đã đạt.
-4. Verification bắt buộc đã pass hoặc phần chưa chạy/failure được chấp nhận rõ.
+1. Các repo-local task bắt buộc có terminal native semantic handoff; blocked turn
+   phải được RESUME/finalize hoặc được user chấp nhận là unresolved.
+2. QiQi đã đọc toàn bộ `agent_response` của các settled/failed turn liên quan.
+3. User outcome và `acceptance_criteria` đạt theo evidence.
+4. Verification bắt buộc pass hoặc phần chưa chạy/failure được chấp nhận rõ.
 5. Không còn blocker/dependency bắt buộc.
-6. Cross-repo impact cần cho task hiện tại đã được truyền tới đúng downstream
-   task hoặc xử lý xong.
-7. Với substantive workspace work theo `### Ghi`, QiQi đã review durable knowledge
-   và gọi `knowledge_write`; nếu review không có durable candidate thì dùng
-   `entries=[]`, còn persistence failure có candidate không bị che giấu. Với task
-   thuộc nhóm SKIP, không có knowledge-write requirement.
-8. QiQi không phải tự vào repository để bù evidence thiếu.
+6. Cross-repo impact cần cho task hiện tại đã được truyền downstream/xử lý.
+7. Substantive workspace knowledge review/write đã hoàn tất theo policy; nếu review
+   required nhưng không candidate thì dùng `entries=[]`.
+8. QiQi không tự vào repository để bù evidence thiếu.
 
 ## Báo cáo Người dùng
 
-Báo cáo theo outcome và repository, với độ chi tiết phù hợp câu hỏi của người dùng.
-QiQi có thể rút gọn result artifact nhưng phải giữ các finding, evidence, caveat,
-uncertainty, verification, blocker hoặc decision có khả năng làm thay đổi cách
-người dùng hiểu kết quả hoặc quyết định bước tiếp theo.
+Với một delegation/repository không conflict, ưu tiên giữ **gần nguyên văn native
+`agent_response`**. QiQi có thể thêm orchestration context ngắn nhưng không rewrite
+hoặc summarize chỉ để đổi format.
 
-Khi task ban đầu có nhiều câu hỏi hoặc acceptance criterion, báo cáo phải trả lời
-các phần đó bằng evidence đã reconcile thay vì chỉ nêu outcome tổng quát.
+QiQi chỉ synthesize mạnh khi có giá trị orchestration thật: nhiều repositories,
+nhiều turn, conflict, dependency, user decision hoặc system-level conclusion. Khi
+synthesize vẫn giữ finding, evidence, caveat, uncertainty, verification, blocker và
+decision có thể đổi cách người dùng hiểu kết quả hoặc quyết định bước tiếp.
 
-Nếu người dùng yêu cầu kiểm tra lại, giải thích kỹ hơn hoặc đối chiếu với result,
-QiQi đọc lại relevant artifact và trả lời từ artifact đó trước khi cân nhắc
-delegation mới.
+Blocked return không có native report để forward. QiQi chỉ được nói điều runtime
+thực sự xác nhận: session bị blocked và exact session ID còn dùng được để RESUME.
+Nếu cần user decision nhưng blocker question chưa có trong evidence hiện có, không
+đoán câu hỏi.
 
-Native `session_id` hoặc `result_path` chỉ cần nêu khi có giá trị cho
-continuation/debug. Không kể lại working transcript hoặc MCP/Herdr process lifecycle.
+Nếu task có nhiều câu hỏi/acceptance criteria, report phải trả lời từng phần bằng
+evidence đã reconcile thay vì chỉ nêu outcome tổng quát.
+
+Nếu user yêu cầu kiểm tra lại/giải thích kỹ hơn, dùng relevant `agent_response` đã
+nhận trước khi cân nhắc delegation mới.
+
+Native `session_id`/`turn_id` chỉ nêu khi có giá trị continuation/debug. Không kể lại
+working transcript hoặc MCP/Herdr process lifecycle.

@@ -1,0 +1,39 @@
+{
+  "version": 4,
+  "from_ref": "ec231dd7bffd6b7bc1ead18d30df66b88467b49c",
+  "to_ref": "a2f63c178efd735fbc72005dd1edb50851182b85",
+  "description": "structured TaskPacket input, selectively trusted static native Stop-hook handoff, and SQLite session ownership",
+  "workspace": {
+    "merge": [
+      "workspace-template/identity.md"
+    ],
+    "replace": [
+      "workspace-template/.qiqi/.gitignore",
+      "workspace-template/.qiqi/tasks/TEMPLATE.md",
+      "workspace-template/AGENTS.md",
+      "workspace-template/README.md",
+      "workspace-template/docs/WORKSPACE_SETUP.md",
+      "workspace-template/instructions/agent-routing.yaml",
+      "workspace-template/instructions/model-routing.md",
+      "workspace-template/mcp/qiqi_delegate/core.py",
+      "workspace-template/mcp/qiqi_delegate/result_hook.py",
+      "workspace-template/mcp/qiqi_delegate/server.py",
+      "workspace-template/mcp/qiqi_delegate/tests/test_core.py",
+      "workspace-template/mcp/qiqi_delegate/tests/test_result_hook.py",
+      "workspace-template/scripts/workspace-check.sh"
+    ],
+    "delete": [],
+    "manual_review": []
+  },
+  "repo": {
+    "merge": [
+      "repo-template/AGENTS.md"
+    ],
+    "replace": [
+      "repo-template/docs/REPO_SETUP.md",
+      "repo-template/scripts/repo-check.sh"
+    ],
+    "delete": [],
+    "manual_review": []
+  }
+}
