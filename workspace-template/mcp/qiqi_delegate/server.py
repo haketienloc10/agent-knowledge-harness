@@ -13,10 +13,12 @@ import tempfile
 import time
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 
 import yaml
 from mcp.server import MCPServer
+from mcp.server.mcpserver import Elicit, Resolve
+from pydantic import BaseModel
 
 from core import (
     SessionStore,
@@ -60,15 +62,17 @@ mcp = MCPServer(
         "prompt string. The packet must explicitly carry the original user request, "
         "repo-local objective, scope, required live context, constraints, acceptance "
         "criteria, verification requirements, and known unknowns. The child does not "
-        "share QiQi's hidden context. The MCP launches/resumes the native Codex or "
-        "Claude session through Herdr and captures the native final assistant message "
-        "through a per-turn Stop hook; it never scrapes terminal scrollback or parses "
-        "agent transcripts. Settled/failed native turns return session_id, turn_id, "
-        "state, and the exact agent_response. If Herdr reports blocked before a native "
-        "final response exists, the MCP persists session ownership and returns state "
-        "blocked with agent_response null so QiQi can RESUME the exact session. Runtime "
-        "session ownership is persisted in MCP-owned SQLite state, not in a Markdown "
-        "result artifact."
+        "share QiQi's hidden context. Before any per-turn native result-capture hook is "
+        "injected, the MCP client must elicit explicit human approval through a resolver; "
+        "QiQi/the model cannot supply that approval field. The MCP then launches/resumes "
+        "the native Codex or Claude session through Herdr and captures the native final "
+        "assistant message through a per-turn Stop hook; it never scrapes terminal "
+        "scrollback or parses agent transcripts. Settled/failed native turns return "
+        "session_id, turn_id, state, and the exact agent_response. If Herdr reports "
+        "blocked before a native final response exists, the MCP persists session "
+        "ownership and returns state blocked with agent_response null so QiQi can RESUME "
+        "the exact session. Runtime session ownership is persisted in MCP-owned SQLite "
+        "state, not in a Markdown result artifact."
     ),
 )
 
@@ -78,6 +82,10 @@ _state_lock = asyncio.Lock()
 _active_repositories: set[Path] = set()
 _active_sessions: set[str] = set()
 _store = SessionStore(STATE_DB)
+
+
+class HookApproval(BaseModel):
+    approve: bool
 
 
 def _load_repo_registry() -> dict[str, Path]:
@@ -191,6 +199,33 @@ def _resolve_route(route: str) -> tuple[str, dict[str, Any], dict[str, Any]]:
         raise RuntimeError(f"unknown route {route!r}; available routes: {available}")
     agent_name = route_config["agent"]
     return agent_name, agents[agent_name], route_config
+
+
+async def _confirm_result_hook(repository: str, route: str) -> HookApproval | Elicit[HookApproval]:
+    repository = repository.strip()
+    route = route.strip()
+    if not repository:
+        raise ValueError("repository must not be empty")
+    if not route:
+        raise ValueError("route must not be empty")
+    _, agent, _ = _resolve_route(route)
+    adapter = agent["adapter"]
+    adapter_note = (
+        "For Codex, the child invocation uses the runtime hook-trust bypass only after "
+        "this approval because an injected per-turn hook is otherwise untrusted. "
+        if adapter == "codex"
+        else "For Claude, the Stop/StopFailure hook is supplied as session settings only after this approval. "
+    )
+    return Elicit(
+        (
+            f"Approve QiQi native result-capture hook for {adapter} in repository {repository!r}? "
+            f"It executes the local helper {RESULT_HOOK_PATH} when the child turn finishes "
+            "so qiqi_delegate can capture the native final assistant message without reading "
+            "terminal scrollback or transcripts. "
+            f"{adapter_note}This approval applies only to this delegation."
+        ),
+        HookApproval,
+    )
 
 
 def _expand_scalar(raw: str, values: dict[str, str]) -> str:
@@ -604,6 +639,7 @@ async def delegate_repo_task(
     acceptance_criteria: list[str],
     verification: list[str],
     known_unknowns: list[str],
+    hook_approval: Annotated[HookApproval, Resolve(_confirm_result_hook)],
     session_id: str | None = None,
 ) -> dict[str, Any]:
     """Execute one repo-local task and return the native final assistant message.
@@ -612,6 +648,10 @@ async def delegate_repo_task(
     original user wording. Each `required_context` entry has exact keys `fact`,
     `source`, and `certainty`; certainty is `verified`, `user-provided`, or
     `authoritative-decision`. `scope` and `acceptance_criteria` must be non-empty.
+
+    Before the tool body runs, MCP resolver elicitation asks the human to approve the
+    native result-capture hook. `hook_approval` is resolver-owned and is not part of
+    the model-visible tool input schema, so QiQi/the model cannot approve it itself.
 
     Omit `session_id` to START. Pass a returned `session_id` to RESUME that exact
     native conversation. Session ownership is stored in `.qiqi/state/qiqi_delegate.sqlite3`.
@@ -625,6 +665,8 @@ async def delegate_repo_task(
     repository = repository.strip()
     route = route.strip()
     session_id = session_id.strip() if isinstance(session_id, str) else None
+    if not hook_approval.approve:
+        raise RuntimeError("native result-capture hook was not approved by the user")
     if not repository:
         raise ValueError("repository must not be empty")
     if not route:
