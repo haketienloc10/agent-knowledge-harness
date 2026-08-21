@@ -70,24 +70,33 @@ if [[ -f "$agents" ]]; then
     '`docs/VERIFY\.md`' \
     'Git root hiện tại' \
     'Không đọc/sửa repository anh em' \
-    'exact result artifact' \
-    'Không tự suy đoán, tìm hoặc mở result artifact khác' \
     '^## Handoff với QiQi$' \
+    '^### Closed-world context rule$' \
+    '^### Output về QiQi$' \
     '^## Shared Knowledge MCP$' \
     '^## Cross-repo Impact$' \
+    'TaskPacket' \
+    'required_context' \
+    'Native final assistant response là authoritative semantic handoff' \
+    'không tạo hoặc cập nhật QiQi result' \
+    'Không có result schema hoặc fixed headings' \
     'knowledge_read' \
     'knowledge_write' \
     'entries=\[\]' \
-    'expected_revision' \
-    'legacy heading name' \
-    'MCP footer là source of truth duy nhất'; do
+    'expected_revision'; do
     rg -q "$pattern" "$agents" || fail "AGENTS.md: missing required policy: $pattern"
   done
 
   rg -U -q 'Knowledge MCP là tool exception.*không phải filesystem exception' "$agents" || \
     fail 'AGENTS.md: shared knowledge must not become an external filesystem exception'
-  rg -q 'không tự mở result/source của repository khác' "$agents" || \
-    fail 'AGENTS.md: child must not read sibling repository results or source'
+  rg -U -q 'không chia sẻ hidden conversation.*sibling-repository state' "$agents" || \
+    fail 'AGENTS.md: child must treat QiQi live context as closed-world input'
+  rg -U -q 'required_context.*required premise' "$agents" || \
+    fail 'AGENTS.md: QiQi-used task premises must be explicit required_context'
+  rg -q 'Không tự đọc/sửa repository anh em' "$agents" || \
+    fail 'AGENTS.md: child must not modify sibling repositories'
+  rg -U -q 'Không tự mở source,[[:space:]]+result history hoặc runtime state của repository khác' "$agents" || \
+    fail 'AGENTS.md: child must not read sibling live result/source/runtime state'
   rg -q 'QiQi là handoff broker' "$agents" || \
     fail 'AGENTS.md: QiQi must broker live cross-repo handoff'
   rg -U -q 'context\.repo.*context\.domain.*ranking hint|context\.repo.*ranking hint' "$agents" || \
@@ -98,26 +107,43 @@ if [[ -f "$agents" ]]; then
     fail 'AGENTS.md: agent must not own knowledge filesystem layout'
   rg -q 'Không tạo field `language`' "$agents" || \
     fail 'AGENTS.md: language field must not be part of shared knowledge schema'
-  rg -q 'repository/boundary nào bị ảnh hưởng' "$agents" || \
-    fail 'AGENTS.md: Cross-repo Impact must identify affected boundary'
-  rg -q 'evidence chính từ repository hiện tại' "$agents" || \
-    fail 'AGENTS.md: Cross-repo Impact must carry evidence'
-  rg -q 'next action nếu đã rõ' "$agents" || \
-    fail 'AGENTS.md: Cross-repo Impact must carry next action when known'
+  rg -U -q 'cross-repo impact: fact, affected boundary/repository, evidence và next action' "$agents" || \
+    fail 'AGENTS.md: native handoff must preserve actionable cross-repo impact'
   rg -U -q 'knowledge review.*gọi `knowledge_write`' "$agents" || \
     fail 'AGENTS.md: Definition of Done must include knowledge review/write'
 
-  if rg -q '^## Final Result Contract$' "$agents"; then
-    fail 'AGENTS.md: must not duplicate MCP-owned final result protocol'
-  fi
-  if rg -q 'Newest Result section bắt buộc|Giữ nguyên toàn bộ history|newest pending Result section' "$agents"; then
-    fail 'AGENTS.md: MCP-owned marker/history/finalization mechanics are duplicated'
-  fi
-  if rg -q 'Caller có thể ép output bằng JSON Schema|final result missing field|`git_state`|`repo_local_knowledge`' "$agents"; then
-    fail 'AGENTS.md: legacy logical JSON result contract found'
-  fi
+  for forbidden in \
+    '^## Final Result Contract$' \
+    'MCP footer là source of truth duy nhất' \
+    'Newest Result section bắt buộc' \
+    'newest pending Result section' \
+    'Caller có thể ép output bằng JSON Schema' \
+    'final result missing field' \
+    '`git_state`' \
+    '`repo_local_knowledge`' \
+    '### Outcome' \
+    '### Changes' \
+    '### Git State' \
+    '### Blockers' \
+    '### Repo-local Knowledge' \
+    '### Cross-repo Impact'; do
+    if rg -q "$forbidden" "$agents"; then
+      fail "AGENTS.md: legacy fixed-result contract found: $forbidden"
+    fi
+  done
+
   if rg -q 'workspace `knowledge/`|knowledge/INDEX\.md' "$agents"; then
     fail 'AGENTS.md: legacy workspace-local knowledge store reference found'
+  fi
+fi
+
+setup="$repo_root/docs/REPO_SETUP.md"
+if [[ -f "$setup" ]]; then
+  rg -q 'TaskPacket' "$setup" || fail 'docs/REPO_SETUP.md: missing TaskPacket handoff guidance'
+  rg -q 'native final assistant response' "$setup" || \
+    fail 'docs/REPO_SETUP.md: missing native final-response guidance'
+  if rg -q '### Repo-local Knowledge|### Cross-repo Impact|fixed headings|result_path' "$setup"; then
+    fail 'docs/REPO_SETUP.md: legacy fixed-result contract found'
   fi
 fi
 
