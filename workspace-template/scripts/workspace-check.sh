@@ -149,6 +149,11 @@ done
 
 for pattern in \
   'MCPServer' \
+  'from mcp\.server\.mcpserver import Elicit, Resolve' \
+  'class HookApproval' \
+  'def _confirm_result_hook' \
+  'Annotated\[HookApproval, Resolve\(_confirm_result_hook\)\]' \
+  'native result-capture hook was not approved by the user' \
   'STATE_DB' \
   'LEGACY_RUNS_DIR' \
   'RESULT_HOOK_PATH' \
@@ -186,9 +191,9 @@ python3 -m unittest discover -s "$mcp_project/tests" -v || \
   fail 'qiqi_delegate: unit tests failed'
 
 if ! uv run --project "$mcp_project" python -c \
-  'from mcp.server import MCPServer; import yaml; print("qiqi-mcp-runtime: PASS")' \
+  'from mcp.server import MCPServer; from mcp.server.mcpserver import Elicit, Resolve; import yaml; print("qiqi-mcp-runtime: PASS")' \
   >/dev/null; then
-  fail 'qiqi_delegate: MCP SDK runtime import failed; run uv sync --project mcp/qiqi_delegate'
+  fail 'qiqi_delegate: MCP SDK resolver runtime import failed; run uv sync --project mcp/qiqi_delegate'
 fi
 
 routing="$workspace_root/instructions/agent-routing.yaml"
@@ -223,7 +228,7 @@ for name, route in routes.items():
     assert route.get("agent") in agents, f"{name}: unknown agent"
     args = route.get("args", [])
     assert isinstance(args, list)
-    assert not any(value in {"--settings", "--enable", "--disable"} or value.startswith("hooks.") for value in args), f"{name}: handoff config must be MCP-owned"
+    assert not any(value in {"--settings", "--dangerously-bypass-hook-trust", "--enable", "--disable"} or value.startswith("hooks.") for value in args), f"{name}: handoff config must be MCP-owned"
 PY
   fail 'agent-routing.yaml: structured native-handoff validation failed'
 fi
