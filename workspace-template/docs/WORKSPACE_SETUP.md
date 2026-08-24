@@ -10,13 +10,18 @@ user/global scope từ `knowledge-template/`.
 - project-scoped `.codex/config.toml` chỉ đăng ký `qiqi_delegate`;
 - user-scoped MCP `knowledge` có mặt trong fresh QiQi session và fresh child
   Codex/Claude session;
-- QiQi + child đều áp dụng Shared Knowledge decision rule: read khi prior durable
-  context có thể thay đổi quyết định/cách làm, review/write cho substantive work có
-  khả năng tạo reusable conclusion, không dùng MCP như ceremony ở task trivial;
-- live upstream result vẫn đi qua QiQi vào downstream prompt;
-- child không đọc sibling source/result;
+- QiQi delegate bằng structured TaskPacket, không opaque prompt string;
+- mọi required live fact QiQi đã dùng để quyết định semantics nằm trong
+  `required_context` kèm provenance/certainty;
+- child áp dụng closed-world context rule và không đọc sibling source/result/runtime;
+- native final assistant response đi thẳng về QiQi qua Stop hook;
+- Codex chỉ auto-trust exact QiQi result hook, không bypass trust cho hook khác;
+- blocked START/RESUME không làm mất native `session_id`;
+- runtime state nằm dưới `.qiqi/state/`, không dùng Markdown artifact làm transport;
 - Herdr integrations ở trạng thái `current`;
-- `bash scripts/workspace-check.sh` trả `PASS`.
+- static/unit checker pass;
+- native Stop-hook smoke pass trên **installed CLI thật** cho adapter family thực sự
+  được dùng.
 
 ## Bước 1: Cài Shared Knowledge MCP ngoài workspace
 
@@ -33,15 +38,15 @@ codex mcp get knowledge      # nếu dùng Codex
 claude mcp get knowledge     # nếu dùng Claude
 ```
 
-Knowledge MCP **không được thêm vào workspace `.codex/config.toml`**. Store root
-được đóng vào stable user wrapper; current workspace/repo/CWD không quyết định
-store nào được dùng.
+Knowledge MCP không được thêm vào workspace `.codex/config.toml`. Store root nằm
+sau stable user wrapper; current workspace/repo/CWD không quyết định store nào được
+dùng.
 
-Smoke test tối thiểu trong fresh QiQi session:
+Smoke tối thiểu trong fresh QiQi session:
 
 1. tool inventory có `knowledge_read` và `knowledge_write`;
-2. `knowledge_read` với keyword không match trả results rỗng, không crash;
-3. không tạo test knowledge chỉ để smoke nếu chưa có durable fact thực.
+2. query không match trả results rỗng, không crash;
+3. không tạo test knowledge chỉ để smoke khi chưa có durable fact thực.
 
 ## Bước 2: Điền Repository Registry
 
@@ -55,14 +60,14 @@ git -C <repository-path> status --short
 ```
 
 Điền `repos.yaml` bằng path tương đối từ workspace root. Mỗi path phải là exact Git
-root. Không tạo hai registry entry resolve về cùng root.
+root. Không tạo hai registry entries resolve về cùng root.
 
 ## Bước 3: Điền System Map
 
 Điền `SYSTEM_MAP.md` từ live evidence cho topology/dependency/contract/ownership
-liên repo. Đây là live workspace artifact, **không phải Shared Knowledge Store**.
+liên repo. Đây là live workspace artifact, không phải Shared Knowledge Store.
 
-## Bước 4: Cài Herdr Integrations
+## Bước 4: Cài Herdr integrations
 
 ```bash
 herdr integration install codex
@@ -72,156 +77,348 @@ herdr integration status
 
 Selected adapter phải `current`. `qiqi_delegate` không tự install integration.
 
-## Bước 5: Agent Routing
+## Bước 5: Agent Routing v2
 
-`instructions/agent-routing.yaml` là canonical machine-readable runtime registry
-cho execution agent/model/native START/RESUME argv. `instructions/model-routing.md`
-chỉ là exact-route selection policy cho QiQi.
+`instructions/agent-routing.yaml` là canonical machine-readable runtime registry.
+`instructions/model-routing.md` chỉ là exact-route selection policy cho QiQi.
 
 Runtime placeholders:
 
 ```text
 {model}
 {session_id}
-{result_dir}
 {route_args}
+{handoff_args}
 ```
 
-Routing example dưới `docs/examples/` chỉ là documentation; MCP không load.
+`{handoff_args}` phải xuất hiện đúng một lần trong `start_args` và `resume_args` của
+mỗi agent. Giá trị được MCP inject theo invocation; route không sở hữu Stop hook,
+hook sink hoặc result transport.
+
+Không còn `{result_dir}` hoặc result-path placeholder.
 
 ## Bước 6: Chuẩn bị qiqi_delegate
 
 ```bash
 uv sync --project mcp/qiqi_delegate
 bash -n scripts/qiqi-mcp-server.sh
-python3 -m py_compile mcp/qiqi_delegate/server.py
+python3 -m py_compile \
+  mcp/qiqi_delegate/core.py \
+  mcp/qiqi_delegate/result_hook.py \
+  mcp/qiqi_delegate/server.py
+python3 -m unittest discover -s mcp/qiqi_delegate/tests -v
 bash scripts/workspace-check.sh
 ```
 
 `.codex/config.toml` chỉ expose `delegate_repo_task`. Knowledge MCP đến từ user
-configuration và độc lập với workspace project config.
+configuration.
 
-## Bước 7: Xác minh Knowledge MCP trong Herdr child
-
-Đây là acceptance gate quan trọng vì execution agent chạy tại Git root khác.
-
-Dùng `delegate_repo_task` với một repo test và task read-only yêu cầu agent:
-
-1. xác nhận tool `knowledge_read` available;
-2. query một keyword set vô hại;
-3. **không** mở sibling repo hoặc external knowledge filesystem path;
-4. ghi result bình thường.
-
-Lặp cho mỗi adapter family thực sự dùng (Codex/Claude). Nếu child không thấy tool,
-không workaround bằng project knowledge config trong từng repo; sửa user/global MCP
-registration trước.
-
-## Bước 8: Execution Handoff
-
-QiQi public execution boundary vẫn là:
+Runtime state được tạo tại:
 
 ```text
-delegate_repo_task(repository, task, route, session_id?)
+.qiqi/state/qiqi_delegate.sqlite3
+.qiqi/state/active-captures/*.json
 ```
 
-START không có `session_id`; RESUME dùng exact native ID cũ. Success chỉ trả:
+SQLite giữ session/turn ownership. `active-captures/` chỉ là private, ephemeral
+routing metadata cho native hook của turn đang chạy; descriptor được tạo atomic
+`0600` và xóa khi delegation kết thúc. Toàn bộ `.qiqi/state/` được gitignore.
+QiQi/child không đọc hoặc sửa các file state này trực tiếp.
+
+`.qiqi/runs/` có thể còn tồn tại từ architecture cũ. MCP chỉ được đọc metadata
+legacy ở đó để import session ownership khi RESUME exact session cũ; turn mới không
+đọc/ghi semantic result tại đó.
+
+## Bước 7: Public TaskPacket contract
+
+`delegate_repo_task` nhận:
+
+```text
+repository
+route
+user_request
+objective
+scope
+out_of_scope
+required_context
+constraints
+acceptance_criteria
+verification
+known_unknowns
+session_id?
+```
+
+Rules tối thiểu:
+
+- `user_request` và `objective` non-empty;
+- `scope` non-empty;
+- `acceptance_criteria` non-empty;
+- list khác truyền `[]` khi thực sự không có item;
+- mỗi `required_context` item có đúng:
+
+```json
+{
+  "fact": "...",
+  "source": "...",
+  "certainty": "verified | user-provided | authoritative-decision"
+}
+```
+
+Tổng serialized TaskPacket giữ safety boundary 100.000 ký tự, tương ứng public
+`task` boundary trước migration. Không đặt guessed per-field limit và không đặt
+native-response size limit tự chế.
+
+## Bước 8: Context boundary
+
+Execution agent không chia sẻ hidden conversation, hidden reasoning, workspace
+control context hoặc sibling state của QiQi.
+
+Nếu QiQi đã dùng một fact để quyết định repository, dependency, scope, constraint,
+acceptance criterion hoặc task semantics, fact đó **phải** nằm trong
+`required_context` kèm provenance. Không kỳ vọng child tự query lại đúng knowledge
+item đó.
+
+Child vẫn được tự:
+
+- inspect current owner repository;
+- query Shared Knowledge MCP khi repo decision rule yêu cầu;
+- dùng knowledge để discover/enrich/verify context khác.
+
+Child không tự mở sibling source/result/runtime state để bù external input thiếu.
+
+## Bước 9: Native result handoff
+
+### Settled / failed turn
+
+START không có `session_id`; RESUME dùng exact native ID cũ. Khi native final message
+đã tồn tại, MCP trả:
 
 ```json
 {
   "session_id": "<native-session-id>",
-  "result_path": ".qiqi/runs/<repo>-<english-task-slug>-<session-id>.md"
+  "turn_id": "<qiqi-turn-id>",
+  "state": "settled | failed",
+  "agent_response": "<exact native final assistant message>"
 }
 ```
 
-QiQi phải đọc `result_path` trước bước tiếp theo. Existing evidence đủ thì trả lời
-trực tiếp; không START/RESUME chỉ để report lại.
+Agent tự chọn structure; không fixed headings. QiQi đọc **toàn bộ
+`agent_response`** rồi reconcile với TaskPacket trước bước tiếp theo.
 
-## Bước 9: Context Boundary
+MCP capture native message bằng Stop hook, không dùng terminal viewport và không
+parse transcript. Response dài hơn một screen không phụ thuộc scrollback.
 
-### Durable shared context
+### Blocked continuity
 
-QiQi và repo agent hiểu task trước rồi áp dụng `AGENTS.md` decision rule:
+Herdr `AgentInfo` có native session identity + status nhưng không bảo đảm một field
+chuẩn chứa nguyên văn blocker question. Vì vậy MCP không scrape screen để dựng lại
+semantic report.
 
-- **MUST read** khi prior durable knowledge có thể đổi interpretation,
-  orchestration, implementation hoặc verification;
-- **MAY read** khi query ngắn có thể giảm uncertainty hoặc tránh investigation lặp;
-- **SKIP read** khi durable context không thể đổi hành động hợp lý, như
-  typo/format/comment-only, exact local lookup hoặc report/status-only từ evidence
-  đã đủ.
+Ngay khi native `session_id` được Herdr xác nhận, MCP persist ownership trước mọi
+blocked/result-capture branch. Nếu Herdr sau đó trả `blocked` trước khi native final
+response tồn tại, MCP trả:
 
-`context.repo/domain` chỉ boost ranking. QiQi không cần duplicate child query nếu
-knowledge chỉ có thể ảnh hưởng repo-local implementation và không ảnh hưởng
-orchestration/task prompt.
-
-### Live upstream context
-
-Nếu repo B phụ thuộc result mới từ repo A:
-
-```text
-repo A result_path
-→ QiQi đọc/reconcile
-→ inline relevant fact/evidence trong repo B task prompt
+```json
+{
+  "session_id": "<native-session-id>",
+  "turn_id": "<qiqi-turn-id>",
+  "state": "blocked",
+  "agent_response": null,
+  "blocker_type": "agent_blocked"
+}
 ```
 
-Không dùng Shared Knowledge Store như mailbox thay thế live handoff và không cho
-child đọc sibling result/source.
+QiQi giữ exact `session_id` và chỉ RESUME sau khi missing external input/approval đã
+được giải quyết. Không xem `agent_response=null` là report bị cắt và không invent
+blocker content.
 
-## Bước 10: Knowledge Finalization
+Repo policy yêu cầu child ưu tiên finalize một native response mô tả missing external
+input thay vì dùng interactive question khi có thể; blocked return là continuity
+fallback.
 
-Knowledge review/write là required cho substantive work có khả năng tạo hoặc xác
-nhận reusable conclusion: implementation/debugging/investigation có kết luận,
-design/decision, contract/ownership change hoặc verified operational finding.
+Nếu native result hook thiếu/invalid sau khi session identity đã có, call fail rõ và
+error phải ghi session ownership đã được preserve cùng exact `session_id`; không
+fallback sang screen/transcript.
 
-Trivial/mechanical/report-only work không tạo reusable conclusion được skip write;
-không dùng empty write như ritual.
+## Bước 10: Stop-hook security model
 
-Khi review là required, sau work/verification agent gọi:
+### Static hook identity, dynamic capture state
+
+Hook command **không chứa** per-turn sink hoặc nonce. Command chỉ gồm Python executable,
+`result_hook.py`, adapter và static workspace state root. Vì vậy identity của QiQi
+hook ổn định trong một workspace path.
+
+Ngay trước launch, MCP ghi descriptor riêng cho `(adapter, exact repo root)` dưới:
 
 ```text
-knowledge_write(entries)
+.qiqi/state/active-captures/<sha256>.json
 ```
 
-- search existing concept trước create/update để dedupe;
-- create: semantic payload, không path/filename;
-- update: exact ID + expected revision từ read;
-- required review nhưng không candidate: `entries=[]`;
-- write failure có durable candidate phải xuất hiện trong result/caveat.
+Descriptor chứa private sink, nonce, QiQi turn id và `expected_session_id` khi đó là
+RESUME. Hook nhận `cwd` + native `session_id` từ payload, resolve đúng descriptor rồi
+mới ghi event. Repository lock của MCP bảo đảm không có hai delegation đồng thời trên
+cùng repo. Descriptor được cleanup ở `finally`.
 
-`### Repo-local Knowledge` trong current result contract là legacy label; repo policy
-ghi Knowledge MCP IDs create/update, `None`, hoặc persistence failure ở đây.
+### Codex — selective session trust
 
-`### Cross-repo Impact` vẫn phải ghi live impact nếu repo khác còn cần action.
+MCP inject ba session-config overrides:
 
-## Bước 11: Fresh-session Workflow Test
+```text
+-c features.hooks=true
+-c hooks.Stop=<exact QiQi static Stop hook>
+-c hooks.state={<exact QiQi hook key>={trusted_hash=<computed current hash>}}
+```
 
-Tối thiểu xác minh:
+`trusted_hash` được tính theo current Codex normalized-hook fingerprint contract cho
+chính command QiQi. Trust state nằm trong `SessionFlags`, chỉ match exact hook key +
+hash đó.
 
-1. QiQi thấy `knowledge_read` / `knowledge_write` từ workspace root và tự áp dụng
-   decision rule thay vì gọi vô điều kiện.
-2. START Codex repo turn: child `knowledge_read` hoạt động khi task cần durable
-   context; result hợp lệ.
-3. START Claude repo turn: child `knowledge_read` hoạt động nếu Claude route được dùng.
-4. Một task có verified reusable candidate tự search existing concept, create hoặc
-   update phù hợp mà không truyền filename/path; MCP trả ID/path/revision.
-5. Follow-up read tìm được document vừa tạo/cập nhật.
-6. Update bằng exact revision thành công; stale revision bị reject và agent reread
-   trước retry.
-7. Required review không có candidate dùng `knowledge_write(entries=[])` và không
-   mutate store; trivial task được phép skip write hoàn toàn.
-8. Repo A → QiQi → repo B live dependency vẫn hoạt động mà repo B không đọc repo A
-   source/result.
-9. Shared knowledge có body tiếng Việt vẫn tìm được bằng canonical English routing;
-   alias tiếng Việt cũng match khi query tương ứng.
-10. Nếu owner source mâu thuẫn shared knowledge, agent dùng live source/test và
-    update knowledge chỉ sau verification.
-11. Report/status-only hoặc exact local lookup không bị biến thành unnecessary
-    knowledge call chỉ để thỏa checklist.
+**Không được launch Codex child với `--dangerously-bypass-hook-trust`.** Flag đó
+bypass trust check cho toàn session và có thể làm hook khác chạy ngoài ý operator.
+Server chỉ được nhắc literal flag này trong policy để reject nếu route cố inject nó.
 
-## Bước 12: Checker ownership
+User/project/plugin hooks khác không được QiQi thêm vào `hooks.state`. Hook nào đang
+`untrusted` hoặc `modified` vẫn chịu native Codex trust policy; QiQi không gọi
+"trust all" và không ghi persistent user hook trust.
 
-`workspace-check.sh` chỉ kiểm orchestration/qiqi_delegate harness. Knowledge Store
-integrity thuộc `knowledge-template` checker/CLI; không duplicate knowledge schema
-assertions vào workspace checker.
+### Claude
 
-Chỉ coi environment sẵn sàng khi workspace checker pass, Knowledge Store checker
-pass và fresh-session child discovery smoke test pass cho adapter thực sự dùng.
+MCP inject invocation-scoped `--settings <inline-json>` chứa **chỉ** QiQi command hook
+cho `Stop` và `StopFailure`. Command cũng dùng static state-root routing như Codex.
+Không có broad trust-bypass flag tương đương được QiQi bật, và qiqi_delegate không
+thay đổi trust/permission state của unrelated Claude hooks. Unrelated project/user
+hooks vẫn theo native Claude configuration/trust behavior.
+
+### Capture file security
+
+Private sink vẫn nằm trong temporary directory của turn. Event được ghi atomic,
+permission `0600`; malformed/missing descriptor hoặc hook input không được block
+agent turn. MCP validate nonce/adapter/session identity trước khi nhận event và fail
+closed nếu không có valid capture; không fallback sang screen/transcript.
+
+## Bước 11: Knowledge MCP trong Herdr child
+
+Dùng một repo test và read-only TaskPacket:
+
+1. child xác nhận `knowledge_read` available;
+2. query keyword vô hại khi decision rule thực sự yêu cầu;
+3. không mở sibling repo hoặc external knowledge filesystem path;
+4. trả native final response bình thường.
+
+Lặp cho mỗi adapter family thực sự dùng. Nếu child không thấy tool, sửa user/global
+MCP registration; không workaround bằng per-repo knowledge store/config.
+
+## Bước 12: Acceptance smoke — installed Claude/Codex thật
+
+**Unit test không thay thế bước này.** Native hook payload/CLI option và Codex hook
+fingerprint/trust behavior là external contract của installed agent CLI.
+
+Với **mỗi adapter family thực sự dùng**, chạy trên một test repository an toàn.
+
+### Smoke 0 — selective hook trust
+
+Với Codex, quan sát actual child launch và hook behavior.
+
+Acceptance:
+
+1. child argv **không có** `--dangerously-bypass-hook-trust`;
+2. argv có `features.hooks=true`, QiQi `hooks.Stop` và QiQi-only `hooks.state`;
+3. QiQi native response vẫn capture thành công mà không cần operator trust hook mỗi turn;
+4. một unrelated hook đang `untrusted`/`modified` không được QiQi chuyển thành trusted;
+5. QiQi không ghi persistent `hooks.state` vào user config.
+
+Với Claude, xác nhận `--settings` chỉ inject QiQi Stop/StopFailure hook và không thay
+unrelated hook permission/trust configuration.
+
+### Smoke A — full response vượt viewport
+
+START một task có acceptance rõ. Yêu cầu final response chứa:
+
+- marker đầu duy nhất, ví dụ `QIQI_NATIVE_START_<nonce>`;
+- Unicode tiếng Việt;
+- ít nhất vài trăm dòng deterministic để vượt terminal viewport;
+- marker cuối duy nhất `QIQI_NATIVE_END_<nonce>`.
+
+Acceptance:
+
+1. `state=settled`;
+2. `agent_response` chứa nguyên văn cả hai markers đúng thứ tự;
+3. Unicode không hỏng;
+4. tail content sau viewport vẫn còn;
+5. không có `.qiqi/runs/*.md` mới;
+6. SQLite session ownership được tạo nhưng QiQi không đọc DB trực tiếp;
+7. active-capture descriptor không còn sau call kết thúc.
+
+### Smoke B — RESUME exact session
+
+Dùng `session_id` từ Smoke A và RESUME cùng repo/agent. Yêu cầu một response marker
+mới.
+
+Acceptance:
+
+1. return cùng native `session_id`;
+2. `turn_id` mới;
+3. `agent_response` chỉ phản ánh turn mới;
+4. RESUME session với repository hoặc agent family khác bị reject;
+5. static hook router reject payload có native session khác `expected_session_id`.
+
+### Smoke C — native capture fail-closed
+
+Trong test checkout riêng, làm active-capture descriptor hoặc native result hook
+unavailable/invalid theo cách có thể hoàn nguyên, không chạm production workspace.
+
+Acceptance:
+
+1. delegation fail rõ;
+2. không trả terminal viewport text như semantic response;
+3. không parse undocumented transcript;
+4. nếu native session identity đã được xác nhận trước failure, error ghi exact
+   `session_id` còn resumable.
+
+### Smoke D — blocked continuity (khi adapter có cách tái hiện ổn định)
+
+Chỉ chạy nếu installed agent/Herdr có deterministic test case dẫn tới
+`agent_status=blocked` mà không cần đoán UI state.
+
+Acceptance:
+
+1. return `state=blocked`;
+2. `session_id` non-empty;
+3. `agent_response=null`;
+4. RESUME exact session sau khi giải blocker hoạt động;
+5. không dùng screen/transcript để dựng blocker text.
+
+Nếu không có deterministic blocked fixture, không giả lập bằng grep/screen và không
+claim smoke D đã pass; unit/state-store test chỉ chứng minh local continuity logic.
+
+## Bước 13: Knowledge finalization
+
+Knowledge review/write required cho substantive work có khả năng tạo/xác nhận
+reusable conclusion. Trivial/mechanical/report-only work được skip.
+
+Khi review required:
+
+- search existing concept trước create/update;
+- create dùng semantic payload, không path/filename;
+- update dùng exact ID + expected revision;
+- required review không candidate → `entries=[]`;
+- persistence failure có candidate phải xuất hiện trong native final response.
+
+Cross-repo impact vẫn phải nằm trong native response khi repository khác cần work;
+không phụ thuộc fixed heading.
+
+## Bước 14: Checker ownership
+
+`workspace-check.sh` kiểm orchestration/qiqi_delegate static + unit invariants.
+Knowledge Store integrity thuộc `knowledge-template` checker/CLI.
+
+Chỉ coi environment production-ready khi:
+
+1. workspace checker pass;
+2. relevant repo checkers pass;
+3. Knowledge Store checker pass;
+4. Shared Knowledge discovery trong fresh child pass;
+5. Selective Hook Trust Smoke 0 + Native Handoff Smoke A/B/C pass cho **từng adapter
+   family thực sự dùng**;
+6. Smoke D pass nếu môi trường có deterministic blocked fixture, hoặc được ghi rõ là
+   chưa chạy vì không có fixture — không được thay bằng claim từ unit test.

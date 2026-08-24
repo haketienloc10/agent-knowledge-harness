@@ -6,16 +6,28 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
+import sys
+import tempfile
 import time
-import unicodedata
 import uuid
 from pathlib import Path
 from typing import Any
 
 import yaml
 from mcp.server import MCPServer
+
+from core import (
+    SessionStore,
+    TaskPacket,
+    build_task_packet,
+    load_capture_events,
+    new_turn_id,
+    render_task_prompt,
+    select_capture_event,
+)
 
 _workspace_root_env = os.environ.get("QIQI_WORKSPACE_ROOT")
 WORKSPACE_ROOT = (
@@ -24,7 +36,10 @@ WORKSPACE_ROOT = (
     else Path(__file__).resolve().parents[2]
 )
 ROUTING_PATH = WORKSPACE_ROOT / "instructions" / "agent-routing.yaml"
-RUNS_DIR = WORKSPACE_ROOT / ".qiqi" / "runs"
+STATE_DB = WORKSPACE_ROOT / ".qiqi" / "state" / "qiqi_delegate.sqlite3"
+ACTIVE_CAPTURES_DIR = STATE_DB.parent / "active-captures"
+LEGACY_RUNS_DIR = WORKSPACE_ROOT / ".qiqi" / "runs"
+RESULT_HOOK_PATH = Path(__file__).with_name("result_hook.py").resolve()
 HERDR_BIN = os.environ.get("QIQI_HERDR_BIN", "herdr")
 HERDR_SESSION = (
     os.environ.get("QIQI_HERDR_SESSION", "qiqi-delegate").strip() or "qiqi-delegate"
@@ -32,37 +47,32 @@ HERDR_SESSION = (
 HERDR_AGENT_START_TIMEOUT_MS = 60_000
 HERDR_SHELL_READY_TIMEOUT_SECONDS = 10.0
 NATIVE_SESSION_WAIT_SECONDS = 15.0
+NATIVE_RESULT_WAIT_SECONDS = 5.0
 CLAUDE_PROMPT_RETRY_EFFECT_SECONDS = 5.0
 SUPPORTED_ADAPTERS = {"codex", "claude"}
 PLACEHOLDER_RE = re.compile(r"\{[a-z_][a-z0-9_]*\}")
-TURN_MARKER_RE = re.compile(r"<!-- qiqi-turn:(\d+) -->")
-REQUIRED_RESULT_HEADINGS = (
-    "Outcome",
-    "Changes",
-    "Verification",
-    "Git State",
-    "Blockers",
-    "Repo-local Knowledge",
-    "Cross-repo Impact",
-)
-META_PREFIX = "<!-- qiqi-session: "
-META_SUFFIX = " -->"
+LEGACY_META_PREFIX = "<!-- qiqi-session: "
+LEGACY_META_SUFFIX = " -->"
 
 mcp = MCPServer(
     "QiQi Delegate",
     instructions=(
-        "Synchronous Herdr-backed interactive execution boundary for QiQi. Use "
-        "delegate_repo_task for repo-local work. QiQi owns the task semantics and "
-        "selects a route; the MCP appends only the result-handoff protocol required "
-        "for its durable Markdown artifact. Omit session_id to START a new native "
-        "Codex/Claude session; pass a previously returned native session_id to "
-        "RESUME exactly that session. The MCP owns Herdr workspace/agent lifecycle, "
-        "route argument construction, synchronous prompt/wait, native session "
-        "identity, result artifact validation, and cleanup. A successful call "
-        "returns only session_id and result_path. QiQi must read that result_path "
-        "before deciding the next step and must not RESUME merely to ask the agent "
-        "to repeat or restate its report. There are intentionally no status, wait, "
-        "read, list-runs, transcript, or separate resume tools."
+        "Synchronous Herdr-backed repository execution boundary for QiQi. "
+        "delegate_repo_task accepts a structured task packet instead of an opaque "
+        "prompt string. The packet must explicitly carry the original user request, "
+        "repo-local objective, scope, required live context, constraints, acceptance "
+        "criteria, verification requirements, and known unknowns. The child does not "
+        "share QiQi's hidden context. The MCP launches/resumes the native Codex or "
+        "Claude session through Herdr and captures the native final assistant message "
+        "through a static result-hook command routed to MCP-owned active-capture state; "
+        "it never scrapes terminal scrollback or parses agent transcripts. Codex trusts "
+        "only the exact QiQi session hook by matching its computed trusted_hash; global "
+        "hook-trust bypass is forbidden. Settled/failed native turns return session_id, "
+        "turn_id, state, and the exact agent_response. If Herdr reports blocked before "
+        "a native final response exists, the MCP persists session ownership and returns "
+        "state blocked with agent_response null so QiQi can RESUME the exact session. "
+        "Runtime session ownership is persisted in MCP-owned SQLite state, not in a "
+        "Markdown result artifact."
     ),
 )
 
@@ -71,18 +81,17 @@ _managed_herdr_server: asyncio.subprocess.Process | None = None
 _state_lock = asyncio.Lock()
 _active_repositories: set[Path] = set()
 _active_sessions: set[str] = set()
+_store = SessionStore(STATE_DB)
 
 
 def _load_repo_registry() -> dict[str, Path]:
     registry_path = WORKSPACE_ROOT / "repos.yaml"
     if not registry_path.is_file():
         raise RuntimeError(f"missing workspace registry: {registry_path}")
-
     data = yaml.safe_load(registry_path.read_text(encoding="utf-8")) or {}
     repositories = data.get("repositories")
     if not isinstance(repositories, list):
         raise RuntimeError("repos.yaml: repositories must be a list")
-
     result: dict[str, Path] = {}
     for entry in repositories:
         if not isinstance(entry, dict):
@@ -93,16 +102,12 @@ def _load_repo_registry() -> dict[str, Path]:
             continue
         if "{{" in name or "{{" in relative_path:
             continue
-
         repo = (WORKSPACE_ROOT / relative_path).resolve()
         try:
             repo.relative_to(WORKSPACE_ROOT)
         except ValueError as exc:
-            raise RuntimeError(
-                f"repos.yaml: repository {name!r} escapes workspace root"
-            ) from exc
+            raise RuntimeError(f"repos.yaml: repository {name!r} escapes workspace root") from exc
         result[name] = repo
-
     return result
 
 
@@ -111,12 +116,9 @@ def _resolve_repo(repository: str) -> Path:
     repo = registry.get(repository)
     if repo is None:
         available = ", ".join(sorted(registry)) or "<none>"
-        raise RuntimeError(
-            f"unknown repository {repository!r}; available repositories: {available}"
-        )
+        raise RuntimeError(f"unknown repository {repository!r}; available repositories: {available}")
     if not repo.is_dir():
         raise RuntimeError(f"repository path does not exist: {repo}")
-
     completed = subprocess.run(
         ["git", "-C", str(repo), "rev-parse", "--show-toplevel"],
         check=False,
@@ -125,12 +127,9 @@ def _resolve_repo(repository: str) -> Path:
     )
     if completed.returncode != 0:
         raise RuntimeError(f"not a Git repository: {repo}")
-
     git_root = Path(completed.stdout.strip()).resolve()
     if git_root != repo:
-        raise RuntimeError(
-            f"repos.yaml path must be exact Git root: configured={repo}, git={git_root}"
-        )
+        raise RuntimeError(f"repos.yaml path must be exact Git root: configured={repo}, git={git_root}")
     return repo
 
 
@@ -143,18 +142,15 @@ def _require_string_list(value: Any, label: str) -> list[str]:
 def _load_execution_config() -> tuple[dict[str, Any], dict[str, Any]]:
     if not ROUTING_PATH.is_file():
         raise RuntimeError(f"missing agent routing registry: {ROUTING_PATH}")
-
     data = yaml.safe_load(ROUTING_PATH.read_text(encoding="utf-8")) or {}
-    if data.get("version") != 1:
-        raise RuntimeError("agent-routing.yaml: version must be 1")
-
+    if data.get("version") != 2:
+        raise RuntimeError("agent-routing.yaml: version must be 2")
     agents = data.get("agents")
     routes = data.get("routes")
     if not isinstance(agents, dict) or not agents:
         raise RuntimeError("agent-routing.yaml: agents must be a non-empty map")
     if not isinstance(routes, dict) or not routes:
         raise RuntimeError("agent-routing.yaml: routes must be a non-empty map")
-
     for name, config in agents.items():
         if not isinstance(name, str) or not isinstance(config, dict):
             raise RuntimeError("agent-routing.yaml: invalid agent entry")
@@ -164,25 +160,18 @@ def _load_execution_config() -> tuple[dict[str, Any], dict[str, Any]]:
             raise RuntimeError(f"agent {name}: command must be a non-empty string")
         if adapter not in SUPPORTED_ADAPTERS:
             raise RuntimeError(
-                f"agent {name}: unsupported adapter {adapter!r}; "
-                f"supported: {', '.join(sorted(SUPPORTED_ADAPTERS))}"
+                f"agent {name}: unsupported adapter {adapter!r}; supported: "
+                f"{', '.join(sorted(SUPPORTED_ADAPTERS))}"
             )
-
-        start_args = _require_string_list(
-            config.get("start_args"), f"agent {name}.start_args"
-        )
-        resume_args = _require_string_list(
-            config.get("resume_args"), f"agent {name}.resume_args"
-        )
+        start_args = _require_string_list(config.get("start_args"), f"agent {name}.start_args")
+        resume_args = _require_string_list(config.get("resume_args"), f"agent {name}.resume_args")
         if any("{session_id}" in item for item in start_args):
-            raise RuntimeError(
-                f"agent {name}.start_args must not contain {{session_id}}"
-            )
+            raise RuntimeError(f"agent {name}.start_args must not contain {{session_id}}")
         if not any("{session_id}" in item for item in resume_args):
-            raise RuntimeError(
-                f"agent {name}.resume_args must contain {{session_id}}"
-            )
-
+            raise RuntimeError(f"agent {name}.resume_args must contain {{session_id}}")
+        for key, template in (("start_args", start_args), ("resume_args", resume_args)):
+            if template.count("{handoff_args}") != 1:
+                raise RuntimeError(f"agent {name}.{key} must contain exactly one {{handoff_args}}")
     for name, config in routes.items():
         if not isinstance(name, str) or not isinstance(config, dict):
             raise RuntimeError("agent-routing.yaml: invalid route entry")
@@ -192,12 +181,12 @@ def _load_execution_config() -> tuple[dict[str, Any], dict[str, Any]]:
             raise RuntimeError(f"route {name}: unknown agent {agent_name!r}")
         if not isinstance(model, str) or not model.strip() or "{{" in model:
             raise RuntimeError(f"route {name}: model is unresolved or empty")
-        route_args = _require_string_list(
-            config.get("args", []), f"route {name}.args"
-        )
+        route_args = _require_string_list(config.get("args", []), f"route {name}.args")
         if any("{{" in item for item in route_args):
             raise RuntimeError(f"route {name}: args contain unresolved placeholder")
-
+        forbidden = {"--settings", "--dangerously-bypass-hook-trust", "--enable", "--disable"}
+        if any(item in forbidden or item.startswith("hooks.") for item in route_args):
+            raise RuntimeError(f"route {name}: result-handoff hook configuration is MCP-owned")
     return agents, routes
 
 
@@ -224,385 +213,192 @@ def _build_interactive_args(
     agent: dict[str, Any],
     route: dict[str, Any],
     session_id: str | None,
+    handoff_args: list[str],
 ) -> list[str]:
     template_key = "resume_args" if session_id else "start_args"
     template = agent[template_key]
     route_args = route.get("args", [])
     if route_args and "{route_args}" not in template:
         raise RuntimeError(f"{template_key} does not contain {{route_args}}")
-
-    values = {
-        "model": route["model"],
-        "result_dir": str(RUNS_DIR),
-    }
+    values = {"model": route["model"]}
     if session_id:
         values["session_id"] = session_id
-
     argv: list[str] = []
     for item in template:
         if item == "{route_args}":
             argv.extend(_expand_scalar(arg, values) for arg in route_args)
+        elif item == "{handoff_args}":
+            argv.extend(handoff_args)
         else:
             argv.append(_expand_scalar(item, values))
     return argv
 
 
-def _ascii_slug(value: str, *, max_length: int, fallback: str) -> str:
-    normalized = unicodedata.normalize("NFKD", value)
-    ascii_text = normalized.encode("ascii", "ignore").decode("ascii").lower()
-    slug = re.sub(r"[^a-z0-9]+", "-", ascii_text).strip("-")
-    if not slug:
-        slug = fallback
-    slug = slug[:max_length].rstrip("-")
-    return slug or fallback
+def _result_hook_command(adapter: str) -> str:
+    return shlex.join(
+        [
+            sys.executable,
+            str(RESULT_HOOK_PATH),
+            "--adapter",
+            adapter,
+            "--state-root",
+            str(STATE_DB.parent),
+        ]
+    )
 
 
-def _session_filename_component(session_id: str) -> str:
-    safe = re.sub(r"[^A-Za-z0-9._-]+", "-", session_id).strip(".-_")
-    changed = safe != session_id
-    if not safe:
-        safe = "session"
-        changed = True
-    if len(safe) > 120:
-        safe = safe[:120].rstrip(".-_")
-        changed = True
-    if changed:
-        digest = hashlib.sha256(session_id.encode("utf-8")).hexdigest()[:8]
-        base = safe[:111].rstrip(".-_") or "session"
-        safe = f"{base}-{digest}"
-    return safe
+def _toml_string(value: str) -> str:
+    return json.dumps(value, ensure_ascii=False)
 
 
-def _repo_filename_component(repository: str) -> str:
-    return _ascii_slug(repository, max_length=40, fallback="repo")
-
-
-def _task_slug(task: str) -> str:
-    first_line = next((line.strip() for line in task.splitlines() if line.strip()), task)
-    return _ascii_slug(first_line, max_length=48, fallback="task")
-
-
-def _artifact_header(
-    repository: str,
-    agent_name: str,
-    session_id: str | None,
-    task: str,
-) -> str:
-    metadata = {
-        "repository": repository,
-        "agent": agent_name,
-        "session_id": session_id,
+def _codex_stop_hook_hash(command: str) -> str:
+    # Mirrors Codex's NormalizedHookIdentity -> TOML -> canonical JSON fingerprint
+    # for one Stop command hook with timeout=10 and default async=false.
+    identity = {
+        "event_name": "stop",
+        "hooks": [
+            {
+                "async": False,
+                "command": command,
+                "timeout": 10,
+                "type": "command",
+            }
+        ],
     }
-    title = next((line.strip() for line in task.splitlines() if line.strip()), "Task")[:120]
-    session_display = session_id or "pending"
-    return (
-        f"{META_PREFIX}{json.dumps(metadata, ensure_ascii=False)}{META_SUFFIX}\n"
-        f"# {title}\n\n"
-        f"- Repository: `{repository}`\n"
-        f"- Agent: `{agent_name}`\n"
-        f"- Native session: `{session_display}`\n"
-    )
+    canonical = json.dumps(identity, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    return f"sha256:{digest}"
 
 
-def _create_pending_result_artifact(
-    repository: str,
-    agent_name: str,
-    task: str,
+def _codex_session_hook_key() -> str:
+    if os.name == "nt":
+        source = r"C:\<session-flags>\config.toml"
+    else:
+        source = "/<session-flags>/config.toml"
+    return f"{source}:stop:0:0"
+
+
+def _build_handoff_args(adapter: str) -> list[str]:
+    command = _result_hook_command(adapter)
+    if adapter == "claude":
+        settings = {
+            "hooks": {
+                "Stop": [{"hooks": [{"type": "command", "command": command}]}],
+                "StopFailure": [{"hooks": [{"type": "command", "command": command}]}],
+            }
+        }
+        return ["--settings", json.dumps(settings, ensure_ascii=False, separators=(",", ":"))]
+    if adapter == "codex":
+        stop_value = (
+            "[{hooks=[{type=\"command\",command="
+            + _toml_string(command)
+            + ",timeout=10}]}]"
+        )
+        hook_key = _codex_session_hook_key()
+        trusted_hash = _codex_stop_hook_hash(command)
+        state_value = (
+            "{"
+            + _toml_string(hook_key)
+            + "={trusted_hash="
+            + _toml_string(trusted_hash)
+            + "}}"
+        )
+        return [
+            "-c",
+            "features.hooks=true",
+            "-c",
+            f"hooks.Stop={stop_value}",
+            "-c",
+            f"hooks.state={state_value}",
+        ]
+    raise RuntimeError(f"unsupported result handoff adapter: {adapter}")
+
+
+def _active_capture_path(adapter: str, repo: Path) -> Path:
+    key = hashlib.sha256(f"{adapter}\0{repo.resolve()}".encode("utf-8")).hexdigest()
+    return ACTIVE_CAPTURES_DIR / f"{key}.json"
+
+
+def _register_active_capture(
+    *,
+    adapter: str,
+    repo: Path,
+    sink: Path,
+    nonce: str,
+    expected_session_id: str | None,
+    qiqi_turn_id: str,
 ) -> Path:
-    RUNS_DIR.mkdir(parents=True, exist_ok=True)
-    path = RUNS_DIR / (
-        f".pending-{_repo_filename_component(repository)}-{_task_slug(task)}-"
-        f"{uuid.uuid4().hex[:12]}.md"
-    )
-    path.write_text(
-        _artifact_header(repository, agent_name, None, task),
-        encoding="utf-8",
-    )
+    ACTIVE_CAPTURES_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
+    try:
+        os.chmod(ACTIVE_CAPTURES_DIR, 0o700)
+    except OSError:
+        pass
+    path = _active_capture_path(adapter, repo)
+    payload = {
+        "version": 1,
+        "adapter": adapter,
+        "repo": str(repo.resolve()),
+        "sink": str(sink.resolve()),
+        "nonce": nonce,
+        "expected_session_id": expected_session_id,
+        "qiqi_turn_id": qiqi_turn_id,
+        "created_at_ns": time.time_ns(),
+    }
+    temp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    with temp.open("x", encoding="utf-8") as handle:
+        handle.write(encoded)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.chmod(temp, 0o600)
+    os.replace(temp, path)
+    os.chmod(path, 0o600)
     return path
 
 
-def _final_result_path(repository: str, task: str, session_id: str) -> Path:
-    return RUNS_DIR / (
-        f"{_repo_filename_component(repository)}-{_task_slug(task)}-"
-        f"{_session_filename_component(session_id)}.md"
-    )
-
-
-def _promote_start_artifact(
-    path: Path,
-    repository: str,
-    agent_name: str,
-    task: str,
-    session_id: str,
-) -> Path:
-    destination = _final_result_path(repository, task, session_id)
-    if destination.exists():
-        raise RuntimeError(
-            f"new native session would overwrite existing result artifact: {destination}"
-        )
-
-    text = path.read_text(encoding="utf-8")
-    lines = text.splitlines(keepends=True)
-    if not lines:
-        raise RuntimeError(f"pending result artifact is empty: {path}")
-    lines[0] = (
-        f"{META_PREFIX}"
-        f"{json.dumps({'repository': repository, 'agent': agent_name, 'session_id': session_id}, ensure_ascii=False)}"
-        f"{META_SUFFIX}\n"
-    )
-
-    native_line = None
-    for index, line in enumerate(lines):
-        if line.startswith("- Native session: "):
-            native_line = index
-            break
-    if native_line is None:
-        raise RuntimeError(f"pending result artifact lost native-session header: {path}")
-    lines[native_line] = f"- Native session: `{session_id}`\n"
-    path.write_text("".join(lines), encoding="utf-8")
-    path.replace(destination)
-    return destination
-
-
-def _artifact_metadata(path: Path) -> dict[str, Any]:
-    try:
-        first_line = path.read_text(encoding="utf-8").splitlines()[0]
-    except (OSError, IndexError) as exc:
-        raise RuntimeError(f"invalid result artifact: {path}") from exc
-    if not first_line.startswith(META_PREFIX) or not first_line.endswith(META_SUFFIX):
-        raise RuntimeError(f"result artifact is missing QiQi session metadata: {path}")
-    raw = first_line[len(META_PREFIX) : -len(META_SUFFIX)]
-    try:
-        metadata = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        raise RuntimeError(f"result artifact has invalid QiQi metadata: {path}") from exc
-    if not isinstance(metadata, dict):
-        raise RuntimeError(f"result artifact has invalid QiQi metadata: {path}")
-    return metadata
-
-
-def _find_resume_artifact(
-    repository: str,
-    agent_name: str,
-    session_id: str,
-) -> Path:
-    RUNS_DIR.mkdir(parents=True, exist_ok=True)
-    repo_part = _repo_filename_component(repository)
-    session_part = _session_filename_component(session_id)
-    prefix = f"{repo_part}-"
-    suffix = f"-{session_part}.md"
-
-    candidates = sorted(
-        path
-        for path in RUNS_DIR.iterdir()
-        if path.is_file()
-        and not path.name.startswith(".pending-")
-        and path.name.startswith(prefix)
-        and path.name.endswith(suffix)
-    )
-    exact: list[Path] = []
-    for path in candidates:
-        metadata = _artifact_metadata(path)
-        if (
-            metadata.get("repository") == repository
-            and metadata.get("session_id") == session_id
-        ):
-            exact.append(path)
-
-    if not exact:
-        raise RuntimeError(
-            "resume requires the existing Markdown result artifact for this "
-            f"repository/session; none found under {RUNS_DIR}"
-        )
-    if len(exact) != 1:
-        raise RuntimeError(
-            "resume result artifact is ambiguous for "
-            f"repository={repository!r}, session_id={session_id!r}: "
-            + ", ".join(str(path) for path in exact)
-        )
-
-    metadata = _artifact_metadata(exact[0])
-    previous_agent = metadata.get("agent")
-    if previous_agent != agent_name:
-        raise RuntimeError(
-            "cross-agent resume is not allowed: session artifact belongs to "
-            f"{previous_agent!r}, selected route uses {agent_name!r}"
-        )
-    return exact[0]
-
-
-def _append_task_section(path: Path, task: str) -> tuple[str, str]:
-    text = path.read_text(encoding="utf-8")
-    numbers = [int(match) for match in TURN_MARKER_RE.findall(text)]
-    turn = max(numbers, default=0) + 1
-    marker = f"<!-- QIQI_RESULT_PENDING:{turn}:{uuid.uuid4().hex[:8]} -->"
-
-    separator = "" if text.endswith("\n") else "\n"
-    with path.open("a", encoding="utf-8") as handle:
-        handle.write(
-            f"{separator}\n<!-- qiqi-turn:{turn} -->\n## Task {turn}\n\n"
-            f"{task}\n\n"
-            f"## Result {turn}\n\n"
-            f"{marker}\n"
-        )
-
-    appended = path.read_text(encoding="utf-8")
-    if appended.count(marker) != 1:
-        raise RuntimeError("failed to create a unique pending result marker")
-    expected_prefix, _ = appended.split(marker, 1)
-    return marker, expected_prefix
-
-
-def _build_prompt(task: str, result_path: Path, marker: str) -> str:
-    return f"""{task}
-
----
-QiQi MCP result handoff protocol:
-- The task above is owned by QiQi. This footer only defines result handoff and does not change task semantics.
-- Result artifact: {result_path}
-- Preserve all existing content in that Markdown file.
-- Replace exactly this pending marker under the newest Result section:
-  {marker}
-- Before this turn settles, replace the marker with Markdown containing these headings in exactly this order:
-  `### Outcome`;
-  `### Changes`;
-  `### Verification`;
-  `### Git State`;
-  `### Blockers`;
-  `### Repo-local Knowledge`;
-  `### Cross-repo Impact`.
-- The result artifact is the authoritative, complete, and self-contained handoff back to QiQi. Write all task output needed to understand, verify, or continue the work into the artifact. Do not rely on the chat/final response for any task information; it may be omitted or contain only a summary.
-- Under `### Outcome`, write exactly `completed` or `blocked`.
-- If the turn is blocked, finalize this result section with Outcome `blocked` before presenting the interactive blocker or question.
-"""
-
-
-def _result_fallback_blocked(reason: str) -> str:
-    return f"""### Outcome
-
-blocked
-
-### Changes
-
-None.
-
-### Verification
-
-None.
-
-### Git State
-
-Not finalized.
-
-### Blockers
-
-- {reason}
-
-### Repo-local Knowledge
-
-None.
-
-### Cross-repo Impact
-
-None.
-""".rstrip()
-
-
-def _validate_result_section(text: str, expected_prefix: str, status: str) -> None:
-    if not text.startswith(expected_prefix):
-        raise RuntimeError(
-            "interactive agent modified existing result history instead of only "
-            "finalizing the newest Result section"
-        )
-
-    result_text = text[len(expected_prefix) :].strip()
-    if not result_text:
-        raise RuntimeError("interactive agent produced an empty Markdown result section")
-
-    positions: list[int] = []
-    for heading in REQUIRED_RESULT_HEADINGS:
-        match = re.search(rf"(?m)^### {re.escape(heading)}\s*$", result_text)
-        if match is None:
-            raise RuntimeError(
-                f"interactive agent result is missing required heading: ### {heading}"
-            )
-        positions.append(match.start())
-    if positions != sorted(positions) or len(set(positions)) != len(positions):
-        raise RuntimeError("interactive agent result headings are out of required order")
-
-    outcome_match = re.search(
-        r"(?ms)^### Outcome\s*$\s*(.*?)(?=^### |\Z)",
-        result_text,
-    )
-    if outcome_match is None:
-        raise RuntimeError("interactive agent result has no Outcome value")
-    outcome_lines = [
-        line.strip() for line in outcome_match.group(1).splitlines() if line.strip()
-    ]
-    if not outcome_lines:
-        raise RuntimeError("interactive agent result has an empty Outcome value")
-    outcome = outcome_lines[0].strip("`").lower()
-    if outcome not in {"completed", "blocked"}:
-        raise RuntimeError(
-            "interactive agent result Outcome must be exactly completed or blocked"
-        )
-    if status == "blocked" and outcome != "blocked":
-        raise RuntimeError(
-            "Herdr reported the agent as blocked but the Markdown result did not"
-        )
-
-
-def _finalize_artifact_after_wait(
-    path: Path,
-    marker: str,
-    expected_prefix: str,
-    status: str,
-) -> None:
-    text = path.read_text(encoding="utf-8")
-    if marker in text:
-        if status != "blocked":
-            raise RuntimeError(
-                "interactive agent settled without finalizing its Markdown result artifact"
-            )
-        fallback = _result_fallback_blocked(
-            "Herdr reported the interactive agent as blocked before it finalized "
-            "this result section. Resume the same native session with the required "
-            "answer or decision."
-        )
-        text = text.replace(marker, fallback, 1)
-        path.write_text(text, encoding="utf-8")
-
-    if marker in text:
-        raise RuntimeError("pending result marker remains after finalization")
-    _validate_result_section(text, expected_prefix, status)
-
-
-def _mark_artifact_execution_error(
-    path: Path | None,
-    marker: str | None,
-    expected_prefix: str | None,
-    exc: BaseException,
-) -> None:
-    if path is None or marker is None or expected_prefix is None or not path.is_file():
+def _remove_active_capture(path: Path | None) -> None:
+    if path is None:
         return
     try:
-        text = path.read_text(encoding="utf-8")
-        if not text.startswith(expected_prefix) or marker not in text:
-            return
-        message = " ".join(str(exc).split())[:800] or type(exc).__name__
-        fallback = _result_fallback_blocked(
-            f"Delegation infrastructure failed before the agent finalized this turn: {message}"
-        )
-        path.write_text(text.replace(marker, fallback, 1), encoding="utf-8")
-    except OSError:
+        path.unlink()
+    except FileNotFoundError:
         pass
 
 
-def _result_relative_path(path: Path) -> str:
+def _legacy_artifact_metadata(path: Path) -> dict[str, Any] | None:
     try:
-        return path.resolve().relative_to(WORKSPACE_ROOT).as_posix()
-    except ValueError as exc:
-        raise RuntimeError(f"result artifact escaped workspace root: {path}") from exc
+        first_line = path.open("r", encoding="utf-8").readline().rstrip("\n")
+    except OSError:
+        return None
+    if not first_line.startswith(LEGACY_META_PREFIX) or not first_line.endswith(LEGACY_META_SUFFIX):
+        return None
+    raw = first_line[len(LEGACY_META_PREFIX) : -len(LEGACY_META_SUFFIX)]
+    try:
+        metadata = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    return metadata if isinstance(metadata, dict) else None
+
+
+def _import_legacy_resume_if_present(repository: str, agent_name: str, session_id: str) -> bool:
+    """Import only legacy session ownership; new turns never use Markdown handoff content."""
+    if not LEGACY_RUNS_DIR.is_dir():
+        return False
+    matches: list[Path] = []
+    for path in LEGACY_RUNS_DIR.glob("*.md"):
+        metadata = _legacy_artifact_metadata(path)
+        if not metadata:
+            continue
+        if (
+            metadata.get("repository") == repository
+            and metadata.get("agent") == agent_name
+            and metadata.get("session_id") == session_id
+        ):
+            matches.append(path)
+    if len(matches) != 1:
+        return False
+    _store.import_legacy_session(session_id, repository, agent_name)
+    return True
 
 
 async def _claim_resources(repo: Path, session_id: str | None) -> None:
@@ -610,9 +406,7 @@ async def _claim_resources(repo: Path, session_id: str | None) -> None:
         if repo in _active_repositories:
             raise RuntimeError(f"repository already has an active delegation: {repo}")
         if session_id and session_id in _active_sessions:
-            raise RuntimeError(
-                f"native session already has an active delegation: {session_id}"
-            )
+            raise RuntimeError(f"native session already has an active delegation: {session_id}")
         _active_repositories.add(repo)
         if session_id:
             _active_sessions.add(session_id)
@@ -637,8 +431,7 @@ async def _terminate(proc: asyncio.subprocess.Process) -> None:
 
 
 async def _communicate(
-    proc: asyncio.subprocess.Process,
-    input_data: bytes | None = None,
+    proc: asyncio.subprocess.Process, input_data: bytes | None = None
 ) -> tuple[bytes, bytes]:
     try:
         return await proc.communicate(input_data)
@@ -666,8 +459,8 @@ async def _run_herdr(*args: str, check: bool = True) -> tuple[int, str, str]:
         if len(detail) > 3000:
             detail = detail[-3000:]
         raise RuntimeError(
-            f"Herdr command failed (exit={proc.returncode}): "
-            f"{' '.join(args)}{f'; {detail}' if detail else ''}"
+            f"Herdr command failed (exit={proc.returncode}): {' '.join(args)}"
+            f"{f'; {detail}' if detail else ''}"
         )
     return proc.returncode or 0, out_text, err_text
 
@@ -677,9 +470,7 @@ async def _run_herdr_json(*args: str) -> dict[str, Any]:
     try:
         payload = json.loads(stdout)
     except json.JSONDecodeError as exc:
-        raise RuntimeError(
-            f"Herdr command returned invalid JSON: {' '.join(args)}"
-        ) from exc
+        raise RuntimeError(f"Herdr command returned invalid JSON: {' '.join(args)}") from exc
     if not isinstance(payload, dict):
         raise RuntimeError(f"Herdr command returned non-object JSON: {' '.join(args)}")
     return payload
@@ -692,16 +483,13 @@ async def _herdr_server_running() -> bool:
 
 async def _ensure_herdr_server() -> None:
     global _managed_herdr_server
-
     if shutil.which(HERDR_BIN) is None:
         raise RuntimeError(f"missing Herdr CLI: {HERDR_BIN}")
     if await _herdr_server_running():
         return
-
     async with _herdr_server_lock:
         if await _herdr_server_running():
             return
-
         _managed_herdr_server = await asyncio.create_subprocess_exec(
             *_herdr_argv("server"),
             stdin=asyncio.subprocess.DEVNULL,
@@ -715,7 +503,6 @@ async def _ensure_herdr_server() -> None:
             if _managed_herdr_server.returncode is not None:
                 break
             await asyncio.sleep(0.1)
-
         if _managed_herdr_server.returncode is None:
             await _terminate(_managed_herdr_server)
         raise RuntimeError(f"failed to start Herdr named session {HERDR_SESSION!r}")
@@ -734,13 +521,7 @@ async def _require_current_integration(adapter: str) -> None:
 
 async def _create_herdr_workspace(repo: Path, label: str) -> tuple[str, str]:
     payload = await _run_herdr_json(
-        "workspace",
-        "create",
-        "--cwd",
-        str(repo),
-        "--label",
-        label,
-        "--no-focus",
+        "workspace", "create", "--cwd", str(repo), "--label", label, "--no-focus"
     )
     result = payload.get("result")
     if not isinstance(result, dict):
@@ -749,7 +530,6 @@ async def _create_herdr_workspace(repo: Path, label: str) -> tuple[str, str]:
     root_pane = result.get("root_pane")
     if not isinstance(workspace, dict) or not isinstance(root_pane, dict):
         raise RuntimeError("Herdr workspace create returned incomplete topology")
-
     workspace_id = workspace.get("workspace_id")
     pane_id = root_pane.get("pane_id")
     if not isinstance(workspace_id, str) or not workspace_id:
@@ -801,9 +581,7 @@ def _herdr_error_code(payload: Any) -> str | None:
 
 
 async def _start_interactive_agent(
-    pane_id: str,
-    adapter: str,
-    agent_args: list[str],
+    pane_id: str, adapter: str, agent_args: list[str]
 ) -> tuple[str, dict[str, Any]]:
     name = f"qiqi-{uuid.uuid4().hex[:12]}"
     command = [
@@ -819,7 +597,6 @@ async def _start_interactive_agent(
     ]
     if agent_args:
         command.extend(["--", *agent_args])
-
     deadline = time.monotonic() + HERDR_SHELL_READY_TIMEOUT_SECONDS
     last_detail = ""
     while True:
@@ -827,28 +604,23 @@ async def _start_interactive_agent(
         detail = (stderr or stdout).strip()
         last_detail = detail or last_detail
         payload = _herdr_json_payload(stdout, stderr)
-
         if returncode == 0:
             if payload is None:
-                raise RuntimeError(
-                    f"Herdr agent start returned invalid JSON: {' '.join(command)}"
-                )
+                raise RuntimeError(f"Herdr agent start returned invalid JSON: {' '.join(command)}")
             return name, _agent_from_payload(payload, "agent start")
-
         if _herdr_error_code(payload) != "agent_pane_busy":
             if len(detail) > 3000:
                 detail = detail[-3000:]
             raise RuntimeError(
-                f"Herdr command failed (exit={returncode}): "
-                f"{' '.join(command)}{f'; {detail}' if detail else ''}"
+                f"Herdr command failed (exit={returncode}): {' '.join(command)}"
+                f"{f'; {detail}' if detail else ''}"
             )
-
         if time.monotonic() >= deadline:
             if len(last_detail) > 2000:
                 last_detail = last_detail[-2000:]
             raise RuntimeError(
-                f"Herdr root pane {pane_id} did not become an available shell "
-                f"within {HERDR_SHELL_READY_TIMEOUT_SECONDS:g}s"
+                f"Herdr root pane {pane_id} did not become an available shell within "
+                f"{HERDR_SHELL_READY_TIMEOUT_SECONDS:g}s"
                 f"{f'; last error: {last_detail}' if last_detail else ''}"
             )
         await asyncio.sleep(0.1)
@@ -863,7 +635,6 @@ def _extract_native_session(agent: dict[str, Any], adapter: str) -> str | None:
     detected = agent.get("agent")
     if detected is not None and detected != adapter:
         raise RuntimeError(f"Herdr detected agent {detected!r}, expected {adapter!r}")
-
     session = agent.get("agent_session")
     if session is None:
         return None
@@ -876,7 +647,8 @@ def _extract_native_session(agent: dict[str, Any], adapter: str) -> str | None:
         )
     if session.get("kind") != "id":
         raise RuntimeError(
-            f"Herdr returned unsupported native session reference kind: {session.get('kind')!r}"
+            "Herdr returned unsupported native session reference kind: "
+            f"{session.get('kind')!r}"
         )
     value = session.get("value")
     if not isinstance(value, str) or not value:
@@ -885,9 +657,7 @@ def _extract_native_session(agent: dict[str, Any], adapter: str) -> str | None:
 
 
 def _validate_reported_session_if_present(
-    agent: dict[str, Any],
-    adapter: str,
-    expected_session_id: str | None,
+    agent: dict[str, Any], adapter: str, expected_session_id: str | None
 ) -> str | None:
     native_session_id = _extract_native_session(agent, adapter)
     if (
@@ -896,8 +666,8 @@ def _validate_reported_session_if_present(
         and native_session_id != expected_session_id
     ):
         raise RuntimeError(
-            "resume identity mismatch: interactive agent reported "
-            f"{native_session_id!r}, requested {expected_session_id!r}"
+            f"resume identity mismatch: interactive agent reported {native_session_id!r}, "
+            f"requested {expected_session_id!r}"
         )
     return native_session_id
 
@@ -912,61 +682,50 @@ async def _wait_for_native_session(
     deadline = time.monotonic() + NATIVE_SESSION_WAIT_SECONDS
     while True:
         native_session_id = _validate_reported_session_if_present(
-            agent,
-            adapter,
-            expected_session_id,
+            agent, adapter, expected_session_id
         )
         if native_session_id:
             return native_session_id
         if time.monotonic() >= deadline:
             raise RuntimeError(
-                f"Herdr did not receive native {adapter} session identity after "
-                "the interactive turn started; verify the current Herdr integration "
-                "is loaded by the agent process"
+                f"Herdr did not receive native {adapter} session identity after the "
+                "interactive turn started; verify the current Herdr integration is "
+                "loaded by the agent process"
             )
         await asyncio.sleep(0.1)
         agent = await _get_agent(name)
 
 
 async def _wait_for_claude_enter_recovery(
-    name: str,
-    baseline_agent: dict[str, Any],
+    name: str, baseline_agent: dict[str, Any]
 ) -> tuple[str, dict[str, Any]]:
     baseline_status = baseline_agent.get("agent_status")
     baseline_seq = baseline_agent.get("state_change_seq")
     activity_deadline = time.monotonic() + CLAUDE_PROMPT_RETRY_EFFECT_SECONDS
     saw_activity = False
-
     while True:
         agent = await _get_agent(name)
         status = agent.get("agent_status")
         state_change_seq = agent.get("state_change_seq")
-
         if not saw_activity:
             seq_advanced = (
                 isinstance(baseline_seq, int)
                 and isinstance(state_change_seq, int)
                 and state_change_seq > baseline_seq
             )
-            saw_activity = (
-                status == "working"
-                or status != baseline_status
-                or seq_advanced
-            )
+            saw_activity = status == "working" or status != baseline_status or seq_advanced
             if not saw_activity and time.monotonic() >= activity_deadline:
                 raise RuntimeError(
                     "Claude prompt remained stalled after one Enter recovery; "
                     "the prompt was not submitted"
                 )
-
         if saw_activity and status in {"idle", "done", "blocked"}:
             return status, agent
         await asyncio.sleep(0.1)
 
 
 async def _wait_for_agent_settled(
-    name: str,
-    initial_agent: dict[str, Any],
+    name: str, initial_agent: dict[str, Any]
 ) -> tuple[str, dict[str, Any]]:
     agent = initial_agent
     while True:
@@ -978,209 +737,222 @@ async def _wait_for_agent_settled(
 
 
 async def _prompt_and_wait(
-    name: str,
-    prompt: str,
-    adapter: str,
+    name: str, prompt: str, adapter: str
 ) -> tuple[str, dict[str, Any]]:
     command = ["agent", "prompt", name, prompt, "--wait"]
     returncode, stdout, stderr = await _run_herdr(*command, check=False)
     payload = _herdr_json_payload(stdout, stderr)
-
     if returncode != 0:
         error_code = _herdr_error_code(payload)
         if adapter == "claude" and error_code == "agent_prompt_stalled":
             stalled_agent = await _get_agent(name)
             stalled_status = stalled_agent.get("agent_status")
-
             if stalled_status == "working":
                 return await _wait_for_agent_settled(name, stalled_agent)
             if stalled_status in {"done", "blocked"}:
                 return stalled_status, stalled_agent
             if stalled_status != "idle":
                 raise RuntimeError(
-                    "Claude prompt stalled in an unexpected agent state: "
-                    f"{stalled_status!r}"
+                    f"Claude prompt stalled in an unexpected agent state: {stalled_status!r}"
                 )
-
             await _run_herdr("agent", "send-keys", name, "enter")
             return await _wait_for_claude_enter_recovery(name, stalled_agent)
-
         detail = (stderr or stdout).strip()
         if len(detail) > 3000:
             detail = detail[-3000:]
         raise RuntimeError(
-            f"Herdr command failed (exit={returncode}): "
-            f"{' '.join(command)}{f'; {detail}' if detail else ''}"
+            f"Herdr command failed (exit={returncode}): {' '.join(command)}"
+            f"{f'; {detail}' if detail else ''}"
         )
-
     if payload is None:
-        raise RuntimeError(
-            f"Herdr agent prompt returned invalid JSON: {' '.join(command)}"
-        )
+        raise RuntimeError(f"Herdr agent prompt returned invalid JSON: {' '.join(command)}")
     agent = _agent_from_payload(payload, "agent prompt")
     status = agent.get("agent_status")
     if status not in {"idle", "done", "blocked"}:
-        raise RuntimeError(
-            f"Herdr agent prompt settled with unexpected status: {status!r}"
-        )
+        raise RuntimeError(f"Herdr agent prompt settled with unexpected status: {status!r}")
     return status, agent
+
+
+async def _wait_for_result_capture(
+    sink: Path, nonce: str, adapter: str, native_session_id: str
+) -> dict[str, Any]:
+    deadline = time.monotonic() + NATIVE_RESULT_WAIT_SECONDS
+    last_error: Exception | None = None
+    while True:
+        events = load_capture_events(sink, nonce)
+        try:
+            return select_capture_event(
+                events, adapter=adapter, session_id=native_session_id
+            )
+        except RuntimeError as exc:
+            last_error = exc
+        if time.monotonic() >= deadline:
+            raise RuntimeError(
+                "native final response was not captured after the agent settled; "
+                "refusing to fall back to terminal screen or transcript parsing"
+            ) from last_error
+        await asyncio.sleep(0.05)
+
+
+def _prepare_resume(repository: str, agent_name: str, session_id: str) -> None:
+    try:
+        _store.require_resume(session_id, repository, agent_name)
+        return
+    except RuntimeError as first_error:
+        if not _import_legacy_resume_if_present(repository, agent_name, session_id):
+            raise first_error
+    _store.require_resume(session_id, repository, agent_name)
 
 
 @mcp.tool()
 async def delegate_repo_task(
     repository: str,
-    task: str,
     route: str,
+    user_request: str,
+    objective: str,
+    scope: list[str],
+    out_of_scope: list[str],
+    required_context: list[dict[str, str]],
+    constraints: list[str],
+    acceptance_criteria: list[str],
+    verification: list[str],
+    known_unknowns: list[str],
     session_id: str | None = None,
 ) -> dict[str, Any]:
-    """Execute one QiQi-owned repo task synchronously in a Herdr interactive agent.
+    """Execute one repo-local task and return the native final assistant message.
 
-    `repository` is the exact name from repos.yaml. `route` is the exact route
-    name from instructions/agent-routing.yaml. `task` is the execution prompt
-    owned by QiQi; the MCP does not reinterpret its semantics and only appends the
-    result-handoff protocol needed for the Markdown artifact. Omit `session_id` to
-    START a new native interactive session. Pass a native session id previously
-    returned by this tool to RESUME exactly that session.
+    QiQi must pass explicit structured fields. `user_request` preserves the relevant
+    original user wording. Each `required_context` entry has exact keys `fact`,
+    `source`, and `certainty`; certainty is `verified`, `user-provided`, or
+    `authoritative-decision`. `scope` and `acceptance_criteria` must be non-empty.
 
-    A native session owns one `.qiqi/runs/<repo>-<task-slug>-<session-id>.md`
-    result artifact. RESUME appends the next task/result section to that same file.
-    The call stays open until Herdr reports the turn as idle, done, or blocked,
-    then returns exactly `session_id` and workspace-relative `result_path`. Read
-    `result_path` before deciding whether more work is needed; do not RESUME only
-    to request a repeated report.
+    Omit `session_id` to START. Pass a returned `session_id` to RESUME that exact
+    native conversation. Session ownership is stored in `.qiqi/state/qiqi_delegate.sqlite3`.
+
+    Settled/failed native turns return `session_id`, QiQi-owned `turn_id`, `state`,
+    and exact native `agent_response`. If Herdr reaches `blocked` before the agent
+    emits a native final response, the MCP first persists native session ownership,
+    then returns `state="blocked"`, `agent_response=None`, and
+    `blocker_type="agent_blocked"`. No terminal-screen/transcript fallback is used.
     """
     repository = repository.strip()
-    task = task.strip()
     route = route.strip()
     session_id = session_id.strip() if isinstance(session_id, str) else None
-
     if not repository:
         raise ValueError("repository must not be empty")
-    if not task:
-        raise ValueError("task must not be empty")
     if not route:
         raise ValueError("route must not be empty")
     if session_id == "":
         session_id = None
-    if len(task) > 100_000:
-        raise ValueError("task is too large")
 
+    packet: TaskPacket = build_task_packet(
+        user_request=user_request,
+        objective=objective,
+        scope=scope,
+        out_of_scope=out_of_scope,
+        required_context=required_context,
+        constraints=constraints,
+        acceptance_criteria=acceptance_criteria,
+        verification=verification,
+        known_unknowns=known_unknowns,
+    )
+    prompt = render_task_prompt(packet)
     repo = _resolve_repo(repository)
     agent_name, agent, route_config = _resolve_route(route)
     adapter = agent["adapter"]
-
     command_name = agent["command"]
     if shutil.which(command_name) is None:
         raise RuntimeError(f"missing execution agent CLI: {command_name}")
-
-    RUNS_DIR.mkdir(parents=True, exist_ok=True)
-    if not RUNS_DIR.is_dir():
-        raise RuntimeError(f"could not create QiQi runs directory: {RUNS_DIR}")
+    if not RESULT_HOOK_PATH.is_file():
+        raise RuntimeError(f"missing native result hook helper: {RESULT_HOOK_PATH}")
+    if session_id:
+        _prepare_resume(repository, agent_name, session_id)
 
     await _ensure_herdr_server()
     await _require_current_integration(adapter)
     await _claim_resources(repo, session_id)
 
+    workspace_id: str | None = None
+    capture_path: Path | None = None
+    qiqi_turn_id = new_turn_id()
     try:
-        starting_new = session_id is None
-        result_path: Path | None = None
-        if session_id:
-            result_path = _find_resume_artifact(repository, agent_name, session_id)
-
-        workspace_id: str | None = None
-        marker: str | None = None
-        expected_prefix: str | None = None
-        pending_start_path: Path | None = None
-        promoted_start = False
-        try:
-            label = f"qiqi:{repository}:{uuid.uuid4().hex[:8]}"
+        with tempfile.TemporaryDirectory(prefix="qiqi-handoff-") as temp_dir:
+            sink = Path(temp_dir).resolve()
+            os.chmod(sink, 0o700)
+            nonce = uuid.uuid4().hex
+            capture_path = _register_active_capture(
+                adapter=adapter,
+                repo=repo,
+                sink=sink,
+                nonce=nonce,
+                expected_session_id=session_id,
+                qiqi_turn_id=qiqi_turn_id,
+            )
+            handoff_args = _build_handoff_args(adapter)
+            label = f"qiqi:{repository}:{qiqi_turn_id[:8]}"
             workspace_id, pane_id = await _create_herdr_workspace(repo, label)
-
             interactive_args = _build_interactive_args(
-                agent,
-                route_config,
-                session_id,
+                agent, route_config, session_id, handoff_args
             )
             managed_name, started_agent = await _start_interactive_agent(
-                pane_id,
-                adapter,
-                interactive_args,
+                pane_id, adapter, interactive_args
             )
-            _validate_reported_session_if_present(
-                started_agent,
-                adapter,
-                session_id,
-            )
-
-            if starting_new:
-                pending_start_path = _create_pending_result_artifact(
-                    repository,
-                    agent_name,
-                    task,
-                )
-                result_path = pending_start_path
-
-            if result_path is None:
-                raise RuntimeError("delegation result artifact was not resolved")
-
-            marker, expected_prefix = _append_task_section(result_path, task)
-            prompt = _build_prompt(task, result_path, marker)
-
+            _validate_reported_session_if_present(started_agent, adapter, session_id)
             status, prompted_agent = await _prompt_and_wait(
-                managed_name,
-                prompt,
-                adapter,
+                managed_name, prompt, adapter
             )
             native_session_id = await _wait_for_native_session(
-                managed_name,
-                adapter,
-                prompted_agent,
-                session_id,
+                managed_name, adapter, prompted_agent, session_id
             )
 
-            _finalize_artifact_after_wait(
-                result_path,
-                marker,
-                expected_prefix,
-                status,
-            )
+            # Persist ownership as soon as the native identity is known. This is
+            # intentionally before result capture / blocked handling so a START that
+            # reaches an interactive blocker never loses the only RESUME key.
+            _store.register_session(native_session_id, repository, agent_name)
 
-            if starting_new:
-                result_path = _promote_start_artifact(
-                    result_path,
-                    repository,
-                    agent_name,
-                    task,
-                    native_session_id,
+            if status == "blocked":
+                return {
+                    "session_id": native_session_id,
+                    "turn_id": qiqi_turn_id,
+                    "state": "blocked",
+                    "agent_response": None,
+                    "blocker_type": "agent_blocked",
+                }
+
+            try:
+                event = await _wait_for_result_capture(
+                    sink, nonce, adapter, native_session_id
                 )
-                promoted_start = True
+            except RuntimeError as exc:
+                raise RuntimeError(
+                    f"{exc}; native session ownership was preserved and can be resumed "
+                    f"with session_id={native_session_id!r}"
+                ) from exc
 
+            state = event["state"]
+            response = event["agent_response"]
+            native_turn_id = event.get("native_turn_id")
+            _store.record_turn(
+                turn_id=qiqi_turn_id,
+                session_id=native_session_id,
+                repository=repository,
+                agent=agent_name,
+                route=route,
+                state=state,
+                native_turn_id=native_turn_id,
+                packet=packet,
+                agent_response=response,
+            )
             return {
                 "session_id": native_session_id,
-                "result_path": _result_relative_path(result_path),
+                "turn_id": qiqi_turn_id,
+                "state": state,
+                "agent_response": response,
             }
-        except BaseException as exc:
-            _mark_artifact_execution_error(
-                result_path,
-                marker,
-                expected_prefix,
-                exc,
-            )
-            raise
-        finally:
-            if workspace_id:
-                await _close_herdr_workspace(workspace_id)
-            if (
-                starting_new
-                and not promoted_start
-                and pending_start_path is not None
-                and pending_start_path.exists()
-            ):
-                try:
-                    pending_start_path.unlink()
-                except OSError:
-                    pass
     finally:
+        _remove_active_capture(capture_path)
+        if workspace_id:
+            await _close_herdr_workspace(workspace_id)
         await _release_resources(repo, session_id)
 
 
