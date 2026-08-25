@@ -12,7 +12,7 @@ runtime configuration thay đổi, chỉ registry machine-readable phải đổi
 
 ## Route hiện có
 
-### `claude-haiku`
+### `claude-fast`
 
 Dùng cho task nhỏ, cơ học và có phạm vi rõ, khi:
 

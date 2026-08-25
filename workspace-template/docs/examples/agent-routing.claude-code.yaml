@@ -28,14 +28,14 @@ agents:
       - "{route_args}"
 
 routes:
-  claude-haiku:
+  claude-fast:
     agent: claude
-    model: haiku
+    model: sonnet
     args:
       - --permission-mode
-      - acceptEdits
+      - auto
       - --effort
-      - medium
+      - low
 
   claude-balanced:
     agent: claude
