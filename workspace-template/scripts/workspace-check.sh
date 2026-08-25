@@ -32,7 +32,6 @@ required_files=(
   instructions/model-routing.md
   .codex/config.toml
   .qiqi/.gitignore
-  .qiqi/tasks/TEMPLATE.md
   mcp/qiqi_delegate/pyproject.toml
   mcp/qiqi_delegate/core.py
   mcp/qiqi_delegate/result_hook.py
@@ -46,6 +45,12 @@ required_files=(
 for path in "${required_files[@]}"; do
   require_file "$workspace_root/$path"
 done
+
+# Product task state is user-scoped Global Work Item MCP state. The workspace must
+# not recreate the old Markdown task truth beside it.
+if [[ -e "$workspace_root/.qiqi/tasks" ]]; then
+  fail '.qiqi/tasks must not exist; canonical product-task state belongs to Global Work Item MCP'
+fi
 
 managed_files=(
   "$workspace_root/repos.yaml"
@@ -63,7 +68,6 @@ policy_files=(
   "$workspace_root/README.md"
   "$workspace_root/docs/WORKSPACE_SETUP.md"
   "$workspace_root/instructions/model-routing.md"
-  "$workspace_root/.qiqi/tasks/TEMPLATE.md"
 )
 if rg -n 'result_path|QiQi MCP result handoff protocol|### Outcome|### Repo-local Knowledge' "${policy_files[@]}"; then
   fail 'legacy Markdown result-handoff contract found in active workspace policy'
@@ -72,6 +76,11 @@ fi
 agents_md="$workspace_root/AGENTS.md"
 for pattern in \
   'Chief of Staff' \
+  'Global Work Item MCP' \
+  'work_item_get' \
+  'work_item_update' \
+  'expected_revision' \
+  'canonical Work Item' \
   '`delegate_repo_task`' \
   '`user_request`' \
   '`required_context`' \
@@ -80,13 +89,25 @@ for pattern in \
   '`agent_response`' \
   'native Stop hook' \
   '`\.qiqi/state/qiqi_delegate\.sqlite3`' \
-  '[Pp]roducer.*`required_context`' \
-  'gần nguyên văn' \
+  'orchestration/synchronization broker' \
   '## Delegation Silence'; do
   rg -U -q "$pattern" "$agents_md" || fail "AGENTS.md: missing required policy: $pattern"
 done
-if rg -q 'English task title|read `result_path`|đọc `result_path`' "$agents_md"; then
-  fail 'AGENTS.md: legacy artifact/task-title convention remains'
+
+for pattern in \
+  'current_requirements' \
+  'questions' \
+  'decisions' \
+  'changes' \
+  'handoffs' \
+  'next_actions' \
+  'superseded_by' \
+  'revision conflict'; do
+  rg -q "$pattern" "$agents_md" || fail "AGENTS.md: missing Work Item continuity rule: $pattern"
+done
+
+if rg -q 'English task title|read `result_path`|đọc `result_path`|\.qiqi/tasks/.*\.md' "$agents_md"; then
+  fail 'AGENTS.md: legacy workspace task/result artifact convention remains'
 fi
 
 codex_config="$workspace_root/.codex/config.toml"
@@ -98,6 +119,9 @@ rg -q 'tool_timeout_sec = 7200' "$codex_config" || \
   fail '.codex/config.toml: expected long synchronous tool timeout'
 rg -q 'required = true' "$codex_config" || \
   fail '.codex/config.toml: qiqi_delegate must be required'
+if rg -q '^\[mcp_servers\.(work_item|knowledge)\]' "$codex_config"; then
+  fail '.codex/config.toml: work_item and knowledge must remain user-scoped, not project-scoped'
+fi
 
 launcher="$workspace_root/scripts/qiqi-mcp-server.sh"
 bash -n "$launcher" || fail 'qiqi-mcp-server.sh: invalid Bash syntax'
@@ -158,15 +182,8 @@ for pattern in \
   'RESULT_HOOK_PATH' \
   'SessionStore' \
   'def _build_handoff_args' \
-  'def _codex_stop_hook_hash' \
-  'def _codex_session_hook_key' \
-  'features\.hooks=true' \
-  'hooks\.Stop=' \
-  'hooks\.state=' \
-  'trusted_hash' \
   'def _register_active_capture' \
   'expected_session_id' \
-  '"--state-root"' \
   'def _wait_for_result_capture' \
   'refusing to fall back to terminal screen or transcript parsing' \
   'user_request: str' \
