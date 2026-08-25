@@ -18,8 +18,12 @@ INDEX_VERSION = 1
 DOCUMENT_VERSION = 1
 MAX_CONTENT_CHARS = 24_000
 MAX_DOCUMENT_BYTES = 32_768
-MAX_RESULTS = 10
-DEFAULT_RESULTS = 5
+MAX_SEARCH_RESULTS = 10
+DEFAULT_SEARCH_RESULTS = 5
+MAX_READ_RESULTS = 2
+MAX_SEARCH_WHEN_TO_READ = 3
+MAX_SEARCH_MATCHES = 3
+MAX_QUERY_SCORE_CONTRIBUTIONS = 3
 LOCK_TIMEOUT_SECONDS = 30
 SCOPE_KINDS = {"global", "system", "repo", "domain"}
 SOURCE_KINDS = {"repo", "document", "decision", "manual", "url"}
@@ -163,9 +167,8 @@ def _validate_routing(value: Any) -> dict[str, Any]:
         max_items=30,
         max_item_length=120,
     )
-    aliases_raw = value.get("aliases", [])
     aliases = _require_string_list(
-        aliases_raw,
+        value.get("aliases", []),
         "routing.aliases",
         min_items=0,
         max_items=30,
@@ -331,6 +334,8 @@ def validate_write_entry(value: Any) -> dict[str, Any]:
         expected_revision = _require_string(
             expected_revision, "expected_revision", max_length=128
         )
+        if not re.fullmatch(r"[0-9a-f]{64}", expected_revision):
+            raise ValidationError("expected_revision must be a lowercase SHA-256 hex digest")
 
     return {
         "id": derived_id if provided_id is not None else None,
@@ -399,6 +404,14 @@ def _load_document(root: Path, path: Path) -> Document:
         body=body,
         revision=_revision(data),
     )
+
+
+def _document_content(document: Document) -> str:
+    lines = document.body.splitlines()
+    heading_index = next((i for i, line in enumerate(lines) if line.strip()), None)
+    if heading_index is None:
+        return ""
+    return "\n".join(lines[heading_index + 1 :]).strip()
 
 
 def _detail_paths(root: Path) -> Iterable[Path]:
@@ -714,46 +727,37 @@ def _score_entry(
     entry: dict[str, Any],
     queries: list[str],
     context: dict[str, str] | None,
-) -> tuple[int, list[str], list[str]]:
-    score = 0
-    matched: list[str] = []
-    reasons: list[str] = []
-    for query in queries:
+) -> tuple[int, list[dict[str, str]]]:
+    contributions: list[tuple[int, int, str, str]] = []
+    for query_index, query in enumerate(queries):
         q = _normalize_text(query)
         if not q:
             continue
         parts: list[tuple[str, int]] = []
         if q == _normalize_text(entry["id"]):
-            parts.append(("exact id", 220))
+            parts.append(("exact_id", 220))
         if q == _normalize_text(entry["canonical_name"]):
-            parts.append(("canonical name", 190))
-        keyword_score = _best_text_score(query, entry["keywords"], 110, 80, 55)
-        alias_score = _best_text_score(query, entry["aliases"], 100, 75, 50)
-        when_score = _best_text_score(query, entry["when_to_read"], 85, 60, 45)
-        summary_score = _best_text_score(query, [entry["summary"]], 65, 45, 35)
-        title_score = _best_text_score(query, [entry["title"]], 55, 35, 30)
-        scope_text = f"{entry['scope']['kind']} {entry['scope']['id']}"
-        scope_score = _best_text_score(query, [scope_text], 45, 30, 20)
-        path_score = _best_text_score(query, [entry["path"]], 35, 25, 15)
-        for name, value in (
-            ("keyword", keyword_score),
-            ("alias", alias_score),
-            ("when_to_read", when_score),
-            ("summary", summary_score),
-            ("title", title_score),
-            ("scope", scope_score),
-            ("path", path_score),
+            parts.append(("canonical_name", 190))
+        for field, value in (
+            ("keyword", _best_text_score(query, entry["keywords"], 110, 80, 55)),
+            ("alias", _best_text_score(query, entry["aliases"], 100, 75, 50)),
+            ("when_to_read", _best_text_score(query, entry["when_to_read"], 85, 60, 45)),
+            ("summary", _best_text_score(query, [entry["summary"]], 65, 45, 35)),
         ):
             if value:
-                parts.append((name, value))
+                parts.append((field, value))
         if parts:
-            matched.append(query)
-            query_score = max(value for _, value in parts)
-            score += query_score
-            best_names = [name for name, value in parts if value == query_score]
-            reasons.append(f"{query}: {best_names[0]}")
+            best_score = max(value for _, value in parts)
+            best_field = next(field for field, value in parts if value == best_score)
+            contributions.append((best_score, query_index, query, best_field))
 
-    if score > 0 and context:
+    if not contributions:
+        return 0, []
+
+    contributions.sort(key=lambda item: (-item[0], item[1], item[3]))
+    score = sum(item[0] for item in contributions[:MAX_QUERY_SCORE_CONTRIBUTIONS])
+
+    if context:
         repo = context.get("repo")
         domain = context.get("domain")
         scope = entry["scope"]
@@ -761,12 +765,10 @@ def _score_entry(
             repo_norm = _normalize_text(repo)
             if scope["kind"] == "repo" and _normalize_text(scope["id"]) == repo_norm:
                 score += 25
-                reasons.append("context: repo scope")
             elif scope["kind"] == "domain" and _normalize_text(scope["id"]).startswith(
                 repo_norm + " "
             ):
                 score += 18
-                reasons.append("context: repo domain")
         if domain:
             domain_norm = _normalize_text(domain)
             scope_norm = _normalize_text(scope["id"])
@@ -774,11 +776,15 @@ def _score_entry(
                 scope_norm == domain_norm or scope_norm.startswith(domain_norm + " ")
             ):
                 score += 30
-                reasons.append("context: domain scope")
-    return score, matched, reasons
+
+    matches = [
+        {"query": query, "field": field}
+        for _, _, query, field in contributions[:MAX_SEARCH_MATCHES]
+    ]
+    return score, matches
 
 
-def _validate_query(
+def _validate_search_query(
     keywords: Any,
     context: Any,
     limit: Any,
@@ -790,8 +796,12 @@ def _validate_query(
         max_items=20,
         max_item_length=200,
     )
-    if not isinstance(limit, int) or isinstance(limit, bool) or not (1 <= limit <= MAX_RESULTS):
-        raise ValidationError(f"limit must be an integer between 1 and {MAX_RESULTS}")
+    if not isinstance(limit, int) or isinstance(limit, bool) or not (
+        1 <= limit <= MAX_SEARCH_RESULTS
+    ):
+        raise ValidationError(
+            f"limit must be an integer between 1 and {MAX_SEARCH_RESULTS}"
+        )
     normalized_context: dict[str, str] | None = None
     if context is not None:
         if not isinstance(context, dict):
@@ -812,55 +822,96 @@ def _validate_query(
     return queries, normalized_context, limit
 
 
-def read_knowledge(
+def _validate_read_ids(ids: Any) -> list[str]:
+    normalized = _require_string_list(
+        ids,
+        "ids",
+        min_items=1,
+        max_items=MAX_READ_RESULTS,
+        max_item_length=260,
+    )
+    if len(normalized) != len(ids):
+        raise ValidationError("ids must contain unique exact knowledge ids")
+    return normalized
+
+
+def _load_verified_index_document(
+    root: Path,
+    entry: dict[str, Any],
+) -> Document:
+    path = _ensure_within(root, root / entry["path"])
+    document = _load_document(root, path)
+    if document.id != entry["id"]:
+        raise ConflictError(
+            f"knowledge index points to a different id at {entry['path']}; run knowledge reindex"
+        )
+    if document.revision != entry["revision"]:
+        raise ConflictError(
+            f"knowledge index is stale for {entry['id']}; run knowledge reindex before reading"
+        )
+    return document
+
+
+def search_knowledge(
     root: Path,
     keywords: Any,
     context: Any = None,
-    limit: int = DEFAULT_RESULTS,
+    limit: int = DEFAULT_SEARCH_RESULTS,
 ) -> dict[str, Any]:
     root = resolve_store_root(root)
-    queries, normalized_context, normalized_limit = _validate_query(keywords, context, limit)
+    queries, normalized_context, normalized_limit = _validate_search_query(
+        keywords, context, limit
+    )
     index_entries = _parse_index(root)
-    ranked: list[tuple[int, dict[str, Any], list[str], list[str]]] = []
+    ranked: list[tuple[int, dict[str, Any], list[dict[str, str]]]] = []
     for entry in index_entries:
-        score, matched, reasons = _score_entry(entry, queries, normalized_context)
+        score, matches = _score_entry(entry, queries, normalized_context)
         if score > 0:
-            ranked.append((score, entry, matched, reasons))
+            ranked.append((score, entry, matches))
     ranked.sort(key=lambda item: (-item[0], item[1]["id"]))
 
     results: list[dict[str, Any]] = []
-    for score, entry, matched, reasons in ranked[:normalized_limit]:
-        path = _ensure_within(root, root / entry["path"])
-        document = _load_document(root, path)
-        if document.id != entry["id"]:
-            raise ConflictError(
-                f"knowledge index points to a different id at {entry['path']}; run knowledge reindex"
-            )
-        if document.revision != entry["revision"]:
-            raise ConflictError(
-                f"knowledge index is stale for {entry['id']}; run knowledge reindex before reading"
-            )
+    for score, entry, matches in ranked[:normalized_limit]:
+        _load_verified_index_document(root, entry)
+        results.append(
+            {
+                "id": entry["id"],
+                "title": entry["title"],
+                "scope": entry["scope"],
+                "summary": entry["summary"],
+                "when_to_read": entry["when_to_read"][:MAX_SEARCH_WHEN_TO_READ],
+                "matches": matches,
+                "score": score,
+            }
+        )
+    return {"results": results}
+
+
+def read_knowledge(root: Path, ids: Any) -> dict[str, Any]:
+    root = resolve_store_root(root)
+    normalized_ids = _validate_read_ids(ids)
+    index_entries = _parse_index(root)
+    by_id = {entry["id"]: entry for entry in index_entries}
+
+    results: list[dict[str, Any]] = []
+    for item_id in normalized_ids:
+        entry = by_id.get(item_id)
+        if entry is None:
+            raise KnowledgeError(f"knowledge id does not exist: {item_id}")
+        document = _load_verified_index_document(root, entry)
         results.append(
             {
                 "id": document.id,
-                "path": document.relative_path,
                 "revision": document.revision,
                 "canonical_name": document.metadata["canonical_name"],
                 "title": document.metadata["title"],
                 "scope": document.metadata["scope"],
-                "summary": document.metadata["routing"]["summary"],
-                "matched_keywords": matched,
-                "match_reason": reasons,
-                "score": score,
+                "routing": document.metadata["routing"],
                 "sources": document.metadata["sources"],
-                "content": document.body,
+                "content": _document_content(document),
             }
         )
-    return {
-        "keywords": queries,
-        "context": normalized_context,
-        "results": results,
-    }
+    return {"results": results}
 
 
 def write_knowledge(root: Path, entries: Any) -> dict[str, Any]:
