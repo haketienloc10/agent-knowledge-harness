@@ -428,7 +428,7 @@ bash scripts/work-item-template-check.sh
 
 Core tests cover create/get/list, questions/decisions/changes, nested repo merge,
 stale revision, concurrent writers, immutable metadata và semantic handoff
-validation.
+validation. Checker còn verify MCP runtime import và đúng bốn public tools.
 
 Rollout acceptance smoke cần xác nhận fresh QiQi + fresh repo child session nhìn cùng
 Work Item database.
@@ -447,13 +447,19 @@ Migration core nằm trong `scripts/migrate_workspace.py`. Definitions là JSON 
 `migrations/`, pin exact `from_ref` / `to_ref` và dùng strategy `replace`, `merge`,
 `delete`, `manual_review` theo artifact ownership.
 
-Existing migration history vẫn áp dụng cho architecture trước Work Item MCP. Một
-migration riêng cần được thêm khi feature này sẵn sàng merge để:
+Migration `0005-global-work-item.json`:
 
-- remove legacy workspace `.qiqi/tasks/` artifacts;
-- update workspace/repo agent policies;
-- giữ user/global Work Item MCP installation là explicit operator step, không ghi
-  user config từ workspace migration.
+- update workspace/repo policy, setup docs và checker sang canonical Work Item;
+- remove ba `.qiqi/tasks` skeleton files do template sở hữu;
+- catch up routing files đã thay đổi trên `main` sau migration `0004`;
+- 3-way merge `repo-template/AGENTS.md` để giữ product-specific instruction;
+- đánh dấu `.qiqi/tasks` là manual review vì có thể chứa task thật của workspace cũ;
+- **không** tự cài user-scoped Work Item MCP hoặc ghi user config.
+
+Nếu `.qiqi/tasks` cũ còn task thật, phải tạo/reconcile canonical Work Item tương ứng
+trước khi archive/remove legacy files. `workspace-check` cho phép empty directory
+residue sau migration nhưng fail nếu còn file legacy, để không tồn tại hai active
+task truths.
 
 ## Thiết kế cố ý
 
