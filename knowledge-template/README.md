@@ -1,12 +1,12 @@
 # Shared Knowledge Template
 
 Template này triển khai **Shared Knowledge Store độc lập với workspace/repository
-hiện tại** và một user-scoped MCP dùng chung cho QiQi, Codex/Claude execution
-agents và human maintenance.
+hiện tại** và user-scoped Knowledge MCP dùng chung cho QiQi, execution agents và
+human maintenance.
 
 Knowledge Store là Markdown + Git-friendly filesystem. Agent **không tạo file trực
 tiếp**; agent submit semantic knowledge qua MCP. Human có thể sửa/tạo Markdown trực
-tiếp nếu tuân thủ schema rồi chạy check/reindex.
+tiếp nếu tuân schema rồi chạy check/reindex.
 
 ## Boundary
 
@@ -18,15 +18,15 @@ Shared Knowledge Store
 = reusable, non-trivial, evidence-backed distilled knowledge
 
 Knowledge MCP
-= retrieval + storage mechanics
+= search/read/write + storage mechanics
 
 Agent / knowledge-distill skill
 = semantic query generation + semantic distillation
 ```
 
-Shared knowledge không phải oracle mạnh hơn live owner source/test. Nếu agent đang
-làm trong owner repo và knowledge mâu thuẫn source/test hiện tại, source/test hiện
-tại thắng; chỉ update shared knowledge sau khi kết luận mới được verify.
+Shared knowledge không phải oracle mạnh hơn live owner source/test. Nếu knowledge
+mâu thuẫn source/test hiện tại, live owner evidence thắng; chỉ update shared
+knowledge sau khi replacement conclusion được verify.
 
 ## Layout
 
@@ -41,12 +41,14 @@ knowledge-template/
 │   ├── repos/
 │   └── domains/
 ├── mcp/knowledge/
+│   ├── contracts.py
 │   ├── core.py
 │   ├── server.py
 │   ├── pyproject.toml
-│   └── tests/test_core.py
+│   └── tests/
 ├── scripts/
 │   ├── install-user-mcp.sh
+│   ├── install-user-skill.sh
 │   ├── knowledge-cli.sh
 │   ├── knowledge-mcp-server.sh
 │   ├── knowledge-template-check.sh
@@ -55,24 +57,42 @@ knowledge-template/
 ```
 
 `store/` có thể nằm trong template hoặc trỏ sang Git repository/path riêng khi
-installer chạy. MCP chỉ dùng exact `KNOWLEDGE_STORE_ROOT`; **không suy luận store
-từ current working directory**.
+installer chạy. MCP chỉ dùng exact `KNOWLEDGE_STORE_ROOT`; **không suy luận store từ
+current working directory**.
 
 ## Public MCP API
 
-MVP expose đúng hai tools:
+Post-MVP API dùng progressive disclosure với ba tools:
 
 ```text
-knowledge_read(keywords, context?, limit?)
+knowledge_search(keywords, context?, limit?)
+knowledge_read(ids)
 knowledge_write(entries)
 ```
 
 Không expose list-files, arbitrary read-path, write-path, delete-path hay generic
 filesystem tool.
 
-## Read contract
+### Nguyên tắc progressive disclosure
 
-Caller hiểu task trước, tự sinh nhiều search terms rồi gọi:
+```text
+knowledge_search(top N)
+→ bounded routing decision cards
+→ agent chọn 1–2 exact IDs
+→ knowledge_read(ids)
+→ full semantic content + provenance + revision
+```
+
+Search card phải đủ để **chọn** document, nhưng không được thay thế full document.
+Agent không dùng search summary/card như evidence đầy đủ cho material implementation,
+verification hoặc update khi content/provenance/uncertainty có thể ảnh hưởng quyết định.
+
+`knowledge_search` cố ý **không trả revision**. Vì vậy update bắt buộc full-read
+existing knowledge trước khi có `expected_revision`.
+
+## Search contract
+
+Caller hiểu task trước, tạo một số discriminative concepts rồi gọi:
 
 ```json
 {
@@ -86,36 +106,91 @@ Caller hiểu task trước, tự sinh nhiều search terms rồi gọi:
     "repo": "checkout",
     "domain": "checkout.payment"
   },
-  "limit": 5
+  "limit": 10
 }
 ```
 
 `context.repo` và `context.domain` **chỉ boost ranking**. Chúng không giới hạn
-namespace được đọc.
+namespace được đọc và không tự tạo relevance khi không có semantic match.
 
-Retrieval deterministic, index-first và ưu tiên:
+Search deterministic, index-first và ưu tiên:
 
 1. exact knowledge ID;
 2. `canonical_name`;
 3. routing `keywords`;
 4. multilingual/project `aliases`;
 5. `when_to_read`;
-6. `summary`;
-7. title/scope/path.
+6. `summary`.
 
-MCP không dùng embedding, vector DB, translator hoặc LLM.
+`title`, scope và physical path không tự tạo relevance. Context chỉ boost entry đã
+có semantic match. MCP không dùng embedding, vector DB, translator hoặc LLM.
 
-`knowledge_read` trả selected content cùng:
+Mỗi search hit chỉ trả bounded decision card:
+
+```json
+{
+  "id": "domain:checkout.payment:retry-after-commit",
+  "title": "Quy tắc retry thanh toán sau commit",
+  "scope": {"kind": "domain", "id": "checkout.payment"},
+  "summary": "Do not retry payment after confirmed commit.",
+  "when_to_read": [
+    "modifying payment retry behavior",
+    "investigating duplicate payment"
+  ],
+  "matches": [
+    {"query": "payment retry", "field": "keyword"}
+  ],
+  "score": 110
+}
+```
+
+Search card **không trả**:
+
+- `content`;
+- `sources`;
+- `revision`;
+- physical `path`;
+- `canonical_name` duplicate ngoài stable ID.
+
+`limit` là maximum candidate cards, không phải số full documents cần hydrate.
+Search response cũng không echo lại input `keywords`/`context`.
+
+Mặc dù search không serialize detail content, selected top hits vẫn được load để
+verify ID + revision với generated index. Human sửa detail nhưng chưa reindex vẫn
+làm search fail rõ thay vì silently dùng stale routing metadata.
+
+## Full read contract
+
+Sau search, hydrate chỉ exact IDs thực sự cần:
+
+```json
+{
+  "ids": [
+    "domain:checkout.payment:retry-after-commit"
+  ]
+}
+```
+
+Mỗi call hydrate tối đa **2 unique IDs**. Nếu hai candidate gần nhau, read cả hai;
+không hydrate toàn bộ top-N chỉ vì search `limit` lớn.
+
+Full read trả semantic payload có thể dùng an toàn cho reasoning/update:
 
 - stable `id`;
-- canonical `path`;
 - SHA-256 `revision`;
-- scope/summary;
-- matched query terms + match reason;
-- provenance sources.
+- `canonical_name`;
+- title + scope;
+- full nested `routing`;
+- provenance `sources`;
+- semantic `content`.
 
-Khi selected detail file đã bị human sửa nhưng index revision chưa reindex, read
-fail rõ thay vì silently dùng stale document.
+`content` **không chứa canonical H1** vì title là field riêng và writer tự render H1.
+Điều này cho phép read → modify → write round-trip mà không tạo duplicate heading.
+
+Physical `path` không thuộc read API. Caller không cần biết filesystem layout.
+
+Nếu exact ID không tồn tại, read fail rõ và caller phải search lại. Nếu detail bị
+human sửa nhưng index revision chưa reindex, read fail stale-index rõ.
 
 ## Write contract
 
@@ -163,7 +238,8 @@ regenerate `INDEX.md`.
 
 ### Update
 
-Update phải dùng exact identity + optimistic revision từ `knowledge_read`:
+Update phải search existing concept, full-read exact target, rồi dùng exact identity
++ optimistic revision từ `knowledge_read`:
 
 ```yaml
 id: domain:checkout.payment:retry-after-commit
@@ -172,17 +248,19 @@ canonical_name: retry-after-commit
 ...
 ```
 
-Stale revision bị reject; không last-write-wins.
+Full read trả toàn bộ `routing`/`sources`/`content` để caller không phải reconstruct
+metadata từ search card. Stale revision bị reject; không last-write-wins.
 
 ### Empty review
 
-Knowledge review cuối work không có durable candidate vẫn gọi:
+Knowledge review cuối work không có durable candidate vẫn có thể gọi:
 
 ```json
 {"entries": []}
 ```
 
-Tool trả `reviewed: true` và không mutate store.
+Tool trả `reviewed: true` và không mutate store khi policy thật sự yêu cầu review.
+Không dùng empty write như ceremony cho task trivial được phép skip review.
 
 ## Identity, scope và canonical path
 
@@ -313,14 +391,31 @@ fail; tooling không silently move human file.
 - in-process rollback detail/index khi exception;
 - crash giữa detail write và index update có thể để index stale; detail metadata
   vẫn canonical và `knowledge reindex` repair;
-- read verify revision của selected detail với index;
-- document/content/result counts bounded.
+- search verify revision của selected top hits với index mà không serialize body;
+- exact read verify revision trước khi trả full content;
+- document/content/search-result/full-read counts đều bounded.
 
 Human direct edit không bị ép lấy MCP lock; optimistic revision + stale-index check
 chống silent overwrite đối với concurrent agent update đã được quan sát qua revision.
 Human và MCP ghi đúng cùng document ở đúng khoảnh khắc cuối vẫn là external writer
 race; nếu cần strict serialization cho manual edits thì human workflow phải tránh
 edit đồng thời với active MCP write.
+
+## Context-budget model
+
+`MAX_CONTENT_CHARS` vẫn bảo vệ từng detail document, nhưng search không còn scale
+context theo `limit × full document size`.
+
+```text
+knowledge_search(limit=10)
+→ tối đa 10 bounded cards
+
+knowledge_read(ids)
+→ tối đa 2 full documents/call
+```
+
+Do đó context tăng theo số document agent **chủ động chọn để đọc**, không theo số
+candidate cần xem để route.
 
 ## Maintenance CLI
 
@@ -338,46 +433,53 @@ bash scripts/knowledge-cli.sh reindex --root /path/to/store
 ## Offline template checker
 
 Checker không tự download dependencies. Nó ưu tiên synced project `.venv` nếu có,
-fallback current Python khi environment đã có `filelock` + `PyYAML`; sau đó compile
-source, chạy unit tests và check template store:
+fallback current Python khi environment đã có `filelock` + `PyYAML` + `pydantic` +
+`mcp`; sau đó compile source, chạy unit/server-contract tests và check template store:
 
 ```bash
 bash scripts/knowledge-template-check.sh
 ```
 
-Nếu chưa có runtime dependencies, checker fail rõ và yêu cầu `uv sync`; network
-setup không phải side effect ngầm của checker.
+Checker xác minh ba public tools, thin search schema, bounded exact read, write schema
+và integrity behavior. Nó không khóa implementation vào một tool-description prose
+quá dài.
 
 ## User/global MCP installation
 
-Installer yêu cầu `uv`, sync MCP runtime dependencies, initialize store, tạo stable
-wrapper và đăng ký server tên `knowledge` với available clients:
+Installer yêu cầu `uv`, sync MCP runtime dependencies, initialize store, cài
+`knowledge-distill` skill, tạo stable wrapper và đăng ký server tên `knowledge` với
+available clients:
 
 ```bash
 bash scripts/install-user-mcp.sh --store-root /path/to/shared-knowledge/store
 ```
 
-- Codex: `codex mcp add knowledge -- <stable-wrapper>`; current CLI writes its
-  normal/global config unless user has separately configured project override.
-- Claude Code: `claude mcp add knowledge --scope user <stable-wrapper>`.
-- Nếu registration `knowledge` đã tồn tại và output không trỏ tới stable wrapper,
-  installer **fail** thay vì overwrite user configuration.
-- Rerun installer với cùng stable wrapper là idempotent; wrapper có thể được updated
-  để trỏ store root mới.
+- Codex: `codex mcp add knowledge -- <stable-wrapper>`;
+- Claude Code: `claude mcp add knowledge --scope user <stable-wrapper>`;
+- existing registration cùng tên nhưng không trỏ stable wrapper làm installer fail
+  thay vì overwrite user configuration;
+- rerun với cùng wrapper là idempotent.
 
-Mở fresh agent session sau installation. Nếu một repo/project tự định nghĩa MCP tên
-`knowledge`, nó có thể shadow user/global registration; repo/workspace templates cố
-ý không tạo project knowledge config và setup smoke test phải bắt conflict này.
+Mở fresh agent session sau installation. Nếu repo/project tự định nghĩa MCP tên
+`knowledge`, nó có thể shadow user/global registration; setup smoke test phải bắt
+conflict này.
 
 ## Runtime validation
 
-Sau `uv sync --project mcp/knowledge`, có thể kiểm MCP runtime import/launch riêng.
-Unit tests core:
+Sau `uv sync --project mcp/knowledge`:
 
 ```bash
 mcp/knowledge/.venv/bin/python -m unittest discover -s mcp/knowledge/tests -v
+bash scripts/knowledge-template-check.sh
 ```
 
-Fresh-session acceptance cần xác minh cả QiQi và Herdr-launched Codex/Claude child
-thực sự thấy `knowledge_read` / `knowledge_write`; local config edit không làm tool
-xuất hiện trong session đã chạy sẵn.
+Fresh-session acceptance cần xác minh QiQi và Herdr-launched Codex/Claude child thực
+sự thấy đủ:
+
+```text
+knowledge_search
+knowledge_read
+knowledge_write
+```
+
+Local config edit không làm tool xuất hiện trong session đã chạy sẵn.
