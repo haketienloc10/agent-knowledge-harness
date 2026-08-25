@@ -9,7 +9,9 @@ from pydantic import ValidationError
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contracts import (  # noqa: E402
-    KnowledgeReadContext,
+    KnowledgeReadResult,
+    KnowledgeSearchContext,
+    KnowledgeSearchResult,
     KnowledgeWriteEntry,
     KnowledgeWriteResult,
 )
@@ -51,20 +53,14 @@ class KnowledgeContractsTest(unittest.TestCase):
         payload["aliases"] = payload["routing"].pop("aliases")
         with self.assertRaises(ValidationError) as raised:
             KnowledgeWriteEntry.model_validate(payload)
-        self.assertIn(
-            "must be nested under the 'routing' object",
-            str(raised.exception),
-        )
+        self.assertIn("must be nested under the 'routing' object", str(raised.exception))
 
     def test_filesystem_fields_fail_with_actionable_hint(self):
         payload = create_payload()
         payload["path"] = "domains/smoke/payment/smoke-retry-rule.md"
         with self.assertRaises(ValidationError) as raised:
             KnowledgeWriteEntry.model_validate(payload)
-        self.assertIn(
-            "filesystem fields are owned by Knowledge MCP",
-            str(raised.exception),
-        )
+        self.assertIn("filesystem fields are owned by Knowledge MCP", str(raised.exception))
 
     def test_language_field_is_rejected_with_guidance(self):
         payload = create_payload()
@@ -113,30 +109,59 @@ class KnowledgeContractsTest(unittest.TestCase):
         payload["scope"]["kind"] = "folder"
         with self.assertRaises(ValidationError):
             KnowledgeWriteEntry.model_validate(payload)
-
         payload = create_payload()
         payload["sources"][0]["kind"] = "filesystem"
         with self.assertRaises(ValidationError):
             KnowledgeWriteEntry.model_validate(payload)
 
-    def test_read_context_rejects_unknown_fields(self):
+    def test_search_context_rejects_unknown_fields(self):
         with self.assertRaises(ValidationError):
-            KnowledgeReadContext.model_validate({"repo": "checkout", "path": "/tmp"})
+            KnowledgeSearchContext.model_validate({"repo": "checkout", "path": "/tmp"})
+
+    def test_search_result_is_thin_and_typed(self):
+        result = KnowledgeSearchResult.model_validate({
+            "results": [{
+                "id": "domain:smoke.payment:smoke-retry-rule",
+                "title": "Smoke retry rule",
+                "scope": {"kind": "domain", "id": "smoke.payment"},
+                "summary": "Smoke payments must not retry after confirmed commit.",
+                "when_to_read": ["testing payment retry rules"],
+                "matches": [{"query": "payment retry", "field": "keyword"}],
+                "score": 110,
+            }]
+        })
+        hit = result.model_dump()["results"][0]
+        for forbidden in ("content", "sources", "revision", "path", "canonical_name"):
+            self.assertNotIn(forbidden, hit)
+
+    def test_full_read_result_contains_round_trip_fields_without_path(self):
+        result = KnowledgeReadResult.model_validate({
+            "results": [{
+                "id": "domain:smoke.payment:smoke-retry-rule",
+                "revision": "a" * 64,
+                "canonical_name": "smoke-retry-rule",
+                "title": "Smoke retry rule",
+                "scope": {"kind": "domain", "id": "smoke.payment"},
+                "routing": create_payload()["routing"],
+                "sources": create_payload()["sources"],
+                "content": create_payload()["content"],
+            }]
+        })
+        item = result.model_dump()["results"][0]
+        self.assertIn("routing", item)
+        self.assertIn("revision", item)
+        self.assertNotIn("path", item)
 
     def test_write_result_is_typed(self):
-        result = KnowledgeWriteResult.model_validate(
-            {
-                "reviewed": True,
-                "changes": [
-                    {
-                        "operation": "created",
-                        "id": "domain:smoke.payment:smoke-retry-rule",
-                        "path": "domains/smoke/payment/smoke-retry-rule.md",
-                        "revision": "a" * 64,
-                    }
-                ],
-            }
-        )
+        result = KnowledgeWriteResult.model_validate({
+            "reviewed": True,
+            "changes": [{
+                "operation": "created",
+                "id": "domain:smoke.payment:smoke-retry-rule",
+                "path": "domains/smoke/payment/smoke-retry-rule.md",
+                "revision": "a" * 64,
+            }],
+        })
         self.assertEqual(result.changes[0].operation, "created")
         self.assertEqual(result.changes[0].revision, "a" * 64)
 
