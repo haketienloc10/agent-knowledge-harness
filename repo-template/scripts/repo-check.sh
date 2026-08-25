@@ -30,7 +30,6 @@ required_files=(
   docs/friction/README.md
   scripts/repo-check.sh
 )
-
 for path in "${required_files[@]}"; do
   require_file "$path"
 done
@@ -63,13 +62,26 @@ if [[ -f "$claude_md" ]]; then
     fail 'CLAUDE.md: expected forwarding instruction @AGENTS.md'
 fi
 
+# A repository must not grow a local copy of global product-task state.
+if [[ -e "$repo_root/.qiqi/tasks" || -e "$repo_root/work-items.sqlite3" ]]; then
+  fail 'repo-local task store found; product-task truth must remain in Global Work Item MCP'
+fi
+
 agents="$repo_root/AGENTS.md"
 if [[ -f "$agents" ]]; then
   for pattern in \
     '`ARCHITECTURE\.md`' \
     '`docs/VERIFY\.md`' \
     'Git root hiện tại' \
-    'Không đọc/sửa repository anh em' \
+    'Global Work Item MCP' \
+    'work_item_get' \
+    'work_item_update' \
+    'canonical Work Item' \
+    'current Git root' \
+    'revision conflict' \
+    'questions' \
+    'decisions' \
+    'handoff' \
     '^## Handoff với QiQi$' \
     '^### Closed-world context rule$' \
     '^### Output về QiQi$' \
@@ -78,8 +90,6 @@ if [[ -f "$agents" ]]; then
     'TaskPacket' \
     'required_context' \
     'Native final assistant response là authoritative semantic handoff' \
-    'không tạo hoặc cập nhật QiQi result' \
-    'Không có result schema hoặc fixed headings' \
     'knowledge_read' \
     'knowledge_write' \
     'entries=\[\]' \
@@ -87,30 +97,22 @@ if [[ -f "$agents" ]]; then
     rg -q "$pattern" "$agents" || fail "AGENTS.md: missing required policy: $pattern"
   done
 
-  rg -U -q 'Knowledge MCP là tool exception.*không phải filesystem exception' "$agents" || \
-    fail 'AGENTS.md: shared knowledge must not become an external filesystem exception'
-  rg -U -q 'không chia sẻ hidden conversation.*sibling-repository state' "$agents" || \
-    fail 'AGENTS.md: child must treat QiQi live context as closed-world input'
-  rg -U -q 'required_context.*required premise' "$agents" || \
-    fail 'AGENTS.md: QiQi-used task premises must be explicit required_context'
-  rg -q 'Không tự đọc/sửa repository anh em' "$agents" || \
-    fail 'AGENTS.md: child must not modify sibling repositories'
-  rg -U -q 'Không tự mở source,[[:space:]]+result history hoặc runtime state của repository khác' "$agents" || \
-    fail 'AGENTS.md: child must not read sibling live result/source/runtime state'
-  rg -q 'QiQi là handoff broker' "$agents" || \
-    fail 'AGENTS.md: QiQi must broker live cross-repo handoff'
-  rg -U -q 'context\.repo.*context\.domain.*ranking hint|context\.repo.*ranking hint' "$agents" || \
-    fail 'AGENTS.md: repo/domain context must be ranking-only for shared knowledge'
-  rg -U -q '(?s)(live source/test|source/test).*?thắng' "$agents" || \
+  rg -U -q 'Work Item MCP và Knowledge MCP.*tool exceptions.*không phải filesystem' "$agents" || \
+    fail 'AGENTS.md: MCP access must not become an external filesystem exception'
+  rg -U -q 'không chia sẻ hidden conversation.*sibling source/runtime state' "$agents" || \
+    fail 'AGENTS.md: child must keep hidden QiQi/sibling state outside its context'
+  rg -U -q 'current Git root.*không.*sibling|không sửa repository khác' "$agents" || \
+    fail 'AGENTS.md: child execution authority must remain current-repo only'
+  rg -U -q 'mark.*overall Work Item.*done|không.*overall Work Item.*done' "$agents" || \
+    fail 'AGENTS.md: child must not own overall Work Item completion'
+  rg -U -q 'revision conflict.*reread|Revision conflict.*reread' "$agents" || \
+    fail 'AGENTS.md: stale Work Item updates must reread/reconcile'
+  rg -U -q '(live owner source/test|source/test).*thắng' "$agents" || \
     fail 'AGENTS.md: live owner source/test must override stale shared knowledge'
-  rg -U -q 'không truyền filename, path,[[:space:]]+directory' "$agents" || \
-    fail 'AGENTS.md: agent must not own knowledge filesystem layout'
-  rg -q 'Không tạo field `language`' "$agents" || \
-    fail 'AGENTS.md: language field must not be part of shared knowledge schema'
-  rg -U -q 'cross-repo impact: fact, affected boundary/repository, evidence và next action' "$agents" || \
-    fail 'AGENTS.md: native handoff must preserve actionable cross-repo impact'
-  rg -U -q 'knowledge review.*gọi `knowledge_write`' "$agents" || \
-    fail 'AGENTS.md: Definition of Done must include knowledge review/write'
+  rg -U -q 'Task-specific status|task status' "$agents" || \
+    fail 'AGENTS.md: task state must be distinguished from reusable knowledge'
+  rg -U -q 'Work Item handoff|handoff.*Work Item' "$agents" || \
+    fail 'AGENTS.md: cross-repo remaining work must use canonical Work Item handoff when available'
 
   for forbidden in \
     '^## Final Result Contract$' \
@@ -122,28 +124,31 @@ if [[ -f "$agents" ]]; then
     '`git_state`' \
     '`repo_local_knowledge`' \
     '### Outcome' \
-    '### Changes' \
     '### Git State' \
-    '### Blockers' \
-    '### Repo-local Knowledge' \
-    '### Cross-repo Impact'; do
+    '### Repo-local Knowledge'; do
     if rg -q "$forbidden" "$agents"; then
       fail "AGENTS.md: legacy fixed-result contract found: $forbidden"
     fi
   done
 
-  if rg -q 'workspace `knowledge/`|knowledge/INDEX\.md' "$agents"; then
-    fail 'AGENTS.md: legacy workspace-local knowledge store reference found'
+  if rg -q 'workspace `knowledge/`|knowledge/INDEX\.md|repo-local task store' "$agents"; then
+    fail 'AGENTS.md: local duplicate truth-store reference found'
   fi
 fi
 
 setup="$repo_root/docs/REPO_SETUP.md"
 if [[ -f "$setup" ]]; then
-  rg -q 'TaskPacket' "$setup" || fail 'docs/REPO_SETUP.md: missing TaskPacket handoff guidance'
-  rg -q 'native final assistant response' "$setup" || \
-    fail 'docs/REPO_SETUP.md: missing native final-response guidance'
-  if rg -q '### Repo-local Knowledge|### Cross-repo Impact|fixed headings|result_path' "$setup"; then
-    fail 'docs/REPO_SETUP.md: legacy fixed-result contract found'
+  for pattern in \
+    'Global Work Item MCP' \
+    'work_item_get' \
+    'work_item_update' \
+    'TaskPacket' \
+    'native final assistant response' \
+    'Knowledge MCP'; do
+    rg -q "$pattern" "$setup" || fail "docs/REPO_SETUP.md: missing guidance: $pattern"
+  done
+  if rg -q 'fixed headings|result_path|repo-local task store' "$setup"; then
+    fail 'docs/REPO_SETUP.md: legacy/duplicate task-result contract found'
   fi
 fi
 
@@ -164,9 +169,10 @@ if [[ -f "$verify" ]]; then
   rg -q '^## Side effects$' "$verify" || fail 'docs/VERIFY.md: missing side-effect documentation'
 fi
 
+bash -n "$repo_root/scripts/repo-check.sh" || fail 'scripts/repo-check.sh: invalid Bash syntax'
+
 if ((errors > 0)); then
   printf 'repo-check: FAIL (%d error(s))\n' "$errors" >&2
   exit 1
 fi
-
 printf 'repo-check: PASS\n'
