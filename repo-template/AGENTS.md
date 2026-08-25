@@ -4,224 +4,308 @@ Repository hiện tại là một Git repository độc lập nằm trong worksp
 điều phối. Agent trong repo này chịu trách nhiệm điều tra, triển khai và xác minh
 thay đổi trong **Git root hiện tại**.
 
-QiQi sở hữu context cấp workspace, dependency liên repository và TaskPacket.
-MCP `qiqi_delegate` sở hữu execution lifecycle, native session, Stop-hook result
-capture và runtime state. Repo này sở hữu architecture, implementation, test và
-verification nội bộ. Durable reusable knowledge nằm trong Shared Knowledge Store
-độc lập và chỉ được truy cập qua user-scoped **Knowledge MCP**.
+Bốn nguồn truth độc lập:
+
+```text
+Global Work Item MCP   = mutable product-task truth
+Knowledge MCP          = reusable durable truth
+Repo source/test       = implementation truth
+qiqi_delegate state    = runtime/session truth
+```
+
+QiQi sở hữu orchestration, dependency liên repository và TaskPacket. MCP
+`qiqi_delegate` sở hữu execution lifecycle/native session/result capture. Repo này
+sở hữu architecture, implementation, test và verification nội bộ. Work Item MCP và
+Knowledge MCP là user-scoped services độc lập với current repository/CWD.
 
 ## Bắt đầu
 
 Với task chỉ đọc, chỉ mở nguồn cần cho câu hỏi.
 
-Trước code task không tầm thường:
+Trước substantive task:
 
 1. Xác nhận thư mục hiện tại là Git root bằng `git rev-parse --show-toplevel`.
-2. Đọc `ARCHITECTURE.md` để hiểu responsibility/module/boundary.
-3. Đọc `docs/VERIFY.md` để biết verification command và side effect.
-4. Hiểu concern của task rồi áp dụng decision rule trong `## Shared Knowledge MCP`;
-   chỉ gọi `knowledge_read` khi prior durable knowledge có khả năng thay đổi cách
-   hiểu, quyết định hoặc implementation của task.
-5. Đọc artifact repo-local khác chỉ khi concern của task yêu cầu.
+2. Nếu TaskPacket identify canonical Work Item như `redmine:116655 @ revision N`,
+   gọi `work_item_get` **trước khi** reconstruct requirement/history. Work Item hiện
+   tại là task truth; revision trong packet chỉ là handoff pointer và có thể đã cũ.
+3. Đọc `ARCHITECTURE.md` để hiểu responsibility/module/boundary khi task cần code
+   hoặc architecture context.
+4. Đọc `docs/VERIFY.md` để biết verification command và side effect khi task cần
+   implementation/verification.
+5. Hiểu concern rồi áp dụng decision rule trong `## Shared Knowledge MCP`; chỉ gọi
+   `knowledge_read` khi reusable knowledge có khả năng đổi interpretation,
+   implementation hoặc verification.
+6. Đọc artifact repo-local khác chỉ khi concern yêu cầu.
 
-Không quét toàn bộ repository hoặc toàn bộ `docs/` khi chưa cần. Không gọi
-Knowledge MCP chỉ vì session bắt đầu hoặc chỉ để hoàn thành một checklist.
+Không quét toàn bộ repository hoặc toàn bộ `docs/` khi chưa cần. Không gọi Knowledge
+MCP chỉ vì session bắt đầu. Không tự tìm Work Item DB hoặc Knowledge Store trên
+filesystem.
 
 ## Định tuyến theo concern
 
 | Concern | Source of truth |
 |---|---|
+| Product-task status, current requirement, Q&A/decision/change, blocker/handoff | Global Work Item MCP |
 | Responsibility, module, dependency và data flow nội bộ | `ARCHITECTURE.md` + live source |
 | Bootstrap, test, lint, build và guardrail | `docs/VERIFY.md` + live CI/manifest |
 | Security boundary hoặc dữ liệu nhạy cảm | `docs/SECURITY.md` nếu tồn tại + live source |
 | Reusable distilled knowledge | Shared Knowledge MCP |
 
-Artifact optional không tồn tại thì tiếp tục bằng source, test và tài liệu hiện
-có. Không tạo file rỗng chỉ để hoàn thiện cấu trúc.
+Artifact optional không tồn tại thì tiếp tục bằng source, test và tài liệu hiện có.
+Không tạo file rỗng chỉ để hoàn thiện cấu trúc.
+
+## Global Work Item MCP
+
+Work Item MCP là canonical mutable state cho product task xuyên nhiều session và
+repository. Agent được đọc toàn bộ Work Item để hiểu task nhưng **execution authority
+vẫn chỉ ở Git root hiện tại**.
+
+### Khi nào đọc
+
+Nếu TaskPacket identify Work Item, **MUST `work_item_get`** trước substantive work.
+Không yêu cầu QiQi hoặc user nhắc lại:
+
+- current effective requirements;
+- prior Q&A/open questions;
+- active/superseded decisions;
+- requirement/scope changes;
+- repo checkpoints/verification;
+- blockers, handoffs và next actions đã persist.
+
+Nếu packet revision thấp hơn current revision, dùng current Work Item và kiểm tra xem
+TaskPacket objective/constraint có conflict với task state mới không. Nếu conflict
+có thể đổi semantics, không tự chọn một phía; handoff conflict cho QiQi.
+
+### Execution boundary
+
+Agent chỉ:
+
+- investigate/implement/verify trong current Git root;
+- update `repos[current_repo]` bằng evidence nó thực sự xác lập;
+- ghi material checkpoint của current repo;
+- ghi blocker/open question phát hiện trong current repo;
+- ghi handoff/cross-repo remaining work khi current repo tạo ra dependency/impact.
+
+Agent **không**:
+
+- sửa sibling repository;
+- đánh dấu sibling repo `done`;
+- tự quyết overall Work Item `done`;
+- tự điều phối/delegate repository khác;
+- rewrite global phase/status chỉ để phản ánh local progress nếu QiQi chưa giao
+  quyền orchestration đó.
+
+### Ghi Work Item
+
+Trước `work_item_update`:
+
+1. Dùng exact current revision từ `work_item_get`.
+2. Reconcile current document; không dựa vào snapshot cũ trong prompt.
+3. Chỉ patch facts/evidence/state agent có authority.
+4. Arrays replace nguyên tử: giữ lại entry hiện hành không định xóa.
+5. Revision conflict → reread → reconcile → retry; không overwrite stale state.
+
+Work Item không phải activity log. Không ghi command-by-command transcript hoặc
+hidden reasoning.
+
+### Questions, decisions, requirement changes
+
+Nếu implementation gặp external/product ambiguity không thể trả lời từ current repo,
+không đoán. Ghi material open question vào `questions[]` và blocker nếu cần, rồi
+finalize native response để QiQi có thể hỏi user/customer.
+
+Repo agent có thể ghi technical decision chỉ khi decision đó thực sự thuộc local
+implementation authority. Product/Q&A decision từ user/customer phải được QiQi
+reconcile thành canonical `decisions[]`/`current_requirements`/`changes[]`.
+
+Khi Work Item đã có decision `superseded`, không implement theo decision cũ chỉ vì
+nó xuất hiện trước trong history.
+
+### Handoff cross-repo
+
+Khi current repo tạo/khám phá impact cho repository khác:
+
+```text
+current repo evidence
+→ Work Item handoff pending + evidence
+→ native final response về QiQi
+→ QiQi điều phối consumer repo
+```
+
+Không cần copy toàn bộ sibling state vào final response, nhưng phải nêu material
+handoff/impact đủ để QiQi quyết định orchestration và đối chiếu Work Item.
 
 ## Shared Knowledge MCP
 
 Knowledge MCP độc lập với current working directory và current repository.
 `context.repo`/`context.domain` chỉ là ranking hint; chúng không giới hạn namespace
-được đọc. Agent ở repo hiện tại được phép nhận relevant `global`, `system`, `repo`
-hoặc `domain` knowledge khác qua tool.
+được đọc.
+
+Work Item task state và Shared Knowledge không thay nhau:
+
+```text
+"UAT task 116655 đang fail case 3"       -> Work Item
+"API callback phải idempotent"           -> Knowledge nếu đã verified/reusable
+"code hiện tại thực sự làm gì"           -> live repo source/test
+```
 
 ### Khi nào dùng
 
 **MUST `knowledge_read`** sau khi hiểu task nếu prior durable knowledge có khả năng
-thay đổi implementation, verification hoặc interpretation của task. Các tín hiệu
-điển hình:
+thay đổi implementation, verification hoặc interpretation của task. Tín hiệu điển
+hình:
 
-- domain rule, invariant hoặc business behavior không hiển nhiên từ một local file;
-- architecture/boundary, ownership hoặc dependency có lịch sử/decision cần reuse;
+- domain rule, invariant hoặc business behavior không hiển nhiên từ local source;
+- architecture/boundary, ownership hoặc dependency có reusable history/decision;
 - API/event/schema/auth/security contract hoặc compatibility constraint;
 - deployment/runtime/operational constraint, recurring incident, known pitfall hoặc
   verification behavior đã từng được chắt lọc;
-- task nhắc tới decision/convention trước đây hoặc concept có khả năng đã được xử lý
-  ở repository/domain khác;
-- user hoặc QiQi yêu cầu dùng shared knowledge hoặc kiểm tra prior durable context.
+- task nhắc reusable decision/convention trước đây hoặc concept đã xử lý ở nơi khác;
+- user hoặc QiQi yêu cầu dùng shared knowledge.
 
-**MAY `knowledge_read`** khi chưa chắc prior reusable knowledge có tồn tại nhưng một
-query ngắn có thể giảm investigation hoặc tránh lặp lại quyết định cũ.
+**MAY `knowledge_read`** khi query ngắn có thể giảm investigation hoặc tránh lặp lại
+quyết định cũ.
 
-**SKIP `knowledge_read`** khi knowledge không thể thay đổi hành động hợp lý, ví dụ:
+**SKIP `knowledge_read`** khi knowledge không thể đổi hành động hợp lý, ví dụ:
 
 - typo/format/comment-only hoặc mechanical edit không đổi semantics;
-- exact local lookup mà câu trả lời đã nằm rõ trong source/file được chỉ định;
-- report/status-only từ evidence hiện có, không cần durable context bổ sung;
-- task đã được giải quyết đầy đủ bởi TaskPacket + live owner source/test và không có
-  dấu hiệu contract/domain/decision/pitfall reusable liên quan.
+- exact local lookup đã rõ từ source/file chỉ định;
+- report/status-only đã đủ từ Work Item/native evidence;
+- task được giải quyết đầy đủ bởi Work Item + TaskPacket + owner source/test và không
+  có dấu hiệu reusable contract/domain/pitfall.
 
-Task read-only không tự động nghĩa là skip; investigation về behavior, contract,
-decision hoặc recurring issue vẫn dùng knowledge khi các tín hiệu MUST ở trên có
-mặt.
+Task read-only không tự động nghĩa là skip; investigation về durable behavior,
+contract, decision hoặc recurring issue vẫn dùng knowledge khi tín hiệu MUST có mặt.
 
-**MUST search existing knowledge trước khi create/update candidate**. Search này là
-bước dedupe/identity và áp dụng ngay cả khi initial task không cần knowledge để thực
-thi. Không create chỉ vì chưa nhớ ID; query concept trước và ưu tiên update nếu đã
-có knowledge phù hợp.
+**MUST search existing knowledge trước khi create/update candidate** để dedupe và giữ
+identity ổn định.
 
 ### Đọc
 
-- Khi decision rule yêu cầu read, hiểu task trước rồi tạo khoảng 5–12 search terms
-  có giá trị phân biệt; dùng canonical English concepts và original-language/project
-  aliases khi hữu ích.
-- Dùng `knowledge_read(keywords, context?, limit?)`; không tự tìm/mở physical
-  Knowledge Store path.
-- Shared knowledge là reusable context, không phải oracle mạnh hơn live owner
-  source/test. Nếu knowledge mâu thuẫn source/test hiện tại của repo này, source/test
-  hiện tại thắng cho task đang làm; xác minh kết luận mới trước khi persist update.
-- Knowledge MCP read failure không đồng nghĩa knowledge không tồn tại. Nếu task vẫn
-  an toàn bằng live source có thể tiếp tục, nhưng phải giữ caveat phù hợp khi
-  missing durable context có thể ảnh hưởng kết luận.
+- Khi decision rule yêu cầu, tạo khoảng 5–12 search terms có giá trị phân biệt;
+  canonical English concepts + original-language/project aliases khi hữu ích.
+- Dùng `knowledge_read(keywords, context?, limit?)`; không tự mở physical store.
+- Shared knowledge không mạnh hơn live owner source/test. Nếu conflict, source/test
+  hiện tại thắng cho implementation task; verified conclusion mới có thể update
+  knowledge sau.
+- Knowledge read failure không đồng nghĩa knowledge không tồn tại.
 
-TaskPacket `required_context` là **required premise**, không phải search hint. Nếu
-QiQi đã truyền một fact ở đó, agent dùng fact theo certainty/provenance đã ghi và
-không bắt QiQi phải dựa vào việc agent tìm lại đúng knowledge item. Nếu fact đó mâu
-thuẫn live source/test của owner repo, dừng phần phụ thuộc và handoff conflict cùng
-evidence; không silently chọn một phía.
+TaskPacket required fact ngoài Work Item vẫn là **required premise** với provenance.
+Nếu fact đó mâu thuẫn owner source/test hoặc canonical Work Item decision mới hơn,
+dừng phần phụ thuộc và handoff conflict; không silently chọn một phía.
 
 ### Ghi
 
 Knowledge review + `knowledge_write` là **bắt buộc cho substantive work có khả năng
 tạo hoặc xác nhận reusable conclusion**, gồm implementation/debugging không tầm
-thường, investigation có kết luận, design/decision, contract/behavior change, hoặc
-verified operational/verification finding.
+thường, investigation có kết luận, design/decision, contract/behavior change hoặc
+verified operational finding.
+
+Không persist task status, ticket-specific Q&A, temporary blocker, next action hoặc
+working checkpoint vào Knowledge MCP.
 
 Với typo/format/comment-only, exact lookup, report/status-only hoặc mechanical task
-không tạo reusable conclusion, skip knowledge write hoàn toàn; không gọi
-`knowledge_write(entries=[])` như ceremony.
+không tạo reusable conclusion, skip knowledge write hoàn toàn.
 
-Khi knowledge review là bắt buộc, thực hiện sau implementation/investigation và
-verification nhưng **trước khi finalize native final response**:
+Khi knowledge review là bắt buộc, sau implementation/investigation + verification
+nhưng trước final native response:
 
-1. Không persist working log, task status, điều hiển nhiên đọc trực tiếp từ source,
-   guess hoặc hypothesis chưa đủ evidence.
-2. Search existing shared knowledge trước khi create; ưu tiên update để tránh
-   duplicate.
-3. Submit semantic payload qua `knowledge_write`; không truyền filename, path,
-   directory hoặc tự `mkdir` knowledge store.
-4. Create không truyền `id`/`expected_revision`; MCP derive identity + canonical
-   path từ `scope` + `canonical_name`.
-5. Update phải dùng exact `id` + `expected_revision` từ `knowledge_read`; revision
-   conflict phải reread/re-distill, không overwrite mù.
-6. Routing summary/when-to-read/keywords dùng concise canonical concepts, thường
-   là English; multilingual/legacy/project terminology nằm trong aliases khi hữu ích.
-7. Content có thể Vietnamese, English hoặc mixed. Không tạo field `language`.
-8. `sources` phải có provenance đủ để kiểm tra conclusion.
-9. Nếu review bắt buộc nhưng không còn durable candidate, gọi
-   `knowledge_write(entries=[])` để ghi nhận review hoàn tất mà không tạo file.
-10. Nếu có durable candidate nhưng write thất bại, không tuyên bố đã persist; ghi
-    failure/caveat vào native final response.
-
-Knowledge distillation là semantic responsibility của agent. Knowledge MCP sở hữu
-ID/path/directory/render/index/locking/revision/persistence mechanics.
+1. Không persist working log, task status, guess hoặc hypothesis chưa đủ evidence.
+2. Search existing knowledge trước create/update.
+3. Submit semantic payload qua `knowledge_write`; không truyền path/filename.
+4. Create không truyền `id`/`expected_revision`; MCP derive identity.
+5. Update dùng exact `id` + `expected_revision`; conflict phải reread/re-distill.
+6. Routing metadata concise; aliases giữ multilingual/legacy terminology khi hữu ích.
+7. Content có thể Vietnamese, English hoặc mixed; không có field `language`.
+8. `sources` phải có provenance đủ kiểm tra conclusion.
+9. Required review không có durable candidate dùng `entries=[]`.
+10. Candidate write thất bại phải được báo; không claim persisted.
 
 ## Ranh giới Workspace
 
 - Chỉ đọc/sửa file trong Git root hiện tại.
 - Native result capture là runtime concern của `qiqi_delegate`; agent không mở/sửa
   `.qiqi/state/`, hook sink hoặc workspace runtime files.
-- Knowledge MCP là tool exception, **không phải filesystem exception**: agent dùng
-  content tool trả về nhưng không tự mở external Knowledge Store path.
-- Không tự suy đoán, tìm hoặc mở legacy result artifact khác.
-- Không đọc/sửa workspace `repos.yaml`, `SYSTEM_MAP.md`, `.qiqi/tasks/` hoặc
-  workspace control file khác.
+- Work Item MCP và Knowledge MCP là **tool exceptions, không phải filesystem
+  exceptions**: dùng content tool trả về, không tự mở external DB/store path.
+- Không đọc/sửa workspace `repos.yaml`, `SYSTEM_MAP.md` hoặc control file khác.
 - Không đọc/sửa repository anh em.
-- Không spawn/delegate sang coding agent khác và không gọi MCP orchestration của
-  QiQi từ child turn.
-- Live context cross-repo phải đến từ TaskPacket của QiQi; shared durable knowledge
-  có thể đến trực tiếp từ Knowledge MCP.
-- Nếu live context từ QiQi mâu thuẫn với source/test hiện tại, dừng phần phụ thuộc,
-  ghi evidence và báo conflict.
+- Không spawn/delegate coding agent khác và không gọi QiQi orchestration MCP từ child.
+- Cross-repo task context đã persist được đọc từ canonical Work Item; external live
+  facts ngoài Work Item phải đến từ TaskPacket.
+- Không dùng Work Item access làm cớ để mở sibling source/result/runtime state.
 
 ## Handoff với QiQi
 
-QiQi là handoff broker giữa repository hiện tại và phần còn lại của workspace đối
-với **live execution evidence**. Execution agent không handoff trực tiếp cho
-repository anh em.
+QiQi là broker của cross-repo **execution**; Work Item MCP là shared canonical
+**task state**.
 
 ### Input từ QiQi
 
-TaskPacket/prompt của QiQi là nguồn live workspace/upstream context cho turn hiện
-tại. Nó chứa:
+TaskPacket chứa:
 
 - original user request liên quan;
 - repo-local objective;
-- scope và out-of-scope;
-- required context với provenance/certainty;
+- scope/out-of-scope;
+- canonical Work Item identity/revision khi task thuộc Work Item;
+- required external context với provenance/certainty;
 - constraints;
 - acceptance criteria;
 - verification requirements;
-- known unknowns.
+- known unknowns turn-specific.
 
 ### Closed-world context rule
 
 Agent **không chia sẻ hidden conversation, hidden reasoning, workspace control
-context hoặc sibling-repository state của QiQi**. Đối với user/workspace/upstream/
-cross-repo facts, chỉ những gì TaskPacket truyền trực tiếp mới là live input.
+context hoặc sibling source/runtime state của QiQi**.
 
-Agent tự khám phá implementation detail bên trong Git root hiện tại và query Shared
-Knowledge MCP độc lập khi decision rule yêu cầu durable context. Không tự mở source,
-result history hoặc runtime state của repository khác để bổ sung một fact QiQi bỏ
-sót. Nếu một external fact bắt buộc bị thiếu và không thể xác lập từ current repo
-hoặc allowed knowledge source, nêu chính xác missing input trong final response và
-không đoán.
+Canonical Work Item được identify trong TaskPacket là exception có chủ đích: agent
+được đọc state đó trực tiếp qua Work Item MCP. Shared Knowledge cũng được query theo
+policy. Ngoài hai MCP này và current repo, external fact bắt buộc phải nằm trong
+TaskPacket; không đoán hoặc mở sibling repository để bổ sung.
 
 ### Output về QiQi
 
 **Native final assistant response là authoritative semantic handoff.** MCP capture
-message này trực tiếp qua native Stop hook; agent không tạo hoặc cập nhật QiQi result
-Markdown artifact và không phụ thuộc terminal scrollback.
+message trực tiếp qua native Stop hook; agent không tạo result Markdown artifact.
 
-Không có result schema hoặc fixed headings. Chọn structure phù hợp task. Final
-response phải đủ để QiQi hiểu, verify hoặc tiếp tục work mà không cần transcript,
-bao gồm material information khi có:
+Trước final response của substantive Work Item turn:
 
-- implementation/change hoặc investigation conclusion;
-- evidence chính và source path liên quan;
-- verification command/check thực tế + kết quả;
-- Git state có ý nghĩa cho task;
+1. Update canonical Work Item với repo evidence/state + material
+   blocker/question/handoff/checkpoint đã xác lập.
+2. Nếu update conflict, reread/reconcile/retry; nếu persistence vẫn fail, nêu failure
+   rõ trong final response và không claim canonical state đã cập nhật.
+3. Thực hiện Knowledge review/write riêng nếu policy yêu cầu reusable conclusion.
+4. Finalize native response với result/evidence/verification và remaining work cho
+   QiQi.
+
+Final response không có fixed headings nhưng phải giữ material information khi có:
+
+- implementation/investigation conclusion;
+- source path/evidence chính;
+- verification thực tế + kết quả;
+- Git state có ý nghĩa;
 - blocker/missing external input;
-- knowledge IDs create/update hoặc persistence failure khi có;
-- cross-repo impact: fact, affected boundary/repository, evidence và next action;
-- caveat, uncertainty hoặc phần acceptance chưa đạt.
+- Work Item persistence/revision conflict failure nếu có;
+- knowledge IDs/persistence failure khi có;
+- cross-repo impact/handoff và next action;
+- caveat/uncertainty/acceptance chưa đạt.
 
-Agent không cần tự tuyên bố một global `Outcome: completed`. QiQi đánh giá completion
-bằng objective/acceptance criteria và evidence trong response.
+Agent không tự tuyên bố global Work Item complete. QiQi đánh giá overall completion.
 
 ## Hợp đồng Làm việc
 
 - Giữ đúng objective, scope, out-of-scope, constraints và acceptance criteria trong
-  TaskPacket.
+  TaskPacket, đồng thời đối chiếu với canonical Work Item revision mới nhất.
 - Tự khám phá implementation detail nội bộ thay vì hỏi QiQi điều repo có thể trả lời.
-- Không dùng interactive question cho điều có thể trả lời từ current repo. Nếu cần
-  external decision/input, ưu tiên finalize native response mô tả chính xác missing
-  input để QiQi có thể reconcile và RESUME sau đó.
+- Không dùng interactive question cho điều current repo/Work Item/allowed knowledge
+  có thể trả lời.
+- Nếu cần external decision/input, persist open question/blocker khi phù hợp rồi
+  finalize native response để QiQi reconcile/RESUME sau đó.
 - Dùng evidence kiểm tra lại được: source path, test, command, spec hoặc runtime output.
 - Không tuyên bố hoàn thành chỉ từ inspection khi task yêu cầu thay đổi/verification.
 - Không đổi regression mới thành legacy issue để hoàn thành task.
-- Không ghi secret hoặc dữ liệu nhạy cảm vào shared knowledge hoặc final response.
+- Không ghi secret/dữ liệu nhạy cảm vào Work Item, Shared Knowledge hoặc final response.
 
 ## Cross-repo Impact
 
@@ -229,13 +313,14 @@ Khi phát hiện ảnh hưởng từ hai repository trở lên, API/event/schema
 upstream/downstream behavior hoặc decision cần QiQi điều phối:
 
 1. Không sửa repository khác.
-2. Handoff fact, affected repository/boundary, evidence và next action nếu rõ cho
+2. Nếu task có Work Item, persist pending `handoffs[]`/blocker/question cần thiết với
+   evidence current repo.
+3. Nêu material impact + affected repository/boundary + evidence + next action cho
    QiQi trong native final response.
-3. Có thể persist reusable verified knowledge qua Knowledge MCP, nhưng vẫn phải
-   handoff impact nếu repository khác cần investigation/implementation/verification.
+4. Có thể persist reusable verified knowledge qua Knowledge MCP, nhưng knowledge
+   không thay handoff/task state.
 
-QiQi chịu trách nhiệm chuyển live context đó tới downstream `required_context` hoặc
-xử lý ở workspace level.
+QiQi chịu trách nhiệm chọn downstream repo/wave và reconcile global next action.
 
 ## Ghi nhận Friction
 
@@ -256,7 +341,7 @@ Mỗi file ghi đúng một friction:
 ```
 
 Nếu friction thuộc workspace/MCP/Herdr orchestration, không sửa workspace; handoff
-nó cho QiQi trong native final response như cross-repo/workspace impact.
+nó cho QiQi trong native final response.
 
 ## Verification
 
@@ -268,15 +353,17 @@ chưa chạy phải có lý do rõ; không biến suy đoán thành evidence.
 
 ## Hoàn thành
 
-Task chỉ completed khi objective/acceptance liên quan đã đạt, verification liên quan
-đã chạy hoặc phần chưa chạy được báo rõ, không có regression mới đã biết, và
-cross-repo impact cần QiQi biết đã được handoff.
+Repo-local turn chỉ completed khi objective/acceptance liên quan đã đạt,
+verification liên quan đã chạy hoặc phần chưa chạy được báo rõ, không có regression
+mới đã biết và cross-repo impact cần QiQi biết đã được handoff.
 
-Với substantive work theo `### Ghi`, completion còn yêu cầu agent đã thực hiện
-knowledge review và gọi `knowledge_write`; nếu review không có durable candidate thì
-dùng `entries=[]`, còn persistence failure có candidate không được che giấu. Với
-task thuộc nhóm SKIP, không có knowledge-write requirement.
+Nếu turn thuộc Work Item, completion còn yêu cầu material repo state/evidence đã
+được update vào canonical Work Item hoặc persistence failure được nêu rõ. Agent
+không mark overall Work Item `done`.
 
-Nếu còn decision hoặc dependency không thể tự giải quyết, nêu chính xác missing
-input/decision và evidence trong native final response; không tự suy đoán để đạt
-completion.
+Với substantive reusable work, completion còn yêu cầu Knowledge review/write theo
+policy; required review không candidate dùng `entries=[]`.
+
+Nếu còn decision/dependency không thể tự giải quyết, persist open question/blocker
+khi phù hợp và nêu exact missing input/evidence trong native final response; không
+tự suy đoán để đạt completion.
