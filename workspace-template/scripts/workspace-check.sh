@@ -46,10 +46,18 @@ for path in "${required_files[@]}"; do
   require_file "$workspace_root/$path"
 done
 
-# Product task state is user-scoped Global Work Item MCP state. The workspace must
-# not recreate the old Markdown task truth beside it.
-if [[ -e "$workspace_root/.qiqi/tasks" ]]; then
-  fail '.qiqi/tasks must not exist; canonical product-task state belongs to Global Work Item MCP'
+# Product task state is user-scoped Global Work Item MCP state. Migration may leave
+# empty Git-untracked directories after deleting the old template skeleton; those
+# are harmless. Any remaining file means legacy task state still needs explicit
+# import/archive before this workspace can rely on one canonical task truth.
+legacy_tasks="$workspace_root/.qiqi/tasks"
+if [[ -d "$legacy_tasks" ]]; then
+  legacy_task_file="$(find "$legacy_tasks" -type f -print -quit 2>/dev/null || true)"
+  if [[ -n "$legacy_task_file" ]]; then
+    fail ".qiqi/tasks still contains legacy task files; migrate/archive them into Global Work Item state, then remove the legacy files: ${legacy_task_file#$workspace_root/}"
+  fi
+elif [[ -e "$legacy_tasks" ]]; then
+  fail '.qiqi/tasks exists but is not a directory; remove the legacy task artifact after preserving required task state'
 fi
 
 managed_files=(
