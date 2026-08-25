@@ -1,0 +1,37 @@
+{
+  "version": 5,
+  "from_ref": "a2f63c178efd735fbc72005dd1edb50851182b85",
+  "to_ref": "3a693ea11374065f0906f0ba604bdc1c7028d389",
+  "description": "adopt user-scoped Global Work Item task truth, remove workspace-local task skeleton, and catch up post-v4 routing policy",
+  "workspace": {
+    "merge": [],
+    "replace": [
+      "workspace-template/AGENTS.md",
+      "workspace-template/README.md",
+      "workspace-template/docs/WORKSPACE_SETUP.md",
+      "workspace-template/docs/examples/agent-routing.claude-code.yaml",
+      "workspace-template/instructions/agent-routing.yaml",
+      "workspace-template/instructions/model-routing.md",
+      "workspace-template/scripts/workspace-check.sh"
+    ],
+    "delete": [
+      "workspace-template/.qiqi/tasks/TEMPLATE.md",
+      "workspace-template/.qiqi/tasks/active/README.md",
+      "workspace-template/.qiqi/tasks/completed/README.md"
+    ],
+    "manual_review": [
+      "workspace-template/.qiqi/tasks"
+    ]
+  },
+  "repo": {
+    "merge": [
+      "repo-template/AGENTS.md"
+    ],
+    "replace": [
+      "repo-template/docs/REPO_SETUP.md",
+      "repo-template/scripts/repo-check.sh"
+    ],
+    "delete": [],
+    "manual_review": []
+  }
+}
