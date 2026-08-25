@@ -74,14 +74,17 @@ if [[ -f "$agents" ]]; then
     '^### Closed-world context rule$' \
     '^### Output về QiQi$' \
     '^## Shared Knowledge MCP$' \
-    '^## Cross-repo Impact$' \
+    '^## Cross-repo [Ii]mpact$' \
     'TaskPacket' \
     'required_context' \
     'Native final assistant response là authoritative semantic handoff' \
-    'không tạo hoặc cập nhật QiQi result' \
-    'Không có result schema hoặc fixed headings' \
+    'không tạo/cập nhật QiQi result|không tạo hoặc cập nhật QiQi result' \
+    'fixed result schema|fixed headings' \
+    'knowledge_search' \
     'knowledge_read' \
     'knowledge_write' \
+    'decision cards' \
+    '3–8 discriminative concepts' \
     'entries=\[\]' \
     'expected_revision'; do
     rg -q "$pattern" "$agents" || fail "AGENTS.md: missing required policy: $pattern"
@@ -93,24 +96,26 @@ if [[ -f "$agents" ]]; then
     fail 'AGENTS.md: child must treat QiQi live context as closed-world input'
   rg -U -q 'required_context.*required premise' "$agents" || \
     fail 'AGENTS.md: QiQi-used task premises must be explicit required_context'
-  rg -q 'Không tự đọc/sửa repository anh em' "$agents" || \
+  rg -q 'Không đọc/sửa repository anh em' "$agents" || \
     fail 'AGENTS.md: child must not modify sibling repositories'
-  rg -U -q 'Không tự mở source,[[:space:]]+result history hoặc runtime state của repository khác' "$agents" || \
+  rg -U -q 'Không tự mở source, result history hoặc runtime state của[[:space:]]+repository khác' "$agents" || \
     fail 'AGENTS.md: child must not read sibling live result/source/runtime state'
-  rg -q 'QiQi là handoff broker' "$agents" || \
+  rg -q 'QiQi là handoff broker duy nhất' "$agents" || \
     fail 'AGENTS.md: QiQi must broker live cross-repo handoff'
   rg -U -q 'context\.repo.*context\.domain.*ranking hint|context\.repo.*ranking hint' "$agents" || \
     fail 'AGENTS.md: repo/domain context must be ranking-only for shared knowledge'
-  rg -U -q '(?s)(live source/test|source/test).*?thắng' "$agents" || \
+  rg -U -q '(?s)(live owner source/test|source/test).*?thắng' "$agents" || \
     fail 'AGENTS.md: live owner source/test must override stale shared knowledge'
-  rg -U -q 'không truyền filename, path,[[:space:]]+directory' "$agents" || \
+  rg -U -q 'không truyền filename/path/directory|không truyền filename, path,[[:space:]]+directory' "$agents" || \
     fail 'AGENTS.md: agent must not own knowledge filesystem layout'
   rg -q 'Không tạo field `language`' "$agents" || \
     fail 'AGENTS.md: language field must not be part of shared knowledge schema'
-  rg -U -q 'cross-repo impact: fact, affected boundary/repository, evidence và next action' "$agents" || \
+  rg -U -q 'cross-repo impact: fact, affected boundary/repository, evidence, next action|cross-repo impact: fact, affected boundary/repository, evidence và next action' "$agents" || \
     fail 'AGENTS.md: native handoff must preserve actionable cross-repo impact'
-  rg -U -q 'knowledge review.*gọi `knowledge_write`' "$agents" || \
+  rg -U -q 'Knowledge review.*`knowledge_write`|knowledge review.*`knowledge_write`' "$agents" || \
     fail 'AGENTS.md: Definition of Done must include knowledge review/write'
+  rg -U -q 'knowledge_search.*decision cards.*knowledge_read' "$agents" || \
+    fail 'AGENTS.md: knowledge retrieval must use progressive disclosure'
 
   for forbidden in \
     '^## Final Result Contract$' \
@@ -132,8 +137,8 @@ if [[ -f "$agents" ]]; then
     fi
   done
 
-  if rg -q 'workspace `knowledge/`|knowledge/INDEX\.md' "$agents"; then
-    fail 'AGENTS.md: legacy workspace-local knowledge store reference found'
+  if rg -q 'knowledge_read\(keywords|workspace `knowledge/`|knowledge/INDEX\.md' "$agents"; then
+    fail 'AGENTS.md: legacy knowledge-read/search contract found'
   fi
 fi
 
@@ -142,8 +147,12 @@ if [[ -f "$setup" ]]; then
   rg -q 'TaskPacket' "$setup" || fail 'docs/REPO_SETUP.md: missing TaskPacket handoff guidance'
   rg -q 'native final assistant response' "$setup" || \
     fail 'docs/REPO_SETUP.md: missing native final-response guidance'
-  if rg -q '### Repo-local Knowledge|### Cross-repo Impact|fixed headings|result_path' "$setup"; then
-    fail 'docs/REPO_SETUP.md: legacy fixed-result contract found'
+  rg -q 'knowledge_search' "$setup" || \
+    fail 'docs/REPO_SETUP.md: missing knowledge_search setup/smoke guidance'
+  rg -q 'knowledge_read' "$setup" || \
+    fail 'docs/REPO_SETUP.md: missing exact knowledge_read guidance'
+  if rg -q '### Repo-local Knowledge|### Cross-repo Impact|fixed headings|result_path|knowledge_read\(keywords' "$setup"; then
+    fail 'docs/REPO_SETUP.md: legacy result or knowledge API contract found'
   fi
 fi
 
