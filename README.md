@@ -1,7 +1,7 @@
 # Agent Knowledge Harness
 
-Bộ khung gồm ba lớp độc lập để vận hành QiQi trong multi-repository workspace và
-chia sẻ durable knowledge giữa nhiều workspace/repository/session.
+Bộ khung gồm ba lớp độc lập để vận hành QiQi trong multi-repository workspace và chia
+sẻ durable knowledge giữa nhiều workspace/repository/session.
 
 ## Kiến trúc
 
@@ -9,16 +9,17 @@ chia sẻ durable knowledge giữa nhiều workspace/repository/session.
                          Shared Knowledge Store
                          Markdown + INDEX.md
                                 ▲      │
+                     write      │      │ search/read
                                 │      ▼
                          Knowledge MCP (user scope)
-                          read            write
-                           ▲                ▲
-                           │                │
-Người dùng → QiQi workspace ──────┐   Repo execution agents
-              │                   │          ▲
-              │ TaskPacket        │          │ native final response
-              ▼                   │          │
-        qiqi_delegate MCP ────────┴──────────┘
+                    search → exact read → write
+                           ▲                    ▲
+                           │                    │
+Người dùng → QiQi workspace ──────┐       Repo execution agents
+              │                   │              ▲
+              │ TaskPacket        │              │ native final response
+              ▼                   │              │
+        qiqi_delegate MCP ────────┴──────────────┘
               │
               │ Herdr START / RESUME
               ▼
@@ -38,9 +39,9 @@ QiQi control plane tại workspace root:
 - MCP-owned SQLite session ownership dưới `.qiqi/state/`;
 - dependency waves, evidence reuse và user reporting.
 
-Workspace **không sở hữu durable knowledge store**. `.qiqi/runs/` chỉ có thể tồn
-tại như legacy migration source cho session đã được tạo bởi contract cũ; turn mới
-không dùng Markdown artifact làm transport.
+Workspace **không sở hữu durable knowledge store**. `.qiqi/runs/` chỉ có thể tồn tại
+như legacy migration source cho session contract cũ; turn mới không dùng Markdown
+artifact làm transport.
 
 ### `repo-template/`
 
@@ -49,7 +50,7 @@ Policy tối thiểu cho execution agent tại mỗi Git root:
 - architecture + verification routing;
 - Git-root/sibling-repo boundaries;
 - closed-world TaskPacket context từ QiQi;
-- conditional Shared Knowledge MCP read/write lifecycle;
+- conditional Shared Knowledge search/read/write lifecycle;
 - cross-repo impact handoff về QiQi;
 - native final assistant response là semantic handoff, không fixed headings.
 
@@ -67,6 +68,7 @@ knowledge-template/
 │   ├── repos/
 │   └── domains/
 ├── mcp/knowledge/
+│   ├── contracts.py
 │   ├── core.py
 │   ├── server.py
 │   ├── pyproject.toml
@@ -87,8 +89,6 @@ Store có thể nằm trong repo riêng/path khác; MCP chỉ dùng explicit
 
 ### Input: TaskPacket
 
-Public execution boundary:
-
 ```text
 delegate_repo_task(
   repository,
@@ -106,24 +106,20 @@ delegate_repo_task(
 )
 ```
 
-Các nguyên tắc chính:
+Nguyên tắc chính:
 
-- `user_request` giữ wording người dùng liên quan đến repo task;
-- `objective`, `scope`, `constraints` và `acceptance_criteria` là repo-local contract;
-- mọi live fact/decision/knowledge mà QiQi **đã dùng để quyết định task semantics**
-  phải nằm trong `required_context` kèm provenance + certainty;
+- `user_request` giữ wording gốc liên quan đến repo task;
+- `objective`, `scope`, `constraints`, `acceptance_criteria` là repo-local contract;
+- mọi live fact/decision/knowledge QiQi **đã dùng để quyết định task semantics** phải
+  nằm trong `required_context` kèm provenance + certainty;
 - child không chia sẻ hidden conversation/reasoning/workspace state của QiQi;
-- Shared Knowledge MCP của child dùng để discover/enrich/verify theo repo policy,
-  không thay required premise mà QiQi đã dùng để tạo task.
+- Shared Knowledge của child dùng để discover/enrich/verify theo repo policy, không
+  thay required premise QiQi đã dùng để tạo task.
 
 ### Output: native final response
 
-MCP không ép execution agent ghi một Markdown schema. Agent chọn structure phù hợp
-implementation, investigation, review, design hoặc loại task thực tế.
-
-Native Stop hook chuyển full `last_assistant_message` về MCP. Vì transport không
-đọc terminal viewport/scrollback, response dài hơn một screen không bị cắt chỉ vì
-đã scroll khỏi TUI.
+MCP không ép execution agent ghi một Markdown schema. Native Stop hook chuyển full
+`last_assistant_message` về MCP; transport không đọc terminal viewport/scrollback.
 
 Terminal success thông thường:
 
@@ -136,23 +132,16 @@ Terminal success thông thường:
 }
 ```
 
-Claude native failure có thể trả `state: "failed"` cùng response/error detail mà
-StopFailure hook cung cấp.
-
-Nếu Herdr phát hiện agent đang **blocked chờ interactive input trước khi có native
-final response**, MCP phải giữ native session ownership để QiQi có thể RESUME đúng
-conversation. Blocked handoff không được giả mạo một `agent_response` mà agent chưa
-thực sự phát ra.
-
-Runtime không fallback sang terminal screen hoặc transcript parser nếu native result
-capture thiếu; failure phải rõ thay vì silently trả report bị cắt.
+Nếu agent blocked trước native final response, MCP giữ session ownership để QiQi có
+thể RESUME và trả `agent_response: null`; không giả mạo response từ screen/transcript.
+Native response transport fail closed nếu Stop hook không trả result hợp lệ.
 
 ## Hai loại context
 
 ### Live execution evidence
 
-Repo source/test và native result hiện tại là live truth. Khi repo B phụ thuộc work
-vừa xảy ra ở repo A:
+Repo source/test và native result hiện tại là live truth. Khi repo B phụ thuộc work ở
+repo A:
 
 ```text
 repo A native response
@@ -161,42 +150,69 @@ repo A native response
 → repo B
 ```
 
-Child không tự mở sibling source, sibling result history hoặc workspace runtime
-state.
+Child không tự mở sibling source, sibling result history hoặc workspace runtime state.
 
 ### Durable shared knowledge
 
-Reusable, non-trivial, evidence-backed conclusion được persist qua Knowledge MCP.
-QiQi và repo agents đều có thể query cùng store trực tiếp. Current repository chỉ
-boost ranking; nó không giới hạn namespace đọc được.
+Reusable, non-trivial, evidence-backed conclusion được persist qua Knowledge MCP. QiQi
+và repo agents đều query cùng store. Current repo chỉ boost ranking; nó không giới hạn
+namespace đọc được.
 
 Nếu shared knowledge mâu thuẫn live source/test trong owner repo, live source/test
-thắng và verified reusable conclusion mới phải update knowledge khi phù hợp.
+thắng và verified replacement conclusion mới được update knowledge khi phù hợp.
 
-## Knowledge API
+## Knowledge API — progressive disclosure
 
-MVP expose đúng hai tools:
+Public tools:
 
 ```text
-knowledge_read(keywords, context?, limit?)
+knowledge_search(keywords, context?, limit?)
+knowledge_read(ids)
 knowledge_write(entries)
 ```
 
 Caller hiểu task rồi quyết định có cần durable context hay không. MCP không phải
-ceremony bắt buộc cho mọi turn:
+ceremony cho mọi turn.
 
-- MUST read khi prior reusable knowledge có khả năng đổi interpretation,
-  orchestration, implementation hoặc verification;
-- MAY read khi query ngắn có thể giảm uncertainty hoặc tránh investigation lặp;
-- SKIP read cho typo/format/comment-only, exact local lookup, report/status-only từ
-  evidence đã đủ hoặc mechanical work nơi durable context không thể đổi action;
-- substantive work có khả năng tạo/xác nhận reusable conclusion phải review/write;
-- trivial/mechanical/report-only work được skip write;
-- required review không có durable candidate mới dùng `entries=[]`;
-- trước create/update phải search existing concept để dedupe và ưu tiên update.
+### Search
 
-Khi read, caller sinh nhiều search terms. MCP rank deterministic từ generated
-`INDEX.md`; không dùng embeddings/vector DB/translator/LLM.
+`knowledge_search` rank deterministic từ generated `INDEX.md`, không dùng embedding,
+vector DB, translator hoặc LLM. Caller thường tạo khoảng 3–8 discriminative concepts.
+
+Search trả bounded **decision cards** để chọn document:
+
+```text
+id
+title
+scope
+summary
+bounded when_to_read
+bounded match reasons
+score
+```
+
+Search card không trả `content`, `sources`, `revision`, physical `path` hoặc duplicate
+`canonical_name`. `limit=10` nghĩa tối đa 10 candidate cards, **không** hydrate 10
+full documents. Selected top hits vẫn được revision-check với detail file để stale
+index fail rõ.
+
+### Exact read
+
+Sau search, caller hydrate chỉ một hoặc tối đa hai exact IDs:
+
+```text
+knowledge_read(ids=[...])
+```
+
+Full read trả stable ID, SHA-256 revision, canonical name, title/scope, full nested
+routing, sources và semantic content. `content` không chứa storage H1; writer tự render
+heading. Physical path không thuộc read API.
+
+`knowledge_search` cố ý **không trả revision**. Vì vậy existing knowledge phải được
+full-read trước update; agent không thể dùng search summary rồi overwrite document
+chưa đọc.
+
+### Write
 
 Agent không tạo knowledge file trực tiếp. Create submit semantic fields, MCP derive:
 
@@ -205,8 +221,22 @@ id   = <scope-kind>:<scope-id>:<canonical-name>
 path = canonical namespace path
 ```
 
-Update bắt buộc exact `id` + `expected_revision` từ read. Human edit ngoài MCP làm
-revision/index stale và stale write/read bị reject cho tới khi reindex.
+Update bắt buộc exact `id` + `expected_revision` từ full `knowledge_read`. Human edit
+ngoài MCP làm revision/index stale và stale search/read/write bị reject cho tới khi
+reindex.
+
+Knowledge lifecycle:
+
+- MUST search khi prior reusable knowledge có khả năng đổi interpretation,
+  orchestration, implementation hoặc verification;
+- MAY search khi query ngắn có thể giảm uncertainty hoặc tránh investigation lặp;
+- SKIP cho typo/format/comment-only, exact local lookup, report/status-only hoặc
+  mechanical work nơi durable context không thể đổi action;
+- substantive work có khả năng tạo/xác nhận reusable conclusion phải review/write;
+- trivial/mechanical/report-only work được skip write;
+- required review không candidate mới dùng `entries=[]`;
+- trước create/update phải search existing concept; update existing target phải full
+  read trước để lấy revision và full semantic payload.
 
 ## Language
 
@@ -223,7 +253,7 @@ content
 → Vietnamese / English / mixed tùy ý
 ```
 
-Retrieval không phụ thuộc ngôn ngữ của body.
+Retrieval không phụ thuộc ngôn ngữ body.
 
 ## Human maintenance
 
@@ -242,19 +272,22 @@ Detail metadata là canonical; `INDEX.md` là generated projection.
 
 ## Cài Knowledge MCP
 
-Knowledge MCP được cài user/global scope để QiQi và Herdr-launched child agents ở
-các repository khác nhau cùng thấy service:
-
 ```bash
 cd knowledge-template
 bash scripts/install-user-mcp.sh --store-root /path/to/shared-knowledge/store
 ```
 
-Installer tạo stable wrapper và đăng ký MCP tên `knowledge` với Codex global config
-và Claude user scope khi CLI tương ứng có sẵn. Existing registration cùng tên không
-bị ghi đè.
+Installer tạo stable wrapper, cài knowledge-distill skill và đăng ký MCP `knowledge`
+với Codex global config / Claude user scope khi CLI tương ứng có sẵn. Existing
+registration cùng tên không bị overwrite.
 
-Mở fresh agent session sau installation rồi smoke-test `knowledge_read`.
+Mở fresh agent session rồi smoke-test tool inventory có đủ:
+
+```text
+knowledge_search
+knowledge_read
+knowledge_write
+```
 
 ## Cài workspace
 
@@ -268,12 +301,9 @@ uv sync --project mcp/qiqi_delegate
 bash scripts/workspace-check.sh
 ```
 
-Project-scoped `.codex/config.toml` của workspace chỉ đăng ký `qiqi_delegate`.
-Knowledge MCP không được duplicate vào workspace project config.
-
-Sau static/unit checker, phải chạy fresh-session acceptance smoke trên **installed
-Claude/Codex CLI thực tế** cho adapter đang dùng. Unit test không thay thế smoke này
-vì native Stop-hook payload/CLI flags là external contract.
+Project `.codex/config.toml` chỉ đăng ký `qiqi_delegate`; Knowledge MCP không duplicate
+vào workspace config. Sau static/unit checker, chạy fresh-session acceptance smoke
+trên installed Claude/Codex CLI thực tế cho adapter đang dùng.
 
 ## Cài repo template
 
@@ -283,8 +313,8 @@ cd /path/to/multi-repo/<repo>
 bash scripts/repo-check.sh
 ```
 
-Repo agent hiểu concern rồi áp dụng Knowledge MCP decision rule nhưng vẫn không được
-đọc sibling source/result/runtime state.
+Repo agent hiểu concern rồi áp dụng Knowledge decision rule nhưng không đọc sibling
+source/result/runtime state.
 
 ## Migrate workspace đã tồn tại
 
@@ -296,44 +326,21 @@ bash scripts/migrate-workspace.sh /path/to/multi-repo
 bash scripts/migrate-workspace.sh --status /path/to/multi-repo
 ```
 
-Shell script chỉ là stable launcher; migration core nằm trong
-`scripts/migrate_workspace.py`. Script đọc `repos.yaml`, migrate workspace và từng
-exact Git root con. Thêm `--verify` để chạy workspace/repo checker trước khi ghi
-migration state.
-
-Migration definitions là JSON dưới `migrations/`, pin exact `from_ref` / `to_ref`
-và khai báo strategy riêng cho từng file:
-
-- `replace`: template-owned policy/docs/checker/runtime; local divergence được backup
-  trước khi replace;
-- `merge`: dùng cho instruction có local customization cần giữ bằng 3-way merge;
-- `delete`: legacy template path; diverged content được archive trước khi xóa;
-- `manual_review`: live/customized artifact không overwrite tự động.
-
-Migration `0004` chuyển execution handoff từ opaque prompt + Markdown result sang
-TaskPacket + native Stop-hook response + SQLite session ownership. Với repo
-`AGENTS.md`, migration dùng 3-way merge để không mặc nhiên xóa instruction đặc thù
-của product repository.
-
-Preflight chạy cho workspace + toàn bộ repo của cùng migration version trước khi ghi
-managed file nào. State được lưu tập trung tại:
-
-```text
-<workspace>/.qiqi/agent-knowledge-harness-migrations.tsv
-```
-
-State giữ version riêng cho workspace và từng `repo:<relative-path>`, nên repository
-được thêm vào `repos.yaml` sau này vẫn bắt đầu migrate từ version 0.
+Migration definitions là JSON dưới `migrations/`, pin exact `from_ref` / `to_ref` và
+khai báo strategy riêng từng file (`replace`, `merge`, `delete`, `manual_review`).
+Preflight chạy cho workspace + toàn bộ repo trước khi ghi managed file nào; state lưu
+ở `.qiqi/agent-knowledge-harness-migrations.tsv`.
 
 ## Thiết kế cố ý
 
 - Knowledge Store không phụ thuộc current workspace/repo.
-- Agent submit knowledge; Knowledge MCP materialize file.
+- Search và full read là hai stage riêng; candidate discovery không hydrate full top-N.
+- Agent submit semantic knowledge; MCP materialize file.
 - Knowledge identity không phải filesystem path.
 - Human Markdown edit là first-class workflow.
-- Knowledge usage là conditional theo task semantics, không phải per-turn ritual.
-- qiqi_delegate dùng SQLite cho execution session ownership; Knowledge MCP vẫn giữ
-  Markdown store riêng, không trộn hai lifecycle.
-- qiqi_delegate không dùng terminal viewport hoặc undocumented transcript schema để
-  vận chuyển semantic result.
+- Knowledge usage conditional theo task semantics, không per-turn ritual.
+- qiqi_delegate dùng SQLite cho execution session ownership; Knowledge MCP giữ
+  Markdown store riêng.
+- qiqi_delegate không dùng terminal viewport/undocumented transcript schema để vận
+  chuyển semantic result.
 - QiQi broker live evidence; Knowledge MCP broker reusable knowledge.
