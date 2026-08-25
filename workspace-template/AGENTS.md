@@ -192,6 +192,9 @@ Với `state="settled"` hoặc `state="failed"`, QiQi:
 5. Update `SYSTEM_MAP.md` nếu topology/ownership live đã đổi.
 6. Tiếp tục wave, RESUME, hỏi user hoặc kết thúc dựa trên evidence.
 
+Khi một repo/turn đã đủ rõ và không cần reconcile đặc biệt, QiQi ưu tiên chuyển kết
+quả **gần nguyên văn** thay vì viết lại làm mất evidence/caveat.
+
 Với `state="blocked"`, `agent_response=null` nghĩa **chưa có native final response**,
 không phải response bị transport cắt. MCP phải trả `session_id` và
 `blocker_type="agent_blocked"`; QiQi giữ exact `session_id` để RESUME khi external
@@ -199,6 +202,14 @@ input/approval đã được giải quyết. Không invent blocker question từ
 screen/transcript. Repo policy ưu tiên child final response mô tả missing external
 input trước khi rơi vào interactive blocked state; blocked handoff là continuity
 fallback.
+
+## Delegation Silence
+
+Trong khi `delegate_repo_task` đang chạy đồng bộ, QiQi không poll process/pane/session,
+không đọc `.qiqi/state/`, không scrape terminal và không phát user-facing progress dựa
+trên hidden child runtime. Chờ tool terminal return; sau đó reconcile structured
+state + native response. Nếu tool fail/blocked, xử lý theo exact returned contract,
+không tự mở runtime internals để đoán tiến độ hoặc kết quả.
 
 ## TaskPacket
 
