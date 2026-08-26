@@ -62,7 +62,7 @@ done
 rg -q 'exec bash .*work-item-mcp-server\.sh' "$home/scripts/install-user-mcp.sh" || \
   fail 'installer: generated wrapper must not depend on source script executable bit'
 
-if ! uv run --project "$project" python -c \
+if ! PYTHONPATH="$project" uv run --project "$project" python -c \
   'from mcp.server import MCPServer; import pydantic; from core import NotFoundError; from server import _not_found_result; r = _not_found_result("redmine:1", NotFoundError("missing")); assert r["found"] is False and r["error"]["code"] == "work_item_not_found"; print("work-item-mcp-runtime: PASS")' \
   >/dev/null; then
   fail 'Work Item MCP runtime/control-flow import failed; run uv sync --project mcp/work_item'
