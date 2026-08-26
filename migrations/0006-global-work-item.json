@@ -1,8 +1,8 @@
 {
   "version": 6,
   "from_ref": "e700c409886b0c1ae694ea593a9ba371283fbc87",
-  "to_ref": "2c09d23370c0d6031b1f50de1e6bd922f51109ed",
-  "description": "adopt user-scoped Global Work Item task truth on top of progressive Shared Knowledge, including the explicit ticket Work Item entry skill",
+  "to_ref": "f15c843a6ac666e655dabe972b7393aef831b478",
+  "description": "adopt user-scoped Global Work Item task truth on top of progressive Shared Knowledge",
   "workspace": {
     "merge": [
       "workspace-template/identity.md"
@@ -11,7 +11,6 @@
       "workspace-template/AGENTS.md",
       "workspace-template/README.md",
       "workspace-template/docs/WORKSPACE_SETUP.md",
-      "workspace-template/.agents/skills/ticket-work-item/SKILL.md",
       "workspace-template/scripts/workspace-check.sh"
     ],
     "delete": [
