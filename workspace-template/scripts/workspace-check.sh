@@ -30,6 +30,7 @@ required_files=(
   repos.yaml
   instructions/agent-routing.yaml
   instructions/model-routing.md
+  .agents/skills/ticket-work-item/SKILL.md
   .codex/config.toml
   .qiqi/.gitignore
   mcp/qiqi_delegate/pyproject.toml
@@ -102,6 +103,22 @@ done
 
 if rg -q 'English task title|read `result_path`|đọc `result_path`' "$agents_md"; then
   fail 'AGENTS.md: legacy workspace result artifact convention remains'
+fi
+
+skill="$workspace_root/.agents/skills/ticket-work-item/SKILL.md"
+if [[ -f "$skill" ]]; then
+  for pattern in \
+    '^name: ticket-work-item$' \
+    'Use only when the user explicitly invokes' \
+    'Do not auto-apply merely because' \
+    '\$ticket-work-item path/to/ticket\.md' \
+    'Resolve relative paths from the current workspace directory' \
+    'work_item_get' \
+    'expected_revision' \
+    'delegate_repo_task' \
+    'knowledge_search → knowledge_read → knowledge_write'; do
+    rg -q "$pattern" "$skill" || fail "ticket-work-item skill: missing contract: $pattern"
+  done
 fi
 
 codex_config="$workspace_root/.codex/config.toml"
