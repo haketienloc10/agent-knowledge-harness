@@ -19,8 +19,8 @@ unit test, IT, UAT, fix bug và Q&A mà không yêu cầu người dùng hoặc 
 bộ lịch sử sau mỗi session.
 
 MVP cố ý **không** là project-management product. Không có workflow DSL, event
-sourcing, RBAC, notification, UI, Redmine sync hoặc automatic phase transition.
-QiQi vẫn quyết định workflow và orchestration.
+sourcing, RBAC, notification, Redmine sync hoặc automatic phase transition. Human CLI
+chỉ là read-only observer. QiQi vẫn quyết định workflow và orchestration.
 
 ## Canonical identity
 
@@ -54,14 +54,12 @@ questions:
     answer: Có, trả null.
     decision_id: d1
 
-# Decision giữ lý do task hiện tại được hiểu/triển khai như vậy.
 decisions:
   - id: d1
     status: active
     summary: paymentStatus luôn xuất hiện; unknown trả null.
     decided_by: customer
 
-# Change ghi requirement/scope evolution, không ghi transcript.
 changes:
   - id: c1
     type: requirement_added
@@ -109,7 +107,7 @@ Repo status có: `pending`, `active`, `waiting`, `blocked`, `done`, `not_require
 Requirement change type MVP có: `requirement_added`, `requirement_changed`,
 `requirement_removed`, `scope_changed`.
 
-## Snapshot và history
+## Snapshot và material history
 
 Các field có hai vai trò khác nhau:
 
@@ -123,7 +121,46 @@ questions/decisions/changes/checkpoints
 
 Không persist terminal transcript, command-by-command activity hoặc agent reasoning.
 
-## API MVP
+## Optional task artifacts
+
+Artifact giải quyết detail dài không nên kéo theo mỗi lần đọc task tổng quát, ví dụ:
+
+```text
+intake
+investigation
+plan
+review
+report
+```
+
+Artifact **không bắt buộc**. Agent không tạo artifact như ceremony. Chỉ tạo khi user
+explicitly yêu cầu detail artifact hoặc yêu cầu task report/review cần được persist.
+
+Truth precedence:
+
+```text
+latest canonical Work Item > artifact dựa trên Work Item revision cũ
+```
+
+`work_item_get` chỉ gắn bounded thin artifact index. Full body không nằm trong
+`work_items.document_json` và không được trả tự động.
+
+Artifact body được chia section/chunk trong cùng SQLite DB:
+
+```text
+work_item_artifacts
+work_item_artifact_sections
+work_item_artifact_chunks
+```
+
+Mỗi append tối đa **16 KiB UTF-8**. Mỗi agent read tối đa **2 chunks / 32 KiB**.
+Artifact có revision riêng; append/finalize không tăng Work Item revision.
+
+Chi tiết đầy đủ: `ARTIFACTS.md`.
+
+## Public MCP API
+
+Canonical task state:
 
 ```text
 work_item_get(id)
@@ -131,6 +168,20 @@ work_item_list(status?, repository?, limit?)
 work_item_create(id, title, summary?, status?, phase?, current_requirements?, repositories?)
 work_item_update(id, expected_revision, changes)
 ```
+
+Optional detail artifacts:
+
+```text
+work_item_artifact_list(id, type?, limit?)
+work_item_artifact_get(id, artifact_id)
+work_item_artifact_create(id, type, title, based_on_work_item_revision, summary?, artifact_id?)
+work_item_artifact_append(id, artifact_id, expected_artifact_revision, section_id, content, section_title?)
+work_item_artifact_read(id, artifact_id, section_id, cursor?, limit_chunks?)
+work_item_artifact_finalize(id, artifact_id, expected_artifact_revision, summary?)
+```
+
+`work_item_artifact_get` chỉ trả metadata + section manifest. Muốn body phải đọc từng
+section bằng `work_item_artifact_read` và follow `next_cursor`.
 
 `work_item_update` dùng JSON merge-patch semantics:
 
@@ -141,6 +192,9 @@ work_item_update(id, expected_revision, changes)
 
 Arrays replace nguyên tử là intentional cho MVP: caller phải đọc Work Item hiện tại,
 reconcile full intended array, rồi update bằng exact revision.
+
+Derived artifact index fields do `work_item_get` trả (`artifacts`, `artifact_count`,
+`artifacts_truncated`) là read-only view; không được persist bằng `work_item_update`.
 
 ## Optimistic concurrency
 
@@ -154,9 +208,20 @@ QiQi update bằng expected_revision=12 -> conflict
 QiQi reread revision 13 -> reconcile -> retry
 ```
 
+Artifact có revision độc lập:
+
+```text
+Work Item revision 13
+report:1 revision 1
+append -> report:1 revision 2
+append -> report:1 revision 3
+finalize -> report:1 revision 4
+Work Item vẫn revision 13 nếu task semantics không đổi
+```
+
 Không có last-write-wins silent overwrite.
 
-SQLite dùng `BEGIN IMMEDIATE`, WAL và revision check để giữ atomicity khi nhiều
+SQLite dùng `BEGIN IMMEDIATE`, WAL và exact revision check để giữ atomicity khi nhiều
 process/agent cùng dùng một database.
 
 ## Ownership policy
@@ -173,6 +238,8 @@ QiQi sở hữu global orchestration state:
 - reconciliation sau cross-repo handoff;
 - quyết định task thực sự `done`.
 
+Artifact không thay ownership này. Một report cũ không override task state hiện hành.
+
 ### Repository execution agent
 
 Agent được đọc toàn bộ Work Item để hiểu context nhưng:
@@ -183,6 +250,9 @@ Agent được đọc toàn bộ Work Item để hiểu context nhưng:
 - không đánh dấu sibling repo done;
 - không tự xử lý phần việc của repository khác;
 - cross-repo remaining work phải được ghi/handoff và trả lại QiQi để điều phối.
+
+Nếu user explicit yêu cầu artifact và TaskPacket truyền yêu cầu đó, repo agent có thể
+contribute detail thuộc current repo; artifact vẫn không cho phép cross-repo execution.
 
 ## Questions, decisions và changes
 
@@ -232,6 +302,9 @@ WORK_ITEM_DB_PATH=/absolute/path/work-items.sqlite3
 Database không phụ thuộc CWD/workspace/repository. Cả QiQi và child agents kết nối
 cùng user-scoped MCP registration.
 
+Artifact tables nằm trong cùng DB; DB cũ được nâng schema lazily bằng idempotent table
+creation. Existing `work_items` rows/revisions không bị rewrite.
+
 Default installer path:
 
 ```text
@@ -251,27 +324,52 @@ bash scripts/install-user-mcp.sh \
   --db-path /path/to/work-items.sqlite3
 ```
 
-Installer tạo stable wrapper `~/.local/bin/agent-work-item-mcp` và đăng ký MCP tên
-`work_item` cho Codex/Claude CLI đang có. Nếu registration cùng tên trỏ sang runtime
-khác, installer fail thay vì overwrite âm thầm.
+Installer tạo:
+
+```text
+~/.local/bin/agent-work-item-mcp   # MCP runtime cho agents
+~/.local/bin/agent-work-item       # strictly read-only human CLI
+```
+
+MCP registration tên `work_item` vẫn trỏ vào `agent-work-item-mcp`. Human CLI không
+được đăng ký thành MCP tool/server.
+
+Human commands:
+
+```bash
+agent-work-item list
+agent-work-item show redmine:113387
+agent-work-item artifact redmine:113387 report:1 --manifest
+agent-work-item artifact redmine:113387 report:1
+```
+
+Chi tiết human UX: `CLI.md`.
 
 ## Verification
-
-Core tests không cần MCP runtime:
 
 ```bash
 bash scripts/work-item-template-check.sh
 ```
 
-Test cover ít nhất:
+Test/check cover ít nhất:
 
-- create/get/list;
+- Work Item create/get/list/update;
 - questions/decisions/requirement changes;
 - nested repo state merge;
-- stale revision conflict;
-- two concurrent writers từ cùng revision không cùng commit;
-- immutable metadata;
-- validation của semantic handoff/state.
+- stale Work Item revision conflict;
+- concurrent Work Item writers;
+- artifact DB upgrade không đổi Work Item revision;
+- artifact create/list/get manifest;
+- exact `based_on_work_item_revision`;
+- 16 KiB UTF-8 append bound;
+- 2-chunk bounded read + cursor;
+- independent artifact revision conflict;
+- draft -> complete lifecycle và complete immutability;
+- concurrent artifact writers;
+- thin/truncated artifact index;
+- human CLI full/section streaming;
+- human CLI read-only invariant;
+- MCP vẫn expose đúng 4 task tools + 6 artifact tools.
 
-Khi rollout thực tế, cần thêm smoke test trên Codex/Claude user-scoped MCP để xác
-nhận cả QiQi và repo child session đều nhìn cùng một database.
+Khi rollout thực tế, cần smoke test trên fresh Codex/Claude process để xác nhận tool
+schema mới được reload và QiQi/repo child cùng nhìn một DB/artifact set.
