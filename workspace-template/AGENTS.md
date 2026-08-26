@@ -43,6 +43,17 @@ work_item_create(...)
 work_item_update(id, expected_revision, changes)
 ```
 
+Optional task detail artifacts đi qua:
+
+```text
+work_item_artifact_list(id, type?, limit?)
+work_item_artifact_get(id, artifact_id)
+work_item_artifact_create(...)
+work_item_artifact_append(...)
+work_item_artifact_read(...)
+work_item_artifact_finalize(...)
+```
+
 Reusable knowledge đi qua:
 
 ```text
@@ -112,6 +123,38 @@ Decision cũ bị thay: `superseded` + `superseded_by`, không xóa history.
 
 Work Item không phải reusable Knowledge. Ticket-specific status/Q&A/blocker/change chỉ distill sang Knowledge khi xác minh được invariant/contract/behavior reusable qua nhiều task.
 
+## Optional Task Artifacts
+
+Task artifact là detail material gắn với Work Item nhưng **không phải canonical task state**. Dùng cho `intake`, `investigation`, `plan`, `review`, `report` khi user cần detail dài mà không nên kéo theo mỗi `work_item_get`.
+
+### Explicit-only
+
+Artifact là optional và **MUST NOT được tạo như ceremony**. Chỉ tạo khi user explicitly yêu cầu một detail artifact hoặc explicitly yêu cầu task report/review cần persist. `$ticket-work-item` bình thường không tự động tạo intake/investigation/plan/report artifact.
+
+Nếu user yêu cầu artifact trong task được delegate, requirement đó phải hiện rõ trong TaskPacket `user_request`/scope/context để child biết đây là explicit request; child không tự suy ra quyền tạo artifact chỉ vì tool tồn tại.
+
+### Progressive disclosure
+
+- `work_item_get` chỉ trả bounded thin artifact index; không body.
+- `work_item_artifact_list` chỉ trả thin metadata.
+- `work_item_artifact_get` chỉ trả metadata + ordered section manifest.
+- Body chỉ đọc bằng `work_item_artifact_read` theo section/cursor bounded.
+- Không hydrate toàn artifact chỉ để biết task status.
+
+Artifact content có thể rất dài. Mỗi append bị server bound theo UTF-8 bytes và mỗi read chỉ trả bounded chunk window. Caller split/follow `next_cursor`; không cố gửi/đọc full document trong một MCP call.
+
+### Truth/revision
+
+```text
+latest canonical Work Item > artifact dựa trên revision cũ
+```
+
+`based_on_work_item_revision` ghi task snapshot artifact dùng. Artifact revision độc lập Work Item revision: append/finalize artifact không phải task semantic update và không được làm tăng Work Item revision.
+
+Artifact create pin exact current Work Item revision. Stale Work Item revision → reread Work Item. Artifact append/finalize dùng exact artifact revision; `artifact_revision_conflict` → `work_item_artifact_get` → reconcile → retry.
+
+Artifact lifecycle MVP `draft → complete`; complete không append tiếp. Artifact không thay questions/decisions/current requirements/blockers/next actions. Nếu artifact conflict current Work Item, current Work Item thắng.
+
 ## Shared Knowledge
 
 ### Khi nào dùng
@@ -162,7 +205,8 @@ QiQi là orchestration/synchronization broker, không memory bus. Child đọc c
 4. Search/read Knowledge nếu durable context có thể đổi orchestration.
 5. Đưa Work Item ID + current revision vào `required_context`.
 6. Inline external fact ngoài Work Item mà QiQi dùng cho semantics với provenance/certainty.
-7. Delegate bằng `delegate_repo_task`.
+7. Nếu user explicitly yêu cầu artifact mà child cần contribute, truyền artifact objective/identity/revision hiện hành trong TaskPacket; không bắt child tự discover toàn artifact set.
+8. Delegate bằng `delegate_repo_task`.
 
 ## Sau delegation
 
@@ -173,7 +217,8 @@ Với `settled`/`failed`:
 3. Reconcile response với Work Item + objective + acceptance + verification.
 4. Nếu cross-repo handoff chưa persist, reconcile vào Work Item.
 5. Update global status/phase/summary/next_actions khi evidence đủ.
-6. Tiếp tục wave, RESUME, hỏi user/customer hoặc kết thúc.
+6. Nếu user yêu cầu task-level review/report artifact, materialize/finalize nó từ latest canonical state + relevant bounded artifact reads + repo evidence; không dùng artifact cũ để override latest state.
+7. Tiếp tục wave, RESUME, hỏi user/customer hoặc kết thúc.
 
 Với `blocked`, `agent_response=null` nghĩa native final response chưa tồn tại. Giữ exact `session_id`; không invent blocker content từ screen/transcript.
 
@@ -226,6 +271,8 @@ Trong khi `delegate_repo_task` đang chạy đồng bộ, QiQi không poll proce
 
 - qiqi_delegate infrastructure failure: không shell fallback/screen scrape.
 - Work Item revision conflict: reread/reconcile/retry, không overwrite.
+- Artifact revision conflict: artifact_get/reconcile/retry, không làm tăng Work Item revision để né conflict.
+- Artifact persistence failure: không coi artifact là complete; canonical Work Item state vẫn riêng.
 - Work Item persistence failure: không tạo local Markdown fallback.
 - Knowledge failure: không coi như store rỗng; giữ caveat nếu durable dependency ảnh hưởng conclusion.
 
@@ -238,10 +285,11 @@ Product Work Item chỉ `done` khi:
 3. required verification pass hoặc deviation được user chấp nhận;
 4. không còn mandatory blocker/question/dependency/handoff;
 5. substantive reusable-knowledge review/write hoàn tất;
-6. QiQi update Work Item `status=done` + final summary/checkpoint.
+6. artifact chỉ là DoD requirement nếu user explicitly yêu cầu artifact đó; nếu required thì artifact phải complete hoặc failure/caveat được báo rõ;
+7. QiQi update Work Item `status=done` + final summary/checkpoint.
 
 QiQi không tự vào repo để bù evidence thiếu.
 
 ## Báo cáo user
 
-Dùng Work Item để trả ongoing status/next action. Khi một repo turn rõ và không conflict, ưu tiên giữ native evidence gần nguyên văn; synthesize mạnh khi có cross-repo/dependency/decision reconciliation thật.
+Dùng Work Item để trả ongoing status/next action. Khi một repo turn rõ và không conflict, ưu tiên giữ native evidence gần nguyên văn; synthesize mạnh khi có cross-repo/dependency/decision reconciliation thật. Chỉ persist detailed report artifact khi user đã yêu cầu; không biến mọi final answer thành artifact.
