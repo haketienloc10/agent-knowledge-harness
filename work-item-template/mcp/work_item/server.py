@@ -8,6 +8,18 @@ from typing import Any, Annotated, Literal
 from mcp.server import MCPServer
 from pydantic import Field
 
+from artifacts import (
+    ARTIFACT_CHUNK_MAX_BYTES,
+    ARTIFACT_READ_MAX_BYTES,
+    ArtifactConflictError,
+    ArtifactNotFoundError,
+    append_artifact,
+    create_artifact,
+    finalize_artifact,
+    get_artifact,
+    list_artifacts,
+    read_artifact_section,
+)
 from core import (
     ConflictError,
     NotFoundError,
@@ -22,9 +34,15 @@ from core import (
 )
 
 WorkItemStatus = Literal["active", "waiting", "blocked", "done", "cancelled"]
+ArtifactType = Literal["intake", "investigation", "plan", "review", "report"]
 WorkItemId = Annotated[str, Field(min_length=3, max_length=256)]
+ArtifactId = Annotated[str, Field(min_length=3, max_length=128)]
+SectionId = Annotated[str, Field(min_length=1, max_length=128)]
 Revision = Annotated[int, Field(ge=1)]
 ListLimit = Annotated[int, Field(ge=1, le=200)]
+ArtifactListLimit = Annotated[int, Field(ge=1, le=100)]
+ArtifactReadLimit = Annotated[int, Field(ge=1, le=ARTIFACT_READ_MAX_BYTES)]
+ArtifactContent = Annotated[str, Field(min_length=1, max_length=ARTIFACT_CHUNK_MAX_BYTES)]
 
 
 def _db_path() -> Path:
@@ -50,6 +68,18 @@ def _not_found_result(item_id: str, exc: NotFoundError) -> dict[str, Any]:
 
 
 def _raise_actionable_error(exc: WorkItemError) -> None:
+    if isinstance(exc, ArtifactConflictError):
+        message = str(exc)
+        if "artifact revision conflict" in message:
+            raise ValueError(
+                "code=artifact_revision_conflict; "
+                f"{message}; action=call work_item_artifact_get again and retry with its exact revision"
+            ) from exc
+        raise ValueError(f"code=artifact_conflict; {message}") from exc
+    if isinstance(exc, ArtifactNotFoundError):
+        raise ValueError(
+            f"code=artifact_not_found; {exc}; action=call work_item_artifact_list/get to verify artifact identity"
+        ) from exc
     if isinstance(exc, ConflictError):
         message = str(exc)
         if "revision conflict" in message:
@@ -69,6 +99,12 @@ def _raise_actionable_error(exc: WorkItemError) -> None:
     raise RuntimeError(f"code=work_item_store_error; {exc}") from exc
 
 
+def _with_artifacts(item: dict[str, Any]) -> dict[str, Any]:
+    result = dict(item)
+    result["artifacts"] = list_artifacts(_db_path(), item["id"], limit=100)
+    return result
+
+
 mcp = MCPServer(
     "Global Work Item",
     instructions=(
@@ -85,16 +121,23 @@ mcp = MCPServer(
         "the exact revision returned by work_item_get/list and reread on conflict. The changes "
         "object uses JSON merge-patch semantics: nested objects merge, arrays replace atomically, "
         "and null removes a field; required fields cannot be removed. A missing work_item_get is "
-        "normal startup control flow and returns found=false so QiQi can create the item."
+        "normal startup control flow and returns found=false so QiQi can create the item. "
+        "Optional task artifacts provide progressive-disclosure detail for explicit user-requested "
+        "intake, investigation, plan, review or report material. Do not create artifacts merely as "
+        "normal progress bookkeeping. work_item_get returns only thin artifact metadata. Full artifact "
+        "content must be read by section through bounded work_item_artifact_read calls. Artifact writes "
+        "are independently revisioned, append-only while draft, limited to 32000 UTF-8 bytes per call, "
+        "and become immutable after finalize. Artifact mutations never advance the Work Item revision. "
+        "If artifact detail conflicts with newer canonical Work Item state, the Work Item wins."
     ),
 )
 
 
 @mcp.tool()
 async def work_item_get(id: WorkItemId) -> dict[str, Any]:
-    """Return the complete canonical Work Item; if absent, return found=false without tool failure."""
+    """Return canonical Work Item state plus a thin artifact index; absent items return found=false."""
     try:
-        return get_work_item(_db_path(), id)
+        return _with_artifacts(get_work_item(_db_path(), id))
     except NotFoundError as exc:
         return _not_found_result(id, exc)
     except WorkItemError as exc:
@@ -137,7 +180,7 @@ async def work_item_create(
             current_requirements=current_requirements,
             repositories=repositories,
         )
-        return create_work_item(_db_path(), document)
+        return _with_artifacts(create_work_item(_db_path(), document))
     except WorkItemError as exc:
         _raise_actionable_error(exc)
 
@@ -152,12 +195,127 @@ async def work_item_update(
 
     Nested objects merge. Arrays are replaced as a whole, which keeps MVP semantics explicit:
     read the current document, reconcile the full intended array value, then update using that
-    exact revision. Do not use this tool as an activity transcript; persist current requirements,
-    material questions/decisions/requirement changes, repo evidence, blockers, handoffs, next
-    actions and meaningful checkpoints only.
+    exact revision. `artifacts` is derived metadata and cannot be written through this tool.
     """
     try:
-        return update_work_item(_db_path(), id, expected_revision, changes)
+        if "artifacts" in changes:
+            raise ValidationError(
+                "artifacts is derived metadata; use work_item_artifact_* tools instead"
+            )
+        return _with_artifacts(update_work_item(_db_path(), id, expected_revision, changes))
+    except WorkItemError as exc:
+        _raise_actionable_error(exc)
+
+
+@mcp.tool()
+async def work_item_artifact_list(
+    id: WorkItemId,
+    type: ArtifactType | None = None,
+    limit: ArtifactListLimit = 50,
+) -> list[dict[str, Any]]:
+    """List thin artifact metadata for a Work Item without returning artifact bodies."""
+    try:
+        return list_artifacts(_db_path(), id, artifact_type=type, limit=limit)
+    except WorkItemError as exc:
+        _raise_actionable_error(exc)
+
+
+@mcp.tool()
+async def work_item_artifact_get(
+    id: WorkItemId,
+    artifact_id: ArtifactId,
+) -> dict[str, Any]:
+    """Return artifact metadata and ordered section manifest; never returns section content."""
+    try:
+        return get_artifact(_db_path(), id, artifact_id)
+    except WorkItemError as exc:
+        _raise_actionable_error(exc)
+
+
+@mcp.tool()
+async def work_item_artifact_create(
+    id: WorkItemId,
+    type: ArtifactType,
+    title: str,
+    summary: str,
+    based_on_work_item_revision: Revision,
+    artifact_id: ArtifactId | None = None,
+) -> dict[str, Any]:
+    """Create optional draft artifact metadata based on the exact current Work Item revision."""
+    try:
+        return create_artifact(
+            _db_path(),
+            id,
+            artifact_type=type,
+            title=title,
+            summary=summary,
+            based_on_work_item_revision=based_on_work_item_revision,
+            artifact_id=artifact_id,
+        )
+    except WorkItemError as exc:
+        _raise_actionable_error(exc)
+
+
+@mcp.tool()
+async def work_item_artifact_append(
+    id: WorkItemId,
+    artifact_id: ArtifactId,
+    expected_artifact_revision: Revision,
+    section_id: SectionId,
+    content: ArtifactContent,
+    section_title: str | None = None,
+) -> dict[str, Any]:
+    """Append one bounded UTF-8 chunk to a draft artifact section and return the new manifest."""
+    try:
+        return append_artifact(
+            _db_path(),
+            id,
+            artifact_id,
+            expected_artifact_revision=expected_artifact_revision,
+            section_id=section_id,
+            section_title=section_title,
+            content=content,
+        )
+    except WorkItemError as exc:
+        _raise_actionable_error(exc)
+
+
+@mcp.tool()
+async def work_item_artifact_read(
+    id: WorkItemId,
+    artifact_id: ArtifactId,
+    section_id: SectionId,
+    cursor: str | None = None,
+    limit_bytes: ArtifactReadLimit = ARTIFACT_READ_MAX_BYTES,
+) -> dict[str, Any]:
+    """Read at most 32000 UTF-8 bytes from one artifact section using an opaque continuation cursor."""
+    try:
+        return read_artifact_section(
+            _db_path(),
+            id,
+            artifact_id,
+            section_id=section_id,
+            cursor=cursor,
+            limit_bytes=limit_bytes,
+        )
+    except WorkItemError as exc:
+        _raise_actionable_error(exc)
+
+
+@mcp.tool()
+async def work_item_artifact_finalize(
+    id: WorkItemId,
+    artifact_id: ArtifactId,
+    expected_artifact_revision: Revision,
+) -> dict[str, Any]:
+    """Finalize a non-empty draft artifact. Completed artifacts are immutable in the MVP."""
+    try:
+        return finalize_artifact(
+            _db_path(),
+            id,
+            artifact_id,
+            expected_artifact_revision=expected_artifact_revision,
+        )
     except WorkItemError as exc:
         _raise_actionable_error(exc)
 
