@@ -10,8 +10,9 @@ usage() {
   cat <<'EOF'
 Usage: install-user-mcp.sh [--db-path PATH] [--bin-dir PATH]
 
-Installs the user-level Global Work Item MCP:
-- stable `agent-work-item-mcp` wrapper;
+Installs the user-level Global Work Item tools:
+- stable `agent-work-item-mcp` wrapper for QiQi/repository agents;
+- read-only `agent-work-item` CLI for human list/detail inspection;
 - MCP registration named `work_item` for available Codex/Claude CLIs;
 - one global SQLite database shared by QiQi and repository execution agents.
 
@@ -59,35 +60,45 @@ mkdir -p "$(dirname "$db_path")" "$bin_dir"
 
 uv sync --project "$project"
 
-wrapper="$bin_dir/agent-work-item-mcp"
-HOME_PATH="$home" DB_PATH="$db_path" python3 - "$wrapper" <<'PY'
+mcp_wrapper="$bin_dir/agent-work-item-mcp"
+cli_wrapper="$bin_dir/agent-work-item"
+HOME_PATH="$home" DB_PATH="$db_path" python3 - "$mcp_wrapper" "$cli_wrapper" <<'PY'
 import os
 import shlex
 import sys
 from pathlib import Path
 
-wrapper = Path(sys.argv[1])
+mcp_wrapper = Path(sys.argv[1])
+cli_wrapper = Path(sys.argv[2])
 home = os.environ["HOME_PATH"]
 db = os.environ["DB_PATH"]
-text = "\n".join(
-    [
-        "#!/usr/bin/env bash",
-        "set -euo pipefail",
-        f"export WORK_ITEM_DB_PATH={shlex.quote(db)}",
-        f"exec bash {shlex.quote(home + '/scripts/work-item-mcp-server.sh')}",
-        "",
-    ]
-)
-wrapper.write_text(text, encoding="utf-8")
-wrapper.chmod(0o755)
+
+def write_wrapper(path: Path, launcher: str, pass_args: bool) -> None:
+    command = f"exec bash {shlex.quote(home + launcher)}"
+    if pass_args:
+        command += ' "$@"'
+    text = "\n".join(
+        [
+            "#!/usr/bin/env bash",
+            "set -euo pipefail",
+            f"export WORK_ITEM_DB_PATH={shlex.quote(db)}",
+            command,
+            "",
+        ]
+    )
+    path.write_text(text, encoding="utf-8")
+    path.chmod(0o755)
+
+write_wrapper(mcp_wrapper, "/scripts/work-item-mcp-server.sh", False)
+write_wrapper(cli_wrapper, "/scripts/work-item-cli.sh", True)
 PY
 
 verify_existing_target() {
   local client="$1"
   local output="$2"
-  if ! printf '%s\n' "$output" | grep -Fq -- "$wrapper"; then
+  if ! printf '%s\n' "$output" | grep -Fq -- "$mcp_wrapper"; then
     printf 'ERROR: %s MCP `work_item` already exists but does not point to %s\n' \
-      "$client" "$wrapper" >&2
+      "$client" "$mcp_wrapper" >&2
     printf 'Remove/rename the conflicting registration explicitly, then rerun installer.\n' >&2
     return 78
   fi
@@ -99,7 +110,7 @@ if command -v codex >/dev/null 2>&1; then
     verify_existing_target 'Codex' "$existing"
     printf 'Codex MCP `work_item` already points to the stable wrapper; keeping registration.\n'
   else
-    codex mcp add work_item -- "$wrapper"
+    codex mcp add work_item -- "$mcp_wrapper"
   fi
   verified="$(codex mcp get work_item 2>&1)"
   verify_existing_target 'Codex' "$verified"
@@ -113,7 +124,7 @@ if command -v claude >/dev/null 2>&1; then
     verify_existing_target 'Claude' "$existing"
     printf 'Claude MCP `work_item` already points to the stable wrapper; keeping registration.\n'
   else
-    claude mcp add work_item --scope user "$wrapper"
+    claude mcp add work_item --scope user "$mcp_wrapper"
   fi
   verified="$(claude mcp get work_item 2>&1)"
   verify_existing_target 'Claude' "$verified"
@@ -127,6 +138,8 @@ if ((registered == 0)); then
   exit 69
 fi
 
-printf 'Work Item MCP wrapper: %s\n' "$wrapper"
+printf 'Work Item MCP wrapper: %s\n' "$mcp_wrapper"
+printf 'Work Item human CLI: %s\n' "$cli_wrapper"
 printf 'Work Item database: %s\n' "$db_path"
+printf 'Try: %s list\n' "$cli_wrapper"
 printf 'Open a fresh agent session to load the user/global MCP registration.\n'
