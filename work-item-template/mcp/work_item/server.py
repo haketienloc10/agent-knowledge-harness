@@ -36,6 +36,19 @@ def _db_path() -> Path:
     return resolve_db_path(raw)
 
 
+def _not_found_result(item_id: str, exc: NotFoundError) -> dict[str, Any]:
+    """Return a normal control-flow result for an absent canonical Work Item."""
+    return {
+        "found": False,
+        "id": item_id,
+        "error": {
+            "code": "work_item_not_found",
+            "message": str(exc),
+            "action": "verify the canonical task id or create the Work Item",
+        },
+    }
+
+
 def _raise_actionable_error(exc: WorkItemError) -> None:
     if isinstance(exc, ConflictError):
         message = str(exc)
@@ -71,16 +84,19 @@ mcp = MCPServer(
         "knowledge and not runtime session state. Updates use optimistic concurrency: always pass "
         "the exact revision returned by work_item_get/list and reread on conflict. The changes "
         "object uses JSON merge-patch semantics: nested objects merge, arrays replace atomically, "
-        "and null removes a field; required fields cannot be removed."
+        "and null removes a field; required fields cannot be removed. A missing work_item_get is "
+        "normal startup control flow and returns found=false so QiQi can create the item."
     ),
 )
 
 
 @mcp.tool()
 async def work_item_get(id: WorkItemId) -> dict[str, Any]:
-    """Return the complete canonical Work Item, including revision and task history context."""
+    """Return the complete canonical Work Item; if absent, return found=false without tool failure."""
     try:
         return get_work_item(_db_path(), id)
+    except NotFoundError as exc:
+        return _not_found_result(id, exc)
     except WorkItemError as exc:
         _raise_actionable_error(exc)
 
