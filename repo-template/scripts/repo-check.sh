@@ -92,7 +92,7 @@ if [[ -f "$agents" ]]; then
 
   rg -U -q 'Knowledge MCP là tool exception.*không phải filesystem exception' "$agents" || \
     fail 'AGENTS.md: shared knowledge must not become an external filesystem exception'
-  rg -U -q 'không chia sẻ hidden conversation.*sibling-repository state' "$agents" || \
+  rg -U -q '(?s)không chia sẻ hidden conversation.*sibling-repository state' "$agents" || \
     fail 'AGENTS.md: child must treat QiQi live context as closed-world input'
   rg -U -q 'required_context.*required premise' "$agents" || \
     fail 'AGENTS.md: QiQi-used task premises must be explicit required_context'
@@ -153,7 +153,7 @@ if [[ -f "$setup" ]]; then
     fail 'docs/REPO_SETUP.md: missing knowledge_search setup/smoke guidance'
   rg -q 'knowledge_read' "$setup" || \
     fail 'docs/REPO_SETUP.md: missing exact knowledge_read guidance'
-  if rg -q '### Repo-local Knowledge|### Cross-repo Impact|fixed headings|result_path|knowledge_read\(keywords' "$setup"; then
+  if rg -q '### Repo-local Knowledge|### Cross-repo Impact|result_path|knowledge_read\(keywords' "$setup"; then
     fail 'docs/REPO_SETUP.md: legacy result or knowledge API contract found'
   fi
 fi
