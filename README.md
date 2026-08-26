@@ -55,10 +55,9 @@ QiQi control plane tại workspace root:
 - MCP-owned SQLite session ownership dưới `.qiqi/state/`;
 - dependency waves, evidence reuse và user reporting.
 
-Workspace **không sở hữu task store hoặc durable knowledge store**. `.qiqi/tasks/`
-không còn là task source of truth. `.qiqi/runs/` chỉ có thể tồn tại như legacy
-migration source cho native session ownership cũ; turn mới không dùng Markdown
-artifact làm semantic transport/history.
+Workspace **không sở hữu task store hoặc durable knowledge store**. `.qiqi/runs/`
+chỉ có thể tồn tại như legacy migration source cho native session ownership cũ;
+turn mới không dùng Markdown artifact làm semantic transport/history.
 
 ## `repo-template/`
 
@@ -450,16 +449,10 @@ Migration core nằm trong `scripts/migrate_workspace.py`. Definitions là JSON 
 Migration `0005-global-work-item.json`:
 
 - update workspace/repo policy, setup docs và checker sang canonical Work Item;
-- remove ba `.qiqi/tasks` skeleton files do template sở hữu;
+- remove template-owned workspace task skeleton;
 - catch up routing files đã thay đổi trên `main` sau migration `0004`;
 - 3-way merge `repo-template/AGENTS.md` để giữ product-specific instruction;
-- đánh dấu `.qiqi/tasks` là manual review vì có thể chứa task thật của workspace cũ;
 - **không** tự cài user-scoped Work Item MCP hoặc ghi user config.
-
-Nếu `.qiqi/tasks` cũ còn task thật, phải tạo/reconcile canonical Work Item tương ứng
-trước khi archive/remove legacy files. `workspace-check` cho phép empty directory
-residue sau migration nhưng fail nếu còn file legacy, để không tồn tại hai active
-task truths.
 
 ## Thiết kế cố ý
 
