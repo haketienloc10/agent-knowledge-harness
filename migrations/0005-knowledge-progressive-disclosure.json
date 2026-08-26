@@ -1,0 +1,29 @@
+{
+  "version": 5,
+  "from_ref": "a2f63c178efd735fbc72005dd1edb50851182b85",
+  "to_ref": "e700c409886b0c1ae694ea593a9ba371283fbc87",
+  "description": "progressive Shared Knowledge retrieval with thin search cards and exact full reads",
+  "workspace": {
+    "merge": [
+      "workspace-template/identity.md"
+    ],
+    "replace": [
+      "workspace-template/AGENTS.md",
+      "workspace-template/README.md",
+      "workspace-template/docs/WORKSPACE_SETUP.md"
+    ],
+    "delete": [],
+    "manual_review": []
+  },
+  "repo": {
+    "merge": [
+      "repo-template/AGENTS.md"
+    ],
+    "replace": [
+      "repo-template/docs/REPO_SETUP.md",
+      "repo-template/scripts/repo-check.sh"
+    ],
+    "delete": [],
+    "manual_review": []
+  }
+}

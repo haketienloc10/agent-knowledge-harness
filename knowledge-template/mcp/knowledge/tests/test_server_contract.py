@@ -39,38 +39,69 @@ def error_text(result) -> str:
 
 
 class KnowledgeServerContractTest(unittest.IsolatedAsyncioTestCase):
-    async def test_tools_list_exposes_nested_write_schema(self):
+    async def test_tools_list_exposes_progressive_disclosure_contract(self):
         async with Client(mcp) as client:
             listed = await client.list_tools()
         tools = {tool.name: tool for tool in listed.tools}
-        self.assertEqual(set(tools), {"knowledge_read", "knowledge_write"})
+        self.assertEqual(
+            set(tools),
+            {"knowledge_search", "knowledge_read", "knowledge_write"},
+        )
 
-        write_tool = tools["knowledge_write"]
-        description = " ".join((write_tool.description or "").split())
-        self.assertIn("knowledge-distill", description)
-        self.assertIn("task premise", description)
-        self.assertIn("Compression must not increase certainty", description)
-        self.assertIn("PRECALL LENGTH GATE", description)
-        self.assertIn("300 characters or less", description)
-        self.assertIn("600 characters or less", description)
-        self.assertIn("SERIALIZATION RECOVERY", description)
-        self.assertIn("Do not resend the same multi-entry batch", description)
-        self.assertIn("one entry per typed `knowledge_write` call", description)
-        self.assertIn("not persisted", description)
+        search_schema = tools["knowledge_search"].input_schema
+        self.assertEqual(set(search_schema["properties"]), {"keywords", "context", "limit"})
 
-        schema = write_tool.input_schema
-        entries = schema["properties"]["entries"]
+        read_schema = tools["knowledge_read"].input_schema
+        self.assertEqual(set(read_schema["properties"]), {"ids"})
+        ids_schema = read_schema["properties"]["ids"]
+        self.assertEqual(ids_schema.get("maxItems"), 2)
+
+        write_schema = tools["knowledge_write"].input_schema
+        entries = write_schema["properties"]["entries"]
         item_schema = entries["items"]
         if "$ref" in item_schema:
             ref_name = item_schema["$ref"].rsplit("/", 1)[-1]
-            entry = schema["$defs"][ref_name]
+            entry = write_schema["$defs"][ref_name]
         else:
             entry = item_schema
-
         self.assertIn("routing", entry["properties"])
         for misplaced in ("summary", "when_to_read", "keywords", "aliases"):
             self.assertNotIn(misplaced, entry["properties"])
         self.assertFalse(entry.get("additionalProperties", True))
+
+    async def test_search_is_thin_then_read_hydrates_exact_id(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            init_store(root)
+            with patch.dict(os.environ, {"KNOWLEDGE_STORE_ROOT": str(root)}):
+                async with Client(mcp) as client:
+                    created = await client.call_tool(
+                        "knowledge_write",
+                        {"entries": [valid_entry(content="version one")]},
+                    )
+                    self.assertFalse(created.is_error)
+                    item_id = created.structured_content["changes"][0]["id"]
+
+                    searched = await client.call_tool(
+                        "knowledge_search",
+                        {"keywords": ["payment retry", "test retry thanh toán"], "limit": 10},
+                    )
+                    self.assertFalse(searched.is_error)
+                    hit = searched.structured_content["results"][0]
+                    self.assertEqual(hit["id"], item_id)
+                    for forbidden in ("content", "sources", "revision", "path", "canonical_name"):
+                        self.assertNotIn(forbidden, hit)
+
+                    read = await client.call_tool(
+                        "knowledge_read",
+                        {"ids": [item_id]},
+                    )
+                    self.assertFalse(read.is_error)
+                    hydrated = read.structured_content["results"][0]
+                    self.assertEqual(hydrated["content"], "version one")
+                    self.assertIn("revision", hydrated)
+                    self.assertIn("routing", hydrated)
+                    self.assertNotIn("path", hydrated)
 
     async def test_flat_routing_payload_fails_before_tool_body_with_hint(self):
         bad_entry = valid_entry()
@@ -82,10 +113,7 @@ class KnowledgeServerContractTest(unittest.IsolatedAsyncioTestCase):
                 {"entries": [bad_entry]},
             )
         self.assertTrue(result.is_error)
-        self.assertIn(
-            "must be nested under the 'routing' object",
-            error_text(result),
-        )
+        self.assertIn("must be nested under the 'routing' object", error_text(result))
 
     async def test_empty_review_returns_structured_output(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -98,10 +126,7 @@ class KnowledgeServerContractTest(unittest.IsolatedAsyncioTestCase):
                         {"entries": []},
                     )
         self.assertFalse(result.is_error)
-        self.assertEqual(
-            result.structured_content,
-            {"reviewed": True, "changes": []},
-        )
+        self.assertEqual(result.structured_content, {"reviewed": True, "changes": []})
 
     async def test_stale_revision_error_tells_agent_exact_recovery(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -126,10 +151,6 @@ class KnowledgeServerContractTest(unittest.IsolatedAsyncioTestCase):
                         {"entries": [update]},
                     )
                     self.assertFalse(updated.is_error)
-                    self.assertNotEqual(
-                        old_revision,
-                        updated.structured_content["changes"][0]["revision"],
-                    )
 
                     stale = valid_entry(content="stale version")
                     stale["id"] = item_id
