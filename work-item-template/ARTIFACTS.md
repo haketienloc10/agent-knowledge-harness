@@ -63,6 +63,10 @@ work_item_artifact_read
 
 Không có MCP call nào đọc toàn artifact body.
 
+`work_item_create` và `work_item_update` không thực hiện post-commit artifact enrichment.
+Mutation result phản ánh đúng canonical Work Item write vừa commit; caller cần artifact
+index thì đọc lại bằng `work_item_get` hoặc `work_item_artifact_list`.
+
 ## Storage
 
 Cùng SQLite canonical store, nhưng tách table:
@@ -75,6 +79,10 @@ work_item_artifact_chunks
 ```
 
 Không tạo Markdown/filesystem artifact store thứ hai.
+
+`artifacts` trong `work_item_get` là **derived metadata**, không phải field được persist
+trong `work_items.document_json`; core từ chối create/update nếu caller cố ghi field
+này.
 
 Metadata artifact gồm:
 
@@ -110,6 +118,18 @@ newline được bảo toàn.
 
 Read dùng continuation cursor. Cursor có thể tiếp tục giữa một stored chunk nhưng
 server không cắt giữa UTF-8 code point.
+
+Cursor là opaque contract đối với caller và được bind vào **artifact revision**. Một
+logical paginated read vì vậy chỉ đọc từ một revision duy nhất:
+
+```text
+read revision 5 -> next_cursor(revision 5)
+artifact append -> revision 6
+read bằng cursor revision 5 -> artifact_revision_conflict
+```
+
+Khi conflict, caller đọc lại manifest và restart section read từ revision hiện tại,
+không tiếp tục cursor cũ. Điều này tránh trộn page từ hai phiên bản artifact khác nhau.
 
 ## Artifact lifecycle
 
@@ -179,5 +199,7 @@ agent-work-item artifact redmine:113387 report:1
 agent-work-item artifact redmine:113387 report:1 --section code-review
 ```
 
-Human CLI mở SQLite bằng `mode=ro`; việc stream full artifact ra terminal không kéo
-body đó vào LLM/MCP context.
+Human CLI mở SQLite bằng `mode=ro`. Text-mode artifact view stream từng stored chunk
+trực tiếp ra terminal; nó không materialize toàn artifact trong RAM. Chỉ explicit
+`--json` mới materialize full selected artifact để in JSON. Cả hai path đều read-only
+và không kéo body vào LLM/MCP context.
