@@ -92,7 +92,7 @@ Một Work Item giữ tối thiểu:
 status / phase / summary
 current_requirements
 questions
- decisions
+decisions
 changes
 repos
 blockers
@@ -426,8 +426,8 @@ Blocked continuity fallback trả:
 MCP lấy nó từ native Stop hook, không từ viewport/screen và không parse transcript.
 
 Agent tự chọn response structure. Không có fixed result headings và không có
-agent-written `.qiqi/runs/*.md`/`.qiqi/tasks/*.md` cho turn mới. Product-task
-continuity nằm ở Work Item MCP.
+agent-written `.qiqi/runs/*.md` cho turn mới. Product-task continuity nằm ở Work
+Item MCP.
 
 `.qiqi/runs/` chỉ có thể tồn tại như legacy migration input cho native session
 ownership cũ; new work không dùng nó làm semantic history/source of truth.
