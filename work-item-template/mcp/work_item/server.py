@@ -77,6 +77,12 @@ def _raise_actionable_error(exc: WorkItemError) -> None:
     if isinstance(exc, ArtifactConflictError):
         message = str(exc)
         if "artifact revision conflict" in message:
+            if "cursor revision" in message:
+                raise ValueError(
+                    "code=artifact_revision_conflict; "
+                    f"{message}; action=call work_item_artifact_get again and restart "
+                    "that section read without the stale cursor"
+                ) from exc
             raise ValueError(
                 "code=artifact_revision_conflict; "
                 f"{message}; action=call work_item_artifact_get again and retry with its exact revision"
@@ -84,7 +90,8 @@ def _raise_actionable_error(exc: WorkItemError) -> None:
         raise ValueError(f"code=artifact_conflict; {message}") from exc
     if isinstance(exc, ArtifactNotFoundError):
         raise ValueError(
-            f"code=artifact_not_found; {exc}; action=call work_item_artifact_list/get to verify artifact identity"
+            f"code=artifact_not_found; {exc}; "
+            "action=call work_item_artifact_list/get to verify artifact identity"
         ) from exc
     if isinstance(exc, ConflictError):
         message = str(exc)
@@ -135,8 +142,10 @@ mcp = MCPServer(
         "normal progress bookkeeping. work_item_get returns only thin artifact metadata. Full artifact "
         "content must be read by section through bounded work_item_artifact_read calls. Artifact writes "
         "are independently revisioned, append-only while draft, limited to 32000 UTF-8 bytes per call, "
-        "and become immutable after finalize. Artifact mutations never advance the Work Item revision. "
-        "If artifact detail conflicts with newer canonical Work Item state, the Work Item wins."
+        "and become immutable after finalize. Artifact read cursors are bound to one artifact revision; "
+        "restart a section read if the artifact changes between pages. Artifact mutations never advance "
+        "the Work Item revision. If artifact detail conflicts with newer canonical Work Item state, the "
+        "Work Item wins."
     ),
 )
 
@@ -188,7 +197,8 @@ async def work_item_create(
             current_requirements=current_requirements,
             repositories=repositories,
         )
-        return _with_artifacts(create_work_item(_db_path(), document))
+        # Mutation success must not depend on a second, post-commit artifact query.
+        return create_work_item(_db_path(), document)
     except WorkItemError as exc:
         _raise_actionable_error(exc)
 
@@ -203,14 +213,11 @@ async def work_item_update(
 
     Nested objects merge. Arrays are replaced as a whole, which keeps MVP semantics explicit:
     read the current document, reconcile the full intended array value, then update using that
-    exact revision. `artifacts` is derived metadata and cannot be written through this tool.
+    exact revision. `artifacts` is derived metadata reserved by core and cannot be persisted.
     """
     try:
-        if "artifacts" in changes:
-            raise ValidationError(
-                "artifacts is derived metadata; use work_item_artifact_* tools instead"
-            )
-        return _with_artifacts(update_work_item(_db_path(), id, expected_revision, changes))
+        # Mutation success must not depend on a second, post-commit artifact query.
+        return update_work_item(_db_path(), id, expected_revision, changes)
     except WorkItemError as exc:
         _raise_actionable_error(exc)
 
@@ -296,7 +303,7 @@ async def work_item_artifact_read(
     cursor: str | None = None,
     limit_bytes: ArtifactReadLimit = ARTIFACT_READ_MAX_BYTES,
 ) -> dict[str, Any]:
-    """Read 4..32000 UTF-8 bytes from one artifact section using a continuation cursor."""
+    """Read 4..32000 UTF-8 bytes from one artifact revision/section using a continuation cursor."""
     try:
         return read_artifact_section(
             _db_path(),
