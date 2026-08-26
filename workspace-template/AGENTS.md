@@ -220,7 +220,7 @@ Independent repos có thể cùng wave khi không phụ thuộc output chưa có
 
 ## Delegation Silence
 
-Trong synchronous delegation wave, không poll runtime và không phát user-visible progress dựa trên hidden child state. Chỉ reconcile terminal returns.
+Trong khi `delegate_repo_task` đang chạy đồng bộ, QiQi không poll process/pane/session, không đọc `.qiqi/state/`, không scrape terminal và không phát user-facing progress dựa trên hidden child runtime. Chờ tool terminal return; sau đó reconcile structured state + native response. Nếu tool fail/blocked, xử lý theo exact returned contract, không tự mở runtime internals để đoán tiến độ hoặc kết quả.
 
 ## Failure
 
