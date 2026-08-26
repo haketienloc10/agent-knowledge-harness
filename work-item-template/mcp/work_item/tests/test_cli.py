@@ -7,8 +7,8 @@ import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
 
-from cli import _summarize_work_items, main, render_detail, render_list
-from core import create_work_item, get_work_item, list_work_items, new_document, update_work_item
+from cli import _get_work_item, _list_work_items, _summarize_work_items, main, render_detail, render_list
+from core import create_work_item, get_work_item, new_document, update_work_item
 
 
 class WorkItemCliTests(unittest.TestCase):
@@ -48,7 +48,7 @@ class WorkItemCliTests(unittest.TestCase):
         )
 
         summary = _summarize_work_items(self.db)
-        output = render_list(summary, list_work_items(self.db, limit=50))
+        output = render_list(summary, _list_work_items(self.db, limit=50))
 
         self.assertIn("TOTAL 2", output)
         self.assertIn("ACTIVE 1", output)
@@ -58,7 +58,7 @@ class WorkItemCliTests(unittest.TestCase):
 
     def test_detail_shows_all_major_sections_and_repo_verification(self) -> None:
         created = self._create("redmine:113387", title="CPU 100%", repo="search_air")
-        updated = update_work_item(
+        update_work_item(
             self.db,
             created["id"],
             created["revision"],
@@ -79,7 +79,7 @@ class WorkItemCliTests(unittest.TestCase):
             },
         )
 
-        output = render_detail(updated)
+        output = render_detail(_get_work_item(self.db, created["id"]))
 
         for heading in (
             "SUMMARY",
@@ -99,17 +99,20 @@ class WorkItemCliTests(unittest.TestCase):
         self.assertIn("stress test passed", output)
         self.assertIn("revision=2", output)
 
-    def test_list_command_does_not_change_revision(self) -> None:
+    def test_list_command_does_not_write_database(self) -> None:
         created = self._create("redmine:9", title="Read only", repo="repo-a")
         before = get_work_item(self.db, created["id"])
+        before_mtime = self.db.stat().st_mtime_ns
 
         out = io.StringIO()
         with redirect_stdout(out):
             rc = main(["list"])
 
+        after_mtime = self.db.stat().st_mtime_ns
         after = get_work_item(self.db, created["id"])
         self.assertEqual(rc, 0)
         self.assertEqual(before["revision"], after["revision"])
+        self.assertEqual(before_mtime, after_mtime)
         self.assertIn("WORK ITEMS", out.getvalue())
 
 
