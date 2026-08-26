@@ -20,7 +20,6 @@ qiqi_delegate state    = runtime/session truth
 - `SYSTEM_MAP.md` giữ live topology/ownership/dependency;
 - project-scoped `.codex/config.toml` chỉ đăng ký `qiqi_delegate`;
 - user-scoped MCP `work_item` và `knowledge` có mặt trong fresh QiQi + child sessions;
-- workspace không có `.qiqi/tasks/` task store;
 - product task có canonical Work Item như `redmine:116655`;
 - QiQi đọc Work Item trước orchestration và reread sau repo turn;
 - child đọc cùng Work Item nhưng chỉ execute/update evidence thuộc current Git root;
@@ -146,8 +145,7 @@ Runtime state:
 Đây là native session/turn ownership và ephemeral hook-routing state, không phải
 product task state. QiQi/child không đọc/sửa trực tiếp.
 
-`.qiqi/runs/` chỉ là legacy session-ownership import bridge. `.qiqi/tasks/` không
-được tồn tại trong architecture mới.
+`.qiqi/runs/` chỉ là legacy session-ownership import bridge.
 
 ## Bước 7: Canonical Work Item behavior của QiQi
 
