@@ -101,6 +101,35 @@ for pattern in \
   rg -q "$pattern" "$agents_md" || fail "AGENTS.md: missing Work Item continuity rule: $pattern"
 done
 
+# CRITICAL INVARIANT — DO NOT REMOVE OR WEAKEN THIS CHECK merely to make a
+# migration/check pass. Delegation silence is part of the synchronous execution
+# contract. Change this expected block only when the contract is intentionally
+# changed and reviewed together with qiqi_delegate semantics.
+delegation_silence_expected="$(cat <<'EOF'
+## Delegation Silence
+
+Trong khi `delegate_repo_task` đang chạy đồng bộ, QiQi không poll process/pane/session, không đọc `.qiqi/state/`, không scrape terminal và không phát user-facing progress dựa trên hidden child runtime. Chờ tool terminal return; sau đó reconcile structured state + native response. Nếu tool fail/blocked, xử lý theo exact returned contract, không tự mở runtime internals để đoán tiến độ hoặc kết quả.
+EOF
+)"
+delegation_silence_actual="$(python3 - "$agents_md" <<'PY'
+from pathlib import Path
+import sys
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8")
+heading = "## Delegation Silence\n"
+start = text.find(heading)
+if start < 0:
+    print("")
+    raise SystemExit(0)
+next_heading = text.find("\n## ", start + len(heading))
+section = text[start:] if next_heading < 0 else text[start:next_heading]
+print(section.rstrip("\n"))
+PY
+)"
+if [[ "$delegation_silence_actual" != "$delegation_silence_expected" ]]; then
+  fail 'AGENTS.md: Delegation Silence must match the exact synchronous no-progress contract; do not weaken/remove this invariant check'
+fi
+
 if rg -q 'English task title|read `result_path`|đọc `result_path`' "$agents_md"; then
   fail 'AGENTS.md: legacy workspace result artifact convention remains'
 fi
