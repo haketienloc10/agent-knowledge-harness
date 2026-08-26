@@ -57,8 +57,8 @@ for pattern in \
   'ArtifactReadLimit' \
   'ARTIFACT_LIST_MAX' \
   'ARTIFACT_READ_MIN_BYTES' \
-  'artifacts is derived metadata' \
   'Do not create artifacts merely as normal progress bookkeeping' \
+  'Artifact read cursors are bound to one artifact revision' \
   'Artifact mutations never advance the Work Item revision'; do
   rg -q "$pattern" "$server" || fail "server.py: missing contract: $pattern"
 done
@@ -66,6 +66,30 @@ done
 tool_count="$(rg -c '^@mcp\.tool\(\)$' "$server" || true)"
 [[ "$tool_count" == "10" ]] || \
   fail "server.py: expected exactly ten public MCP tools (4 Work Item + 6 artifact), found $tool_count"
+
+# CRITICAL MUTATION RESPONSE INVARIANT — DO NOT REMOVE OR WEAKEN THIS CHECK.
+# A Work Item mutation is committed by core. Its MCP success/failure must not depend
+# on a second post-commit artifact query, otherwise a committed write can look failed.
+if ! SERVER_PATH="$server" python3 - <<'PY'
+import ast
+import os
+from pathlib import Path
+
+path = Path(os.environ["SERVER_PATH"])
+text = path.read_text(encoding="utf-8")
+tree = ast.parse(text)
+funcs = {
+    node.name: ast.get_source_segment(text, node) or ""
+    for node in tree.body
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+}
+assert "_with_artifacts" in funcs["work_item_get"]
+assert "_with_artifacts" not in funcs["work_item_create"]
+assert "_with_artifacts" not in funcs["work_item_update"]
+PY
+then
+  fail 'server.py: only work_item_get may enrich with artifact index; create/update must return committed mutation result directly'
+fi
 
 for pattern in \
   'CREATE TABLE IF NOT EXISTS work_items' \
@@ -78,7 +102,10 @@ for pattern in \
   'changes' \
   'handoffs' \
   'next_actions' \
-  'checkpoints'; do
+  'checkpoints' \
+  'DERIVED_FIELDS = {"artifacts"}' \
+  'must not persist derived fields' \
+  'must not modify derived fields'; do
   rg -q "$pattern" "$core" || fail "core.py: missing contract: $pattern"
 done
 
@@ -95,6 +122,9 @@ for pattern in \
   'CREATE TABLE IF NOT EXISTS work_item_artifact_chunks' \
   'based_on_work_item_revision' \
   'artifact revision conflict' \
+  'cursor revision' \
+  '_parse_cursor' \
+  '_cursor' \
   'artifact is complete and immutable' \
   'split it into smaller chunks' \
   'cursor is invalid' \
@@ -107,16 +137,23 @@ done
 # merely to make a change pass. Artifact bodies must never become an unbounded
 # MCP request/response, and artifact writes must remain independently revisioned
 # from canonical Work Item state.
-rg -q 'len\(encoded\) > ARTIFACT_CHUNK_MAX_BYTES' "$artifacts" || \
+rg -q 'len\(value\.encode\("utf-8"\)\) > ARTIFACT_CHUNK_MAX_BYTES' "$artifacts" || \
   fail 'artifacts.py: append must enforce UTF-8 byte limit server-side'
-rg -q 'limit_bytes.*ARTIFACT_READ_MAX_BYTES' "$artifacts" || \
+rg -q 'ARTIFACT_READ_MIN_BYTES <= limit_bytes <= ARTIFACT_READ_MAX_BYTES' "$artifacts" || \
   fail 'artifacts.py: read must enforce bounded response size server-side'
 rg -q 'return value' "$artifacts" || \
   fail 'artifacts.py: chunk content must be preserved rather than stripped/reformatted'
 rg -q 'SET revision = \?, updated_at = \?' "$artifacts" || \
-  fail 'artifacts.py: artifact append/finalize must advance artifact revision'
+  fail 'artifacts.py: artifact append must advance artifact revision'
+rg -q "SET state = 'complete', revision = \?, updated_at = \?" "$artifacts" || \
+  fail 'artifacts.py: artifact finalize must advance artifact revision'
 if rg -q 'UPDATE work_items|SET revision = .*work_items' "$artifacts"; then
   fail 'artifacts.py: artifact mutations must never update Work Item revision/state'
+fi
+# Artifact setup must reuse core connection configuration instead of duplicating
+# WAL/synchronous ownership in a second connector implementation.
+if rg -q 'PRAGMA journal_mode|PRAGMA synchronous' "$artifacts"; then
+  fail 'artifacts.py: base SQLite connection policy belongs to core.py and must not be duplicated'
 fi
 
 for pattern in \
@@ -129,7 +166,9 @@ for pattern in \
   'ARTIFACTS' \
   'artifact_parser' \
   '_list_artifacts_readonly' \
-  '_get_artifact_readonly' \
+  '_print_artifact_stream' \
+  '_get_artifact_json_readonly' \
+  'SELECT content FROM work_item_artifact_chunks' \
   'QUESTIONS' \
   'DECISIONS' \
   'CHANGES' \
@@ -149,6 +188,30 @@ if rg -i -q '\b(insert|update|delete|replace|alter|drop|create|pragma|vacuum|rei
 fi
 if rg -q 'from (core|artifacts) import .*update_|from (core|artifacts) import .*create_|create_work_item\(|append_artifact\(|finalize_artifact\(' "$cli"; then
   fail 'cli.py: human CLI must not import/call Work Item or artifact mutation functions'
+fi
+
+# Text artifact viewing must stream stored chunks directly. Only explicit --json
+# is allowed to materialize full artifact content in memory.
+if ! CLI_PATH="$cli" python3 - <<'PY'
+import ast
+import os
+from pathlib import Path
+
+path = Path(os.environ["CLI_PATH"])
+text = path.read_text(encoding="utf-8")
+tree = ast.parse(text)
+funcs = {
+    node.name: ast.get_source_segment(text, node) or ""
+    for node in tree.body
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+}
+assert "SELECT content FROM work_item_artifact_chunks" in funcs["_print_artifact_stream"]
+assert "_get_artifact_json_readonly" not in funcs["_print_artifact_stream"]
+assert "_get_artifact_json_readonly" in funcs["main"]
+assert "_print_artifact_stream" in funcs["main"]
+PY
+then
+  fail 'cli.py: text artifact view must stream chunks; full materialization is reserved for explicit --json'
 fi
 
 rg -q 'command = f"exec bash ' "$installer" || \
