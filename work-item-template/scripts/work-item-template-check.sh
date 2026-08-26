@@ -14,6 +14,10 @@ for command in python3 uv rg; do
   command -v "$command" >/dev/null 2>&1 || fail "missing command: $command"
 done
 
+for file in "$home/CLI.md" "$home/ARTIFACTS.md"; do
+  [[ -f "$file" ]] || fail "missing documentation: ${file#$home/}"
+done
+
 PYTHONPATH="$project" python3 -m unittest discover -s "$project/tests" -v || \
   fail 'Work Item core/CLI/artifact unit tests failed'
 python3 -m py_compile "$project/core.py" "$project/server.py" "$project/artifacts.py" "$project/cli.py" || \
@@ -51,6 +55,8 @@ for pattern in \
   'work_item_artifact_finalize' \
   'ArtifactContent' \
   'ArtifactReadLimit' \
+  'ARTIFACT_LIST_MAX' \
+  'ARTIFACT_READ_MIN_BYTES' \
   'artifacts is derived metadata' \
   'Do not create artifacts merely as normal progress bookkeeping' \
   'Artifact mutations never advance the Work Item revision'; do
@@ -79,7 +85,11 @@ done
 for pattern in \
   'ARTIFACT_TYPES = .*intake.*investigation.*plan.*review.*report' \
   'ARTIFACT_CHUNK_MAX_BYTES = 32_000' \
+  'ARTIFACT_READ_MIN_BYTES = 4' \
   'ARTIFACT_READ_MAX_BYTES = 32_000' \
+  'ARTIFACT_PER_WORK_ITEM_MAX = 50' \
+  'ARTIFACT_SECTION_MAX = 100' \
+  '_connect as _connect_work_items' \
   'CREATE TABLE IF NOT EXISTS work_item_artifacts' \
   'CREATE TABLE IF NOT EXISTS work_item_artifact_sections' \
   'CREATE TABLE IF NOT EXISTS work_item_artifact_chunks' \
@@ -101,6 +111,8 @@ rg -q 'len\(encoded\) > ARTIFACT_CHUNK_MAX_BYTES' "$artifacts" || \
   fail 'artifacts.py: append must enforce UTF-8 byte limit server-side'
 rg -q 'limit_bytes.*ARTIFACT_READ_MAX_BYTES' "$artifacts" || \
   fail 'artifacts.py: read must enforce bounded response size server-side'
+rg -q 'return value' "$artifacts" || \
+  fail 'artifacts.py: chunk content must be preserved rather than stripped/reformatted'
 rg -q 'SET revision = \?, updated_at = \?' "$artifacts" || \
   fail 'artifacts.py: artifact append/finalize must advance artifact revision'
 if rg -q 'UPDATE work_items|SET revision = .*work_items' "$artifacts"; then
@@ -114,6 +126,10 @@ for pattern in \
   'SELECT \* FROM work_items' \
   'CURRENT REQUIREMENTS' \
   'REPOSITORIES' \
+  'ARTIFACTS' \
+  'artifact_parser' \
+  '_list_artifacts_readonly' \
+  '_get_artifact_readonly' \
   'QUESTIONS' \
   'DECISIONS' \
   'CHANGES' \
@@ -128,11 +144,11 @@ done
 # CRITICAL READ-ONLY INVARIANT — DO NOT REMOVE OR WEAKEN THIS CHECK merely to
 # make a change pass. The human CLI is an observer of canonical Work Item state,
 # never a second mutation path. Writes belong only to the MCP/core workflow.
-if rg -i -q '\b(insert|update|delete|replace|alter|drop|create|pragma|vacuum|reindex)\b[^\n]*(work_items|table|index|journal|synchronous)' "$cli"; then
+if rg -i -q '\b(insert|update|delete|replace|alter|drop|create|pragma|vacuum|reindex)\b[^\n]*(work_items|work_item_artifact|table|index|journal|synchronous)' "$cli"; then
   fail 'cli.py: human CLI must remain strictly read-only; SQL mutation/schema/PRAGMA path detected'
 fi
-if rg -q 'from core import .*update_work_item|create_work_item\(' "$cli"; then
-  fail 'cli.py: human CLI must not import/call Work Item mutation functions'
+if rg -q 'from (core|artifacts) import .*update_|from (core|artifacts) import .*create_|create_work_item\(|append_artifact\(|finalize_artifact\(' "$cli"; then
+  fail 'cli.py: human CLI must not import/call Work Item or artifact mutation functions'
 fi
 
 rg -q 'command = f"exec bash ' "$installer" || \
