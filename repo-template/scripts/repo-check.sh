@@ -114,8 +114,10 @@ if [[ -f "$agents" ]]; then
     fail 'AGENTS.md: native handoff must preserve actionable cross-repo impact'
   rg -U -q 'Knowledge review.*`knowledge_write`|knowledge review.*`knowledge_write`' "$agents" || \
     fail 'AGENTS.md: Definition of Done must include knowledge review/write'
-  rg -U -q 'knowledge_search.*decision cards.*knowledge_read' "$agents" || \
-    fail 'AGENTS.md: knowledge retrieval must use progressive disclosure'
+  rg -q '^### Search trước, read sau$' "$agents" || \
+    fail 'AGENTS.md: progressive-disclosure search/read section is missing'
+  rg -q 'knowledge_search.*không trả revision' "$agents" || \
+    fail 'AGENTS.md: search must withhold revision until exact read'
 
   for forbidden in \
     '^## Final Result Contract$' \
