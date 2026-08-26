@@ -1,17 +1,16 @@
 {
-  "version": 5,
-  "from_ref": "a2f63c178efd735fbc72005dd1edb50851182b85",
-  "to_ref": "204e7008c13b791bec7ed528dadba848d4f200ba",
-  "description": "adopt user-scoped Global Work Item task truth, remove workspace-local task skeleton, and catch up post-v4 routing policy",
+  "version": 6,
+  "from_ref": "e700c409886b0c1ae694ea593a9ba371283fbc87",
+  "to_ref": "f15c843a6ac666e655dabe972b7393aef831b478",
+  "description": "adopt user-scoped Global Work Item task truth on top of progressive Shared Knowledge",
   "workspace": {
-    "merge": [],
+    "merge": [
+      "workspace-template/identity.md"
+    ],
     "replace": [
       "workspace-template/AGENTS.md",
       "workspace-template/README.md",
       "workspace-template/docs/WORKSPACE_SETUP.md",
-      "workspace-template/docs/examples/agent-routing.claude-code.yaml",
-      "workspace-template/instructions/agent-routing.yaml",
-      "workspace-template/instructions/model-routing.md",
       "workspace-template/scripts/workspace-check.sh"
     ],
     "delete": [
