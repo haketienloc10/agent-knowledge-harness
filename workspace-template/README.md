@@ -22,6 +22,7 @@ repos.yaml
 SYSTEM_MAP.md
 instructions/agent-routing.yaml
 instructions/model-routing.md
+.agents/skills/ticket-work-item/SKILL.md
 .codex/config.toml
 mcp/qiqi_delegate/
 .qiqi/.gitignore
@@ -30,6 +31,23 @@ docs/WORKSPACE_SETUP.md
 ```
 
 Workspace không sở hữu task DB hoặc Knowledge Store.
+
+## Ticket Work Item skill
+
+Khi người dùng chủ động muốn biến một ticket thật thành canonical Work Item, gọi explicit:
+
+```text
+$ticket-work-item
+<paste ticket>
+```
+
+hoặc truyền file ticket local:
+
+```text
+$ticket-work-item path/to/ticket.md
+```
+
+Skill này là explicit entry point, không được auto-apply chỉ vì prompt có Redmine/Jira/GitHub issue, bug report hoặc incident. File path được truyền là user-provided ticket source; QiQi đọc đúng file đó, giữ path làm provenance và không scan sibling files nếu người dùng không yêu cầu.
 
 ## Execution model
 
