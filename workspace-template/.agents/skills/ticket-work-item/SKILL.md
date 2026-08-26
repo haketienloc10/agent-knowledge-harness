@@ -9,12 +9,41 @@ description: >
 
 # Ticket Work Item Entry Point
 
-Treat the text supplied with this invocation as the original ticket input.
-
 This skill is only an explicit entry point. The workspace `AGENTS.md` remains the
 canonical policy for Work Item ownership, QiQi orchestration, repository delegation,
 Shared Knowledge, native result handoff, revision conflict handling, and completion.
 Do not duplicate or weaken those rules here.
+
+## Input
+
+Accept either form:
+
+```text
+$ticket-work-item
+<pasted ticket text>
+```
+
+or:
+
+```text
+$ticket-work-item path/to/ticket.md
+```
+
+When the invocation supplies one or more local file paths instead of inline ticket
+content:
+
+1. Treat the paths as explicit user-provided ticket sources.
+2. Resolve relative paths from the current workspace directory.
+3. Read only the supplied files; do not scan nearby directories for additional ticket
+   material unless the user asks.
+4. Preserve each file path as provenance when material facts are extracted.
+5. If a supplied file does not exist or cannot be read, report that exact input failure
+   instead of guessing its contents.
+6. If both file paths and inline instructions are supplied, use the files as original
+   ticket source and the inline text as additional user instruction unless the user
+   explicitly says otherwise.
+
+Treat the resulting file content or pasted text as the original ticket input.
 
 ## Start
 
