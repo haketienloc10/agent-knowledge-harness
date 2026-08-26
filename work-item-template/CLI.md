@@ -39,18 +39,19 @@ agent-work-item list --status blocked --limit 20
 
 Count trên header luôn là count toàn store; filter chỉ áp dụng cho bảng ticket bên dưới.
 
-## Detail
+## Work Item detail
 
 ```bash
 agent-work-item show redmine:113387
 ```
 
-Detail được bố cục để nhìn một lượt toàn canonical snapshot/material history:
+Detail được bố cục để nhìn một lượt canonical snapshot/material history:
 
 - ID, status, phase, revision, created/updated;
 - summary;
 - current requirements;
 - repositories, repo status, summary và verification;
+- **thin artifact index** (metadata/size, không body);
 - questions;
 - decisions;
 - changes;
@@ -60,7 +61,7 @@ Detail được bố cục để nhìn một lượt toàn canonical snapshot/ma
 - checkpoints.
 
 Section rỗng vẫn được hiển thị với count `0` để dễ thấy task còn blocker/question/
-handoff hay không.
+handoff/artifact hay không.
 
 Raw JSON chỉ dùng khi debug:
 
@@ -68,11 +69,36 @@ Raw JSON chỉ dùng khi debug:
 agent-work-item show redmine:113387 --json
 ```
 
+`show --json` cũng chỉ chứa thin artifact index.
+
+## Optional artifact detail
+
+Full artifact body chỉ được đọc khi gọi explicit:
+
+```bash
+agent-work-item artifact redmine:113387 report:1
+```
+
+Chỉ xem một section:
+
+```bash
+agent-work-item artifact redmine:113387 report:1 --section code-review
+```
+
+Raw artifact JSON:
+
+```bash
+agent-work-item artifact redmine:113387 report:1 --json
+```
+
+Human CLI có thể stream full artifact ra terminal vì đây không phải MCP/LLM context.
+MCP agent-side vẫn đọc artifact body theo bounded section chunks.
+
 ## Read-only guarantee
 
-CLI mở SQLite bằng URI `mode=ro`. Nó không dùng Work Item mutation API, không tạo
-schema, không chạy write PRAGMA và không thay revision/document state. `work-item-template-check.sh`
-khóa invariant này và phải fail nếu CLI có mutation path.
+CLI mở SQLite bằng URI `mode=ro`. Nó không dùng Work Item/artifact mutation API,
+không tạo schema, không chạy write PRAGMA và không thay Work Item hay artifact revision.
+`work-item-template-check.sh` khóa invariant này và phải fail nếu CLI có mutation path.
 
 ## Installation
 
