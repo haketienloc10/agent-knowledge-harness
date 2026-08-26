@@ -29,6 +29,7 @@ server="$project/server.py"
 core="$project/core.py"
 cli="$project/cli.py"
 installer="$home/scripts/install-user-mcp.sh"
+cli_launcher="$home/scripts/work-item-cli.sh"
 
 for pattern in \
   'MCPServer' \
@@ -91,14 +92,16 @@ if rg -q 'from core import .*update_work_item|create_work_item\(' "$cli"; then
   fail 'cli.py: human CLI must not import/call Work Item mutation functions'
 fi
 
-rg -q 'exec bash .*work-item-mcp-server\.sh' "$installer" || \
-  fail 'installer: generated MCP wrapper must not depend on source script executable bit'
-rg -q 'agent-work-item' "$installer" || \
-  fail 'installer: missing human CLI wrapper installation'
-rg -q 'work-item-cli\.sh' "$installer" || \
-  fail 'installer: human CLI wrapper must launch work-item-cli.sh'
-rg -q 'exec bash .*work-item-cli\.sh' "$installer" || \
-  fail 'installer: generated human CLI wrapper must not depend on source script executable bit'
+rg -q 'command = f"exec bash ' "$installer" || \
+  fail 'installer: wrappers must execute source launchers through bash'
+rg -q 'write_wrapper\(mcp_wrapper, "/scripts/work-item-mcp-server\.sh", False\)' "$installer" || \
+  fail 'installer: MCP wrapper must target work-item-mcp-server.sh'
+rg -q 'write_wrapper\(cli_wrapper, "/scripts/work-item-cli\.sh", True\)' "$installer" || \
+  fail 'installer: human CLI wrapper must target work-item-cli.sh and forward arguments'
+rg -q 'cli_wrapper=.*agent-work-item' "$installer" || \
+  fail 'installer: missing agent-work-item human CLI wrapper path'
+rg -q 'python .*cli\.py.*"\$@"' "$cli_launcher" || \
+  fail 'work-item-cli.sh: must forward all user arguments to cli.py'
 
 if ! PYTHONPATH="$project" uv run --project "$project" python -c \
   'from mcp.server import MCPServer; import pydantic; from core import NotFoundError; from server import _not_found_result; r = _not_found_result("redmine:1", NotFoundError("missing")); assert r["found"] is False and r["error"]["code"] == "work_item_not_found"; print("work-item-mcp-runtime: PASS")' \
