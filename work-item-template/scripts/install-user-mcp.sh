@@ -69,13 +69,12 @@ from pathlib import Path
 wrapper = Path(sys.argv[1])
 home = os.environ["HOME_PATH"]
 db = os.environ["DB_PATH"]
-server_launcher = home + "/scripts/work-item-mcp-server.sh"
 text = "\n".join(
     [
         "#!/usr/bin/env bash",
         "set -euo pipefail",
         f"export WORK_ITEM_DB_PATH={shlex.quote(db)}",
-        f"exec bash {shlex.quote(server_launcher)}",
+        f"exec bash {shlex.quote(home + '/scripts/work-item-mcp-server.sh')}",
         "",
     ]
 )
