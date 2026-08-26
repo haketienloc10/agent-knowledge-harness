@@ -15,8 +15,8 @@ for command in python3 uv rg; do
 done
 
 PYTHONPATH="$project" python3 -m unittest discover -s "$project/tests" -v || \
-  fail 'Work Item core/CLI unit tests failed'
-python3 -m py_compile "$project/core.py" "$project/server.py" "$project/cli.py" || \
+  fail 'Work Item core/CLI/artifact unit tests failed'
+python3 -m py_compile "$project/core.py" "$project/server.py" "$project/artifacts.py" "$project/cli.py" || \
   fail 'Work Item Python syntax check failed'
 bash -n "$home/scripts/work-item-mcp-server.sh" || \
   fail 'work-item-mcp-server.sh: invalid Bash syntax'
@@ -27,6 +27,7 @@ bash -n "$home/scripts/install-user-mcp.sh" || \
 
 server="$project/server.py"
 core="$project/core.py"
+artifacts="$project/artifacts.py"
 cli="$project/cli.py"
 installer="$home/scripts/install-user-mcp.sh"
 cli_launcher="$home/scripts/work-item-cli.sh"
@@ -41,13 +42,24 @@ for pattern in \
   'expected_revision' \
   'except NotFoundError as exc' \
   '"found": False' \
-  'work_item_not_found'; do
+  'work_item_not_found' \
+  'work_item_artifact_list' \
+  'work_item_artifact_get' \
+  'work_item_artifact_create' \
+  'work_item_artifact_append' \
+  'work_item_artifact_read' \
+  'work_item_artifact_finalize' \
+  'ArtifactContent' \
+  'ArtifactReadLimit' \
+  'artifacts is derived metadata' \
+  'Do not create artifacts merely as normal progress bookkeeping' \
+  'Artifact mutations never advance the Work Item revision'; do
   rg -q "$pattern" "$server" || fail "server.py: missing contract: $pattern"
 done
 
 tool_count="$(rg -c '^@mcp\.tool\(\)$' "$server" || true)"
-[[ "$tool_count" == "4" ]] || \
-  fail "server.py: expected exactly four public MCP tools, found $tool_count"
+[[ "$tool_count" == "10" ]] || \
+  fail "server.py: expected exactly ten public MCP tools (4 Work Item + 6 artifact), found $tool_count"
 
 for pattern in \
   'CREATE TABLE IF NOT EXISTS work_items' \
@@ -63,6 +75,37 @@ for pattern in \
   'checkpoints'; do
   rg -q "$pattern" "$core" || fail "core.py: missing contract: $pattern"
 done
+
+for pattern in \
+  'ARTIFACT_TYPES = .*intake.*investigation.*plan.*review.*report' \
+  'ARTIFACT_CHUNK_MAX_BYTES = 32_000' \
+  'ARTIFACT_READ_MAX_BYTES = 32_000' \
+  'CREATE TABLE IF NOT EXISTS work_item_artifacts' \
+  'CREATE TABLE IF NOT EXISTS work_item_artifact_sections' \
+  'CREATE TABLE IF NOT EXISTS work_item_artifact_chunks' \
+  'based_on_work_item_revision' \
+  'artifact revision conflict' \
+  'artifact is complete and immutable' \
+  'split it into smaller chunks' \
+  'cursor is invalid' \
+  'cannot finalize an artifact without content' \
+  'ON DELETE CASCADE'; do
+  rg -q "$pattern" "$artifacts" || fail "artifacts.py: missing bounded artifact contract: $pattern"
+done
+
+# CRITICAL PAYLOAD/REVISION INVARIANTS — DO NOT REMOVE OR WEAKEN THESE CHECKS
+# merely to make a change pass. Artifact bodies must never become an unbounded
+# MCP request/response, and artifact writes must remain independently revisioned
+# from canonical Work Item state.
+rg -q 'len\(encoded\) > ARTIFACT_CHUNK_MAX_BYTES' "$artifacts" || \
+  fail 'artifacts.py: append must enforce UTF-8 byte limit server-side'
+rg -q 'limit_bytes.*ARTIFACT_READ_MAX_BYTES' "$artifacts" || \
+  fail 'artifacts.py: read must enforce bounded response size server-side'
+rg -q 'SET revision = \?, updated_at = \?' "$artifacts" || \
+  fail 'artifacts.py: artifact append/finalize must advance artifact revision'
+if rg -q 'UPDATE work_items|SET revision = .*work_items' "$artifacts"; then
+  fail 'artifacts.py: artifact mutations must never update Work Item revision/state'
+fi
 
 for pattern in \
   'prog="agent-work-item"' \
