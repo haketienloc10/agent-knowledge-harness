@@ -1,7 +1,7 @@
 {
   "version": 5,
   "from_ref": "a2f63c178efd735fbc72005dd1edb50851182b85",
-  "to_ref": "ca4f21706021abd6b09445349e5c7c9b66eca96b",
+  "to_ref": "204e7008c13b791bec7ed528dadba848d4f200ba",
   "description": "adopt user-scoped Global Work Item task truth, remove workspace-local task skeleton, and catch up post-v4 routing policy",
   "workspace": {
     "merge": [],
