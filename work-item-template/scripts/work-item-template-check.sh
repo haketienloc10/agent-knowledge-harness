@@ -103,7 +103,7 @@ for pattern in \
   'handoffs' \
   'next_actions' \
   'checkpoints' \
-  'DERIVED_FIELDS = {"artifacts"}' \
+  'DERIVED_FIELDS = \{"artifacts"\}' \
   'must not persist derived fields' \
   'must not modify derived fields'; do
   rg -q "$pattern" "$core" || fail "core.py: missing contract: $pattern"
