@@ -11,7 +11,6 @@ from core import (
     NotFoundError,
     ValidationError,
     _connect as _connect_work_items,
-    resolve_db_path,
 )
 
 ARTIFACT_TYPES = {"intake", "investigation", "plan", "review", "report"}
@@ -62,27 +61,20 @@ def _required_content(value: Any) -> str:
         raise ValidationError("content must be a string")
     if not value or not value.strip():
         raise ValidationError("content must not be empty")
-    encoded = value.encode("utf-8")
-    if len(encoded) > ARTIFACT_CHUNK_MAX_BYTES:
+    if len(value.encode("utf-8")) > ARTIFACT_CHUNK_MAX_BYTES:
         raise ValidationError(
-            f"artifact chunk exceeds {ARTIFACT_CHUNK_MAX_BYTES} UTF-8 bytes; split it into smaller chunks"
+            f"artifact chunk exceeds {ARTIFACT_CHUNK_MAX_BYTES} UTF-8 bytes; "
+            "split it into smaller chunks"
         )
+    # Preserve the caller's exact text. Markdown/code whitespace is artifact content.
     return value
 
 
 def _connect(db_path: str | Path) -> sqlite3.Connection:
-    path = resolve_db_path(db_path)
-    # Base schema remains owned by core.py. Initializing it here makes artifact tools
-    # safe even when they are the first Work Item MCP call against a new DB path.
-    base = _connect_work_items(path)
-    base.close()
-
-    conn = sqlite3.connect(path, timeout=5.0, isolation_level=None)
-    conn.row_factory = sqlite3.Row
+    # Base connection/schema ownership remains in core.py. Artifact storage only adds
+    # its own tables to the same canonical SQLite database.
+    conn = _connect_work_items(db_path)
     conn.execute("PRAGMA foreign_keys=ON")
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA synchronous=NORMAL")
-    conn.execute("PRAGMA busy_timeout=5000")
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS work_item_artifacts (
@@ -138,7 +130,8 @@ def _connect(db_path: str | Path) -> sqlite3.Connection:
         """
     )
     conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_work_item_artifacts_type ON work_item_artifacts(work_item_id, type, updated_at)"
+        "CREATE INDEX IF NOT EXISTS idx_work_item_artifacts_type "
+        "ON work_item_artifacts(work_item_id, type, updated_at)"
     )
     return conn
 
@@ -161,12 +154,24 @@ def _validate_section_id(value: str) -> str:
     section_id = _required_text(value, "section_id", max_chars=128)
     if not SECTION_ID_RE.fullmatch(section_id):
         raise ValidationError(
-            "section_id must start with a lowercase letter and contain only lowercase letters, digits, _ or -"
+            "section_id must start with a lowercase letter and contain only lowercase "
+            "letters, digits, _ or -"
         )
     return section_id
 
 
-def _metadata(row: sqlite3.Row, section_count: int, char_count: int, byte_count: int) -> dict[str, Any]:
+def _positive_revision(value: Any, label: str) -> int:
+    if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+        raise ValidationError(f"{label} must be a positive integer")
+    return value
+
+
+def _metadata(
+    row: sqlite3.Row,
+    section_count: int,
+    char_count: int,
+    byte_count: int,
+) -> dict[str, Any]:
     return {
         "artifact_id": row["artifact_id"],
         "type": row["type"],
@@ -198,8 +203,11 @@ def list_artifacts(
 
     conn = _connect(db_path)
     try:
-        if conn.execute("SELECT 1 FROM work_items WHERE id = ?", (work_item_id,)).fetchone() is None:
+        if conn.execute(
+            "SELECT 1 FROM work_items WHERE id = ?", (work_item_id,)
+        ).fetchone() is None:
             raise NotFoundError(f"work item not found: {work_item_id}")
+
         params: list[Any] = [work_item_id]
         type_clause = ""
         if artifact_type is not None:
@@ -214,7 +222,8 @@ def list_artifacts(
                    COALESCE(SUM(s.byte_count), 0) AS byte_count
             FROM work_item_artifacts a
             LEFT JOIN work_item_artifact_sections s
-              ON s.work_item_id = a.work_item_id AND s.artifact_id = a.artifact_id
+              ON s.work_item_id = a.work_item_id
+             AND s.artifact_id = a.artifact_id
             WHERE a.work_item_id = ?{type_clause}
             GROUP BY a.work_item_id, a.artifact_id
             ORDER BY a.updated_at DESC, a.artifact_id ASC
@@ -230,13 +239,18 @@ def list_artifacts(
         conn.close()
 
 
-def get_artifact(db_path: str | Path, work_item_id: str, artifact_id: str) -> dict[str, Any]:
+def get_artifact(
+    db_path: str | Path,
+    work_item_id: str,
+    artifact_id: str,
+) -> dict[str, Any]:
     work_item_id = _required_text(work_item_id, "work_item_id", max_chars=256)
     artifact_id = _validate_artifact_id(artifact_id)
     conn = _connect(db_path)
     try:
         row = conn.execute(
-            "SELECT * FROM work_item_artifacts WHERE work_item_id = ? AND artifact_id = ?",
+            "SELECT * FROM work_item_artifacts "
+            "WHERE work_item_id = ? AND artifact_id = ?",
             (work_item_id, artifact_id),
         ).fetchone()
         if row is None:
@@ -272,10 +286,15 @@ def get_artifact(db_path: str | Path, work_item_id: str, artifact_id: str) -> di
         conn.close()
 
 
-def _next_artifact_id(conn: sqlite3.Connection, work_item_id: str, artifact_type: str) -> str:
+def _next_artifact_id(
+    conn: sqlite3.Connection,
+    work_item_id: str,
+    artifact_type: str,
+) -> str:
     prefix = artifact_type + ":"
     rows = conn.execute(
-        "SELECT artifact_id FROM work_item_artifacts WHERE work_item_id = ? AND artifact_id LIKE ?",
+        "SELECT artifact_id FROM work_item_artifacts "
+        "WHERE work_item_id = ? AND artifact_id LIKE ?",
         (work_item_id, prefix + "%"),
     ).fetchall()
     highest = 0
@@ -300,8 +319,9 @@ def create_artifact(
     artifact_type = _validate_type(artifact_type)
     title = _required_text(title, "title", max_chars=500)
     summary = _optional_text(summary, "summary", max_chars=500)
-    if not isinstance(based_on_work_item_revision, int) or isinstance(based_on_work_item_revision, bool) or based_on_work_item_revision < 1:
-        raise ValidationError("based_on_work_item_revision must be a positive integer")
+    based_on_work_item_revision = _positive_revision(
+        based_on_work_item_revision, "based_on_work_item_revision"
+    )
     if artifact_id is not None:
         artifact_id = _validate_artifact_id(artifact_id)
         if not artifact_id.startswith(artifact_type + ":"):
@@ -310,14 +330,18 @@ def create_artifact(
     conn = _connect(db_path)
     try:
         conn.execute("BEGIN IMMEDIATE")
-        work_item = conn.execute("SELECT revision FROM work_items WHERE id = ?", (work_item_id,)).fetchone()
+        work_item = conn.execute(
+            "SELECT revision FROM work_items WHERE id = ?", (work_item_id,)
+        ).fetchone()
         if work_item is None:
             raise NotFoundError(f"work item not found: {work_item_id}")
         current_revision = int(work_item["revision"])
         if current_revision != based_on_work_item_revision:
             raise ConflictError(
-                f"revision conflict for {work_item_id}: expected {based_on_work_item_revision}, current {current_revision}"
+                f"revision conflict for {work_item_id}: expected "
+                f"{based_on_work_item_revision}, current {current_revision}"
             )
+
         artifact_count = int(
             conn.execute(
                 "SELECT COUNT(*) FROM work_item_artifacts WHERE work_item_id = ?",
@@ -326,8 +350,10 @@ def create_artifact(
         )
         if artifact_count >= ARTIFACT_PER_WORK_ITEM_MAX:
             raise ValidationError(
-                f"Work Item already has the MVP maximum of {ARTIFACT_PER_WORK_ITEM_MAX} artifacts"
+                f"Work Item already has the MVP maximum of "
+                f"{ARTIFACT_PER_WORK_ITEM_MAX} artifacts"
             )
+
         final_id = artifact_id or _next_artifact_id(conn, work_item_id, artifact_type)
         now = _now_iso()
         try:
@@ -338,18 +364,29 @@ def create_artifact(
                     based_on_work_item_revision, revision, created_at, updated_at
                 ) VALUES (?, ?, ?, 'draft', ?, ?, ?, 1, ?, ?)
                 """,
-                (work_item_id, final_id, artifact_type, title, summary, based_on_work_item_revision, now, now),
+                (
+                    work_item_id,
+                    final_id,
+                    artifact_type,
+                    title,
+                    summary,
+                    based_on_work_item_revision,
+                    now,
+                    now,
+                ),
             )
         except sqlite3.IntegrityError as exc:
-            raise ArtifactConflictError(f"artifact already exists: {work_item_id}/{final_id}") from exc
+            raise ArtifactConflictError(
+                f"artifact already exists: {work_item_id}/{final_id}"
+            ) from exc
         conn.execute("COMMIT")
-        return get_artifact(db_path, work_item_id, final_id)
     except Exception:
         if conn.in_transaction:
             conn.execute("ROLLBACK")
         raise
     finally:
         conn.close()
+    return get_artifact(db_path, work_item_id, final_id)
 
 
 def append_artifact(
@@ -365,8 +402,9 @@ def append_artifact(
     work_item_id = _required_text(work_item_id, "work_item_id", max_chars=256)
     artifact_id = _validate_artifact_id(artifact_id)
     section_id = _validate_section_id(section_id)
-    if not isinstance(expected_artifact_revision, int) or isinstance(expected_artifact_revision, bool) or expected_artifact_revision < 1:
-        raise ValidationError("expected_artifact_revision must be a positive integer")
+    expected_artifact_revision = _positive_revision(
+        expected_artifact_revision, "expected_artifact_revision"
+    )
     content = _required_content(content)
     encoded = content.encode("utf-8")
     if section_title is not None:
@@ -376,7 +414,8 @@ def append_artifact(
     try:
         conn.execute("BEGIN IMMEDIATE")
         artifact = conn.execute(
-            "SELECT * FROM work_item_artifacts WHERE work_item_id = ? AND artifact_id = ?",
+            "SELECT revision, state FROM work_item_artifacts "
+            "WHERE work_item_id = ? AND artifact_id = ?",
             (work_item_id, artifact_id),
         ).fetchone()
         if artifact is None:
@@ -384,31 +423,41 @@ def append_artifact(
         current_revision = int(artifact["revision"])
         if current_revision != expected_artifact_revision:
             raise ArtifactConflictError(
-                f"artifact revision conflict for {work_item_id}/{artifact_id}: expected {expected_artifact_revision}, current {current_revision}"
+                f"artifact revision conflict for {work_item_id}/{artifact_id}: "
+                f"expected {expected_artifact_revision}, current {current_revision}"
             )
         if artifact["state"] != "draft":
-            raise ArtifactConflictError(f"artifact is complete and immutable: {work_item_id}/{artifact_id}")
+            raise ArtifactConflictError(
+                f"artifact is complete and immutable: {work_item_id}/{artifact_id}"
+            )
 
         section = conn.execute(
-            "SELECT * FROM work_item_artifact_sections WHERE work_item_id = ? AND artifact_id = ? AND section_id = ?",
+            "SELECT * FROM work_item_artifact_sections "
+            "WHERE work_item_id = ? AND artifact_id = ? AND section_id = ?",
             (work_item_id, artifact_id, section_id),
         ).fetchone()
         if section is None:
             if section_title is None:
-                raise ValidationError("section_title is required when appending the first chunk of a section")
+                raise ValidationError(
+                    "section_title is required when appending the first chunk of a section"
+                )
             section_count = int(
                 conn.execute(
-                    "SELECT COUNT(*) FROM work_item_artifact_sections WHERE work_item_id = ? AND artifact_id = ?",
+                    "SELECT COUNT(*) FROM work_item_artifact_sections "
+                    "WHERE work_item_id = ? AND artifact_id = ?",
                     (work_item_id, artifact_id),
                 ).fetchone()[0]
             )
             if section_count >= ARTIFACT_SECTION_MAX:
                 raise ValidationError(
-                    f"artifact already has the MVP maximum of {ARTIFACT_SECTION_MAX} sections"
+                    f"artifact already has the MVP maximum of "
+                    f"{ARTIFACT_SECTION_MAX} sections"
                 )
             next_order = int(
                 conn.execute(
-                    "SELECT COALESCE(MAX(section_order), 0) + 1 FROM work_item_artifact_sections WHERE work_item_id = ? AND artifact_id = ?",
+                    "SELECT COALESCE(MAX(section_order), 0) + 1 "
+                    "FROM work_item_artifact_sections "
+                    "WHERE work_item_id = ? AND artifact_id = ?",
                     (work_item_id, artifact_id),
                 ).fetchone()[0]
             )
@@ -422,12 +471,15 @@ def append_artifact(
                 (work_item_id, artifact_id, section_id, section_title, next_order),
             )
             section = conn.execute(
-                "SELECT * FROM work_item_artifact_sections WHERE work_item_id = ? AND artifact_id = ? AND section_id = ?",
+                "SELECT * FROM work_item_artifact_sections "
+                "WHERE work_item_id = ? AND artifact_id = ? AND section_id = ?",
                 (work_item_id, artifact_id, section_id),
             ).fetchone()
             assert section is not None
         elif section_title is not None and section_title != section["title"]:
-            raise ValidationError(f"section_title does not match existing title {section['title']!r}")
+            raise ValidationError(
+                f"section_title does not match existing title {section['title']!r}"
+            )
 
         chunk_index = int(section["chunk_count"])
         now = _now_iso()
@@ -438,7 +490,16 @@ def append_artifact(
                 content, char_count, byte_count, created_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (work_item_id, artifact_id, section_id, chunk_index, content, len(content), len(encoded), now),
+            (
+                work_item_id,
+                artifact_id,
+                section_id,
+                chunk_index,
+                content,
+                len(content),
+                len(encoded),
+                now,
+            ),
         )
         conn.execute(
             """
@@ -450,22 +511,32 @@ def append_artifact(
             """,
             (len(content), len(encoded), work_item_id, artifact_id, section_id),
         )
-        conn.execute(
+        cursor = conn.execute(
             """
             UPDATE work_item_artifacts
             SET revision = ?, updated_at = ?
             WHERE work_item_id = ? AND artifact_id = ? AND revision = ?
             """,
-            (current_revision + 1, now, work_item_id, artifact_id, current_revision),
+            (
+                current_revision + 1,
+                now,
+                work_item_id,
+                artifact_id,
+                current_revision,
+            ),
         )
+        if cursor.rowcount != 1:
+            raise ArtifactConflictError(
+                f"artifact revision conflict for {work_item_id}/{artifact_id}; reread before retrying"
+            )
         conn.execute("COMMIT")
-        return get_artifact(db_path, work_item_id, artifact_id)
     except Exception:
         if conn.in_transaction:
             conn.execute("ROLLBACK")
         raise
     finally:
         conn.close()
+    return get_artifact(db_path, work_item_id, artifact_id)
 
 
 def _take_utf8_prefix(text: str, start: int, max_bytes: int) -> tuple[str, int, int]:
@@ -480,6 +551,23 @@ def _take_utf8_prefix(text: str, start: int, max_bytes: int) -> tuple[str, int, 
     return text[start:end], end, used
 
 
+def _parse_cursor(cursor: str) -> tuple[int, int, int]:
+    try:
+        revision_text, chunk_text, offset_text = cursor.split(":", 2)
+        revision = int(revision_text)
+        chunk_index = int(chunk_text)
+        char_offset = int(offset_text)
+    except (ValueError, AttributeError) as exc:
+        raise ValidationError("cursor is invalid") from exc
+    if revision < 1 or chunk_index < 0 or char_offset < 0:
+        raise ValidationError("cursor is invalid")
+    return revision, chunk_index, char_offset
+
+
+def _cursor(revision: int, chunk_index: int, char_offset: int) -> str:
+    return f"{revision}:{chunk_index}:{char_offset}"
+
+
 def read_artifact_section(
     db_path: str | Path,
     work_item_id: str,
@@ -492,32 +580,42 @@ def read_artifact_section(
     work_item_id = _required_text(work_item_id, "work_item_id", max_chars=256)
     artifact_id = _validate_artifact_id(artifact_id)
     section_id = _validate_section_id(section_id)
-    if not isinstance(limit_bytes, int) or isinstance(limit_bytes, bool) or not ARTIFACT_READ_MIN_BYTES <= limit_bytes <= ARTIFACT_READ_MAX_BYTES:
+    if (
+        not isinstance(limit_bytes, int)
+        or isinstance(limit_bytes, bool)
+        or not ARTIFACT_READ_MIN_BYTES <= limit_bytes <= ARTIFACT_READ_MAX_BYTES
+    ):
         raise ValidationError(
-            f"limit_bytes must be an integer between {ARTIFACT_READ_MIN_BYTES} and {ARTIFACT_READ_MAX_BYTES}"
+            f"limit_bytes must be an integer between {ARTIFACT_READ_MIN_BYTES} "
+            f"and {ARTIFACT_READ_MAX_BYTES}"
         )
 
+    expected_revision: int | None = None
     chunk_index = 0
     char_offset = 0
-    if cursor:
-        try:
-            left, right = cursor.split(":", 1)
-            chunk_index, char_offset = int(left), int(right)
-        except (ValueError, AttributeError) as exc:
-            raise ValidationError("cursor is invalid") from exc
-        if chunk_index < 0 or char_offset < 0:
-            raise ValidationError("cursor is invalid")
+    if cursor is not None:
+        expected_revision, chunk_index, char_offset = _parse_cursor(cursor)
 
     conn = _connect(db_path)
     try:
         artifact = conn.execute(
-            "SELECT revision, state FROM work_item_artifacts WHERE work_item_id = ? AND artifact_id = ?",
+            "SELECT revision, state FROM work_item_artifacts "
+            "WHERE work_item_id = ? AND artifact_id = ?",
             (work_item_id, artifact_id),
         ).fetchone()
         if artifact is None:
             raise ArtifactNotFoundError(f"artifact not found: {work_item_id}/{artifact_id}")
+        artifact_revision = int(artifact["revision"])
+        if expected_revision is not None and expected_revision != artifact_revision:
+            raise ArtifactConflictError(
+                f"artifact revision conflict for {work_item_id}/{artifact_id}: "
+                f"cursor revision {expected_revision}, current {artifact_revision}; "
+                "restart the section read from the current artifact revision"
+            )
+
         section = conn.execute(
-            "SELECT title, char_count, byte_count FROM work_item_artifact_sections WHERE work_item_id = ? AND artifact_id = ? AND section_id = ?",
+            "SELECT title, char_count, byte_count FROM work_item_artifact_sections "
+            "WHERE work_item_id = ? AND artifact_id = ? AND section_id = ?",
             (work_item_id, artifact_id, section_id),
         ).fetchone()
         if section is None:
@@ -527,49 +625,70 @@ def read_artifact_section(
 
         parts: list[str] = []
         remaining = limit_bytes
-        current_chunk, current_offset = chunk_index, char_offset
+        current_chunk = chunk_index
+        current_offset = char_offset
         next_cursor: str | None = None
+
         while remaining > 0:
             row = conn.execute(
                 """
-                SELECT chunk_index, content FROM work_item_artifact_chunks
-                WHERE work_item_id = ? AND artifact_id = ? AND section_id = ? AND chunk_index >= ?
-                ORDER BY chunk_index ASC LIMIT 1
+                SELECT chunk_index, content
+                FROM work_item_artifact_chunks
+                WHERE work_item_id = ? AND artifact_id = ? AND section_id = ?
+                  AND chunk_index >= ?
+                ORDER BY chunk_index ASC
+                LIMIT 1
                 """,
                 (work_item_id, artifact_id, section_id, current_chunk),
             ).fetchone()
             if row is None:
                 next_cursor = None
                 break
+
             actual_index = int(row["chunk_index"])
             content = str(row["content"])
             if actual_index != current_chunk:
                 current_offset = 0
             if current_offset > len(content):
                 raise ValidationError("cursor points beyond the stored chunk")
-            piece, end_offset, used = _take_utf8_prefix(content, current_offset, remaining)
+
+            piece, end_offset, used = _take_utf8_prefix(
+                content, current_offset, remaining
+            )
+            if not piece and current_offset < len(content):
+                # With a minimum read size of 4 bytes this should be unreachable for
+                # valid Unicode, but fail closed rather than return a non-progress cursor.
+                raise ValidationError("read limit cannot advance the UTF-8 cursor")
             parts.append(piece)
             remaining -= used
+
             if end_offset < len(content):
-                next_cursor = f"{actual_index}:{end_offset}"
+                next_cursor = _cursor(artifact_revision, actual_index, end_offset)
                 break
-            current_chunk, current_offset = actual_index + 1, 0
+
+            current_chunk = actual_index + 1
+            current_offset = 0
             more = conn.execute(
                 """
                 SELECT 1 FROM work_item_artifact_chunks
-                WHERE work_item_id = ? AND artifact_id = ? AND section_id = ? AND chunk_index >= ?
+                WHERE work_item_id = ? AND artifact_id = ? AND section_id = ?
+                  AND chunk_index >= ?
                 LIMIT 1
                 """,
                 (work_item_id, artifact_id, section_id, current_chunk),
             ).fetchone()
-            next_cursor = f"{current_chunk}:0" if more is not None else None
+            next_cursor = (
+                _cursor(artifact_revision, current_chunk, 0)
+                if more is not None
+                else None
+            )
             if remaining == 0:
                 break
 
         output = "".join(parts)
         return {
             "artifact_id": artifact_id,
-            "artifact_revision": int(artifact["revision"]),
+            "artifact_revision": artifact_revision,
             "state": artifact["state"],
             "section_id": section_id,
             "section_title": section["title"],
@@ -592,14 +711,16 @@ def finalize_artifact(
 ) -> dict[str, Any]:
     work_item_id = _required_text(work_item_id, "work_item_id", max_chars=256)
     artifact_id = _validate_artifact_id(artifact_id)
-    if not isinstance(expected_artifact_revision, int) or isinstance(expected_artifact_revision, bool) or expected_artifact_revision < 1:
-        raise ValidationError("expected_artifact_revision must be a positive integer")
+    expected_artifact_revision = _positive_revision(
+        expected_artifact_revision, "expected_artifact_revision"
+    )
 
     conn = _connect(db_path)
     try:
         conn.execute("BEGIN IMMEDIATE")
         artifact = conn.execute(
-            "SELECT * FROM work_item_artifacts WHERE work_item_id = ? AND artifact_id = ?",
+            "SELECT revision, state FROM work_item_artifacts "
+            "WHERE work_item_id = ? AND artifact_id = ?",
             (work_item_id, artifact_id),
         ).fetchone()
         if artifact is None:
@@ -607,29 +728,44 @@ def finalize_artifact(
         current_revision = int(artifact["revision"])
         if current_revision != expected_artifact_revision:
             raise ArtifactConflictError(
-                f"artifact revision conflict for {work_item_id}/{artifact_id}: expected {expected_artifact_revision}, current {current_revision}"
+                f"artifact revision conflict for {work_item_id}/{artifact_id}: "
+                f"expected {expected_artifact_revision}, current {current_revision}"
             )
         if artifact["state"] != "draft":
-            raise ArtifactConflictError(f"artifact is already complete: {work_item_id}/{artifact_id}")
+            raise ArtifactConflictError(
+                f"artifact is already complete: {work_item_id}/{artifact_id}"
+            )
         if conn.execute(
-            "SELECT 1 FROM work_item_artifact_chunks WHERE work_item_id = ? AND artifact_id = ? LIMIT 1",
+            "SELECT 1 FROM work_item_artifact_chunks "
+            "WHERE work_item_id = ? AND artifact_id = ? LIMIT 1",
             (work_item_id, artifact_id),
         ).fetchone() is None:
             raise ValidationError("cannot finalize an artifact without content")
+
         now = _now_iso()
-        conn.execute(
+        cursor = conn.execute(
             """
             UPDATE work_item_artifacts
             SET state = 'complete', revision = ?, updated_at = ?
             WHERE work_item_id = ? AND artifact_id = ? AND revision = ?
             """,
-            (current_revision + 1, now, work_item_id, artifact_id, current_revision),
+            (
+                current_revision + 1,
+                now,
+                work_item_id,
+                artifact_id,
+                current_revision,
+            ),
         )
+        if cursor.rowcount != 1:
+            raise ArtifactConflictError(
+                f"artifact revision conflict for {work_item_id}/{artifact_id}; reread before retrying"
+            )
         conn.execute("COMMIT")
-        return get_artifact(db_path, work_item_id, artifact_id)
     except Exception:
         if conn.in_transaction:
             conn.execute("ROLLBACK")
         raise
     finally:
         conn.close()
+    return get_artifact(db_path, work_item_id, artifact_id)
