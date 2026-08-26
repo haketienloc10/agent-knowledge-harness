@@ -3,6 +3,8 @@
 Global Work Item MCP là source of truth duy nhất cho **mutable product-task state**
 được dùng chung bởi QiQi và execution agents trong các repository con.
 
+Nó không thay thế:
+
 ```text
 Global Work Item MCP   = task truth + optional task-detail artifacts
 Knowledge MCP          = reusable truth
@@ -17,10 +19,10 @@ unit test, IT, UAT, fix bug và Q&A mà không yêu cầu người dùng hoặc 
 bộ lịch sử sau mỗi session.
 
 MVP cố ý **không** là project-management product. Không có workflow DSL, event
-sourcing, RBAC, notification, Redmine sync, automatic phase transition hay web
+sourcing, RBAC, notification, Redmine sync, automatic phase transition hoặc web
 dashboard. Human CLI chỉ là read-only observer của canonical store.
 
-## Canonical Work Item
+## Canonical identity
 
 Mỗi product task có một ID ổn định:
 
@@ -31,7 +33,9 @@ redmine:151921
 
 Format là `<source>:<external-id>`.
 
-Work Item snapshot/material history gồm:
+## Work Item document
+
+Một Work Item lưu snapshot hiện tại và material history cần để tiếp tục công việc:
 
 ```yaml
 id: redmine:116655
@@ -50,12 +54,14 @@ questions:
     answer: Có, trả null.
     decision_id: d1
 
+# Decision giữ lý do task hiện tại được hiểu/triển khai như vậy.
 decisions:
   - id: d1
     status: active
     summary: paymentStatus luôn xuất hiện; unknown trả null.
     decided_by: customer
 
+# Change ghi requirement/scope evolution, không ghi transcript.
 changes:
   - id: c1
     type: requirement_added
@@ -68,29 +74,44 @@ repos:
     summary: Implementation hoàn tất.
     verification:
       - Unit tests passed
+  frontend-web:
+    status: pending
+    summary: ""
+    verification: []
 
 blockers: []
-handoffs: []
-next_actions: []
-checkpoints: []
+
+handoffs:
+  - id: h1
+    from: backend-api
+    to: frontend-web
+    status: pending
+    summary: Consume paymentStatus.
+    evidence:
+      - commit abc123
+
+next_actions:
+  - repo: frontend-web
+    action: Consume paymentStatus và chạy UT.
+
+checkpoints:
+  - repo: backend-api
+    summary: Backend implementation + UT hoàn tất.
 ```
 
 `phase` là descriptive state, không phải finite-state-machine. Task có thể quay từ
-UAT về implementation/fix rồi trở lại IT/UAT.
+UAT về implementation/fix rồi trở lại IT/UAT mà MCP không chặn transition.
 
-Global status MVP:
+`status` MVP có: `active`, `waiting`, `blocked`, `done`, `cancelled`.
 
-```text
-active | waiting | blocked | done | cancelled
-```
+Repo status có: `pending`, `active`, `waiting`, `blocked`, `done`, `not_required`.
 
-Repo status:
+Requirement change type MVP có: `requirement_added`, `requirement_changed`,
+`requirement_removed`, `scope_changed`.
 
-```text
-pending | active | waiting | blocked | done | not_required
-```
+## Snapshot và history
 
-## Snapshot và material history
+Các field có hai vai trò khác nhau:
 
 ```text
 summary/current_requirements/status/phase/repos/blockers/next_actions
@@ -126,12 +147,19 @@ MVP types:
 intake | investigation | plan | review | report
 ```
 
-`work_item_get` chỉ trả thin artifact metadata, không trả body. Full detail dùng
-progressive disclosure:
+`work_item_get` trả Work Item cùng **thin artifact index**. Index này là derived
+metadata, không được persist trong `work_items.document_json`. Core từ chối create hoặc
+update nếu caller cố ghi field `artifacts`.
+
+Full detail dùng progressive disclosure:
 
 ```text
 artifact_list -> artifact_get manifest -> artifact_read bounded section chunks
 ```
+
+Không có MCP read call nào trả toàn artifact body. `work_item_create` và
+`work_item_update` cũng không làm post-commit artifact enrichment; mutation success
+phản ánh đúng canonical write vừa commit.
 
 Artifact revision độc lập với Work Item revision. Artifact append/finalize không làm
 Work Item revision tăng và không cạnh tranh optimistic writer với task-state update.
@@ -154,12 +182,15 @@ finalize -> complete, immutable trong MVP
 ```
 
 Create artifact phải dựa trên exact current Work Item revision qua
-`based_on_work_item_revision`. Nếu artifact cũ mâu thuẫn Work Item mới hơn, Work Item
-thắng.
+`based_on_work_item_revision`. Continuation cursor của artifact read được bind vào
+artifact revision; nếu draft thay đổi giữa hai page, caller phải reread manifest và
+restart section read thay vì trộn content từ hai revision.
 
-Chi tiết đầy đủ: `ARTIFACTS.md`.
+Nếu artifact cũ mâu thuẫn Work Item mới hơn, Work Item thắng.
 
-## MCP API
+Chi tiết: `ARTIFACTS.md`.
+
+## API MVP
 
 Canonical Work Item tools:
 
@@ -187,17 +218,20 @@ work_item_artifact_finalize(id, artifact_id, expected_artifact_revision)
 - array replace nguyên tử;
 - `null` remove field;
 - required field bị remove sẽ fail validation;
-- derived `artifacts` metadata không được write qua `work_item_update`.
+- immutable/derived field như `id`, `revision`, `artifacts` không được patch.
+
+Arrays replace nguyên tử là intentional cho MVP: caller phải đọc Work Item hiện tại,
+reconcile full intended array, rồi update bằng exact revision.
 
 ## Optimistic concurrency
 
-Work Item revision:
+Mọi Work Item có `revision` do MCP sở hữu.
 
 ```text
 QiQi đọc revision 12
 backend đọc revision 12
 backend update -> revision 13
-QiQi update expected_revision=12 -> conflict
+QiQi update bằng expected_revision=12 -> conflict
 QiQi reread revision 13 -> reconcile -> retry
 ```
 
@@ -210,35 +244,85 @@ writer B append expected_artifact_revision=4 -> conflict
 writer B artifact_get -> reconcile -> retry
 ```
 
-Không có silent last-write-wins.
+Không có last-write-wins silent overwrite.
 
-SQLite dùng WAL, `BEGIN IMMEDIATE` và exact revision checks cho mutation paths.
+SQLite dùng `BEGIN IMMEDIATE`, WAL và exact revision checks cho mutation paths.
 
 ## Ownership policy
 
-Storage không triển khai RBAC trong MVP. Boundary được enforce bởi agent policy.
+MCP storage không triển khai RBAC trong MVP. Boundary được enforce bởi agent policy.
 
-QiQi sở hữu global orchestration state: overall status/phase/summary, repo assignment,
-next actions, cross-repo reconciliation và final completion.
+### QiQi
 
-Repo agent:
+QiQi sở hữu global orchestration state:
 
-- chỉ execute trong current Git root;
-- chỉ update repo evidence/state nó thực sự xác lập;
+- overall `status` / `phase` / `summary`;
+- repo involvement/assignment;
+- global `next_actions`;
+- reconciliation sau cross-repo handoff;
+- quyết định task thực sự `done`.
+
+### Repository execution agent
+
+Agent được đọc toàn bộ Work Item để hiểu context nhưng:
+
+- chỉ investigation/implementation/verification trong Git root hiện tại;
+- chỉ cập nhật repo evidence/state mà nó thực sự xác lập;
 - có thể ghi blocker, open question, checkpoint và handoff nó phát hiện;
-- không mark sibling repo done;
-- không tự xử lý repository khác.
+- không đánh dấu sibling repo done;
+- không tự xử lý phần việc của repository khác;
+- cross-repo remaining work phải được ghi/handoff và trả lại QiQi để điều phối.
 
-Artifact không thay đổi ownership rule. Detail artifact không được dùng để override
-newer canonical Work Item state.
+Artifact không thay đổi ownership rule và không override newer canonical Work Item
+state.
+
+## Questions, decisions và changes
+
+Open question tồn tại khi implementation không thể tự chốt một external/product
+ambiguity. Agent không đoán để hoàn thành task.
+
+Khi user/customer Q&A trả lời:
+
+```text
+question resolved
+      ↓
+decision active
+      ↓
+current_requirements được reconcile nếu semantics thay đổi
+```
+
+Nếu requirement/scope thực sự thay đổi, ghi thêm `changes[]`.
+
+Decision cũ không bị xóa khi bị đổi. Mark `status: superseded` và trỏ
+`superseded_by` sang decision mới để phân biệt "implementation trước sai" với
+"requirement sau đã đổi".
+
+## Handoff cross-repo
+
+Handoff nằm trong chính canonical Work Item, không có handoff store thứ hai:
+
+```text
+backend agent
+  ↓ ghi handoff backend -> frontend + evidence
+Work Item
+  ↓
+QiQi reconcile/delegate
+  ↓
+frontend agent đọc cùng Work Item
+```
+
+Execution agent vẫn không sửa sibling repository.
 
 ## Persistence
 
-Explicit database path:
+MCP dùng một SQLite database explicit qua:
 
 ```bash
 WORK_ITEM_DB_PATH=/absolute/path/work-items.sqlite3
 ```
+
+Database không phụ thuộc CWD/workspace/repository. Cả QiQi và child agents kết nối
+cùng user-scoped MCP registration.
 
 Default installer path:
 
@@ -266,8 +350,9 @@ agent-work-item artifact redmine:113387 report:1
 agent-work-item artifact redmine:113387 report:1 --section code-review
 ```
 
-`show` chỉ hiển thị thin artifact index. `artifact` mới đọc full body cho human terminal.
-CLI mở SQLite bằng `mode=ro` và không có mutation path.
+`show` chỉ hiển thị thin artifact index. Text-mode `artifact` stream stored chunks trực
+tiếp từ read-only SQLite connection; chỉ explicit `--json` mới materialize full selected
+artifact. CLI không có mutation path.
 
 Chi tiết: `CLI.md`.
 
@@ -277,7 +362,7 @@ Chi tiết: `CLI.md`.
 bash scripts/install-user-mcp.sh
 ```
 
-Hoặc custom DB:
+Hoặc:
 
 ```bash
 bash scripts/install-user-mcp.sh \
@@ -291,8 +376,8 @@ Installer tạo:
 ~/.local/bin/agent-work-item      # read-only human CLI
 ```
 
-và đăng ký MCP tên `work_item` cho Codex/Claude CLI đang có. Existing registration
-cùng tên nhưng trỏ runtime khác làm installer fail thay vì overwrite âm thầm.
+và đăng ký MCP tên `work_item` cho Codex/Claude CLI đang có. Nếu registration cùng
+tên trỏ sang runtime khác, installer fail thay vì overwrite âm thầm.
 
 ## Verification
 
@@ -303,18 +388,23 @@ bash scripts/work-item-template-check.sh
 Test/check cover ít nhất:
 
 - create/get/list/update Work Item;
-- semantic Q&A/decision/change/repo state;
+- questions/decisions/requirement changes;
+- nested repo state merge;
 - stale Work Item revision và concurrent writers;
+- immutable metadata và derived `artifacts` guard;
 - artifact create/list/get manifest;
-- stale artifact revision;
+- stale artifact writer revision;
 - artifact revision độc lập Work Item revision;
 - exact Work Item revision khi tạo artifact;
-- UTF-8 byte write/read limits + continuation cursor;
+- exact 32,000-byte write boundary và UTF-8 byte semantics;
+- bounded read + revision-bound continuation cursor;
 - exact preservation của Markdown/code whitespace;
+- artifact/section MVP caps;
 - finalize empty bị reject và complete artifact immutable;
 - human CLI thin artifact index/full explicit artifact view;
-- human CLI không ghi SQLite;
-- static invariant cho MCP tool count, bounded payload và read-only boundary.
+- human CLI text stream + explicit JSON materialization đều read-only;
+- static invariant cho MCP tool count, post-commit mutation response, bounded payload
+  và read-only boundary.
 
-Sau rollout thực tế, mở fresh Codex/Claude session để MCP client discover tool surface
+Khi rollout thực tế, mở fresh Codex/Claude session để MCP client discover tool surface
 mới và smoke test QiQi + repository child trên cùng database.
