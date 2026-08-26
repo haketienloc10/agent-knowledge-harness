@@ -171,8 +171,8 @@ blocked/result-capture handling. Native response transport fail closed: không
 fallback terminal screen, scrollback, transcript parsing hoặc report Markdown.
 
 `.qiqi/state/qiqi_delegate.sqlite3` là workspace MCP runtime state. `.qiqi/runs/`
-chỉ là legacy ownership-import bridge. `.qiqi/tasks/` không còn là active task
-store; canonical task state nằm trong Global Work Item MCP.
+chỉ là legacy ownership-import bridge. Canonical task state nằm trong Global Work
+Item MCP.
 
 ## Shared Knowledge contract
 
@@ -214,7 +214,7 @@ optimistic revision. Human direct edit làm index stale tới khi reindex.
 7. Native result capture giữ exact final response, không fixed schema/viewport/
    transcript fallback.
 8. Blocked state preserve native session continuity trước cleanup.
-9. Workspace không tạo `.qiqi/tasks/` task truth thứ hai.
+9. Workspace không tạo task truth thứ hai ngoài Global Work Item MCP.
 10. Architecture/runtime change bắt buộc cập nhật checker + docs + migration.
 
 ## Khi thay đổi Repository Template
@@ -264,9 +264,9 @@ optimistic revision. Human direct edit làm index stale tới khi reindex.
 ## Migration
 
 Execution/task-state contract change phải có migration cho workspace/repo đã tồn
-tại. Migration Work Item phải remove legacy `.qiqi/tasks/` artifacts, update
-workspace/repo policy/checker/docs nhưng **không** tự ghi user MCP config; operator
-cài `work_item` user scope explicitly từ `work-item-template/`.
+tại. Migration Work Item update workspace/repo policy/checker/docs nhưng **không**
+tự ghi user MCP config; operator cài `work_item` user scope explicitly từ
+`work-item-template/`.
 
 Repo `AGENTS.md` dùng 3-way merge để không mặc nhiên xóa product-specific
 instructions; template-owned checker/docs dùng replace với backup behavior của
