@@ -11,8 +11,8 @@ description: >
 
 This skill is only an explicit entry point. The workspace `AGENTS.md` remains the
 canonical policy for Work Item ownership, QiQi orchestration, repository delegation,
-Shared Knowledge, native result handoff, revision conflict handling, and completion.
-Do not duplicate or weaken those rules here.
+Shared Knowledge, optional task artifacts, native result handoff, revision conflict
+handling, and completion. Do not duplicate or weaken those rules here.
 
 ## Input
 
@@ -93,6 +93,11 @@ Investigate before implementation when root cause, ownership, scope, compatibili
 solution correctness is not sufficiently established. Do not implement a ticket's
 suggested fix merely because it is written in the ticket.
 
+Explicit user gates override autonomous continuation. For example, if the user says
+"chỉ investigation" / "investigation only", stop before implementation, keep the
+canonical Work Item non-terminal when remaining work exists, and persist the next useful
+action instead of continuing merely because evidence is sufficient to implement.
+
 ## Orchestration
 
 QiQi owns workspace-level orchestration and overall Work Item state according to
@@ -112,6 +117,47 @@ For repository-local work:
 A child agent does not become a cross-repository orchestrator. If it discovers work in
 another repository, persist a Work Item handoff with material evidence and let QiQi
 choose and delegate the consumer repository.
+
+## Optional detailed artifacts
+
+Task artifacts (`intake`, `investigation`, `plan`, `review`, `report`) are optional
+progressive-disclosure detail. They are **not created automatically by this skill**.
+
+Create/use an artifact only when the user explicitly requests that detail to be
+persisted, for example:
+
+```text
+$ticket-work-item issue.md chỉ investigation và lưu investigation artifact
+$ticket-work-item issue.md lập plan và lưu plan artifact
+Tổng kết redmine:113387 từ yêu cầu ban đầu đến implementation, UT và code review thành report
+```
+
+If the user does not ask for an artifact, normal ticket processing uses the canonical
+Work Item only plus repo evidence/Knowledge according to policy.
+
+When an artifact is requested:
+
+1. Reread latest Work Item before artifact create so `based_on_work_item_revision` is
+   exact.
+2. `work_item_artifact_create` creates metadata only in `draft` state.
+3. Organize long content into semantic sections and bounded append chunks; do not send
+   the full document in one MCP call.
+4. For existing artifacts, use `work_item_artifact_get` to read metadata/section
+   manifest, then `work_item_artifact_read` only for sections actually needed.
+5. Follow `next_cursor`; do not hydrate the full artifact when one section suffices.
+6. Append/finalize with exact artifact revision. Artifact revision conflict means
+   artifact_get → reconcile → retry; do not mutate Work Item revision to avoid it.
+7. Finalize only when requested artifact content is complete.
+8. Latest canonical Work Item always wins if an older artifact conflicts with current
+   requirements/decision/status/phase.
+
+If a child repository agent must contribute to an explicitly requested artifact, pass
+that artifact objective and exact identity/revision in the TaskPacket. Do not require a
+child to list/read every artifact just to discover what QiQi meant.
+
+A report requested after execution may reconstruct missing optional earlier artifacts
+from original ticket provenance + canonical Work Item history + current repo evidence.
+It must state when an earlier artifact was not recorded rather than fabricating one.
 
 ## Questions and decisions
 
@@ -148,8 +194,8 @@ Use exact `expected_revision` and update only material task continuity such as:
 - `next_actions`;
 - overall summary/status/phase when QiQi owns the change.
 
-Do not use the Work Item as a command transcript, activity log, or hidden-reasoning
-store.
+Do not use the Work Item as a command transcript, activity log, hidden-reasoning store,
+or container for long-form artifact bodies.
 
 On revision conflict:
 
@@ -161,8 +207,9 @@ Never silently overwrite newer canonical task state.
 
 ## Shared Knowledge boundary
 
-Task-specific mutable state stays in the Work Item. Reusable, verified conclusions that
-matter beyond the ticket may use Shared Knowledge according to workspace policy.
+Task-specific mutable state stays in the Work Item. Optional task artifacts stay task
+specific. Reusable, verified conclusions that matter beyond the ticket may use Shared
+Knowledge according to workspace policy.
 
 When Shared Knowledge is relevant, follow the current progressive-disclosure flow:
 
@@ -170,14 +217,18 @@ When Shared Knowledge is relevant, follow the current progressive-disclosure flo
 knowledge_search → knowledge_read → knowledge_write
 ```
 
-Do not store ticket progress, temporary blockers, ticket Q&A, or next actions as Shared
-Knowledge.
+Do not store ticket progress, temporary blockers, ticket Q&A, next actions or long-form
+task reports as Shared Knowledge.
 
 ## Completion and user report
 
 Do not mark a Work Item done merely because code changed. Completion requires sufficient
 evidence that the current effective requirements are satisfied and relevant verification
 is complete.
+
+An artifact is part of completion only when the user explicitly requested that artifact.
+If requested, it must be finalized or its persistence failure/caveat must be reported;
+otherwise artifacts remain optional and absence is not a blocker.
 
 At meaningful stopping points, report concisely:
 
