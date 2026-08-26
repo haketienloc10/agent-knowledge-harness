@@ -76,6 +76,12 @@ for pattern in \
   'work_item_update' \
   'expected_revision' \
   'canonical Work Item' \
+  '^## Optional Task Artifacts$' \
+  'work_item_artifact_list' \
+  'work_item_artifact_get' \
+  'work_item_artifact_read' \
+  'based_on_work_item_revision' \
+  'artifact_revision_conflict' \
   '`delegate_repo_task`' \
   '`user_request`' \
   '`required_context`' \
@@ -100,6 +106,24 @@ for pattern in \
   'revision conflict'; do
   rg -q "$pattern" "$agents_md" || fail "AGENTS.md: missing Work Item continuity rule: $pattern"
 done
+
+# CRITICAL OPTIONAL-ARTIFACT INVARIANTS — DO NOT REMOVE OR WEAKEN THESE CHECKS
+# merely to make a migration pass. Artifacts are explicit-only progressive detail,
+# never default ticket ceremony or a replacement for canonical Work Item state.
+rg -U -q 'Artifact là optional.*MUST NOT được tạo như ceremony' "$agents_md" || \
+  fail 'AGENTS.md: artifact creation must remain optional/explicit-only'
+rg -U -q '\$ticket-work-item.*không tự động tạo.*artifact' "$agents_md" || \
+  fail 'AGENTS.md: ticket workflow must not auto-create artifacts'
+rg -U -q 'work_item_get.*bounded thin artifact index.*không body|work_item_get.*bounded thin artifact index; không body' "$agents_md" || \
+  fail 'AGENTS.md: Work Item reads must not hydrate artifact bodies'
+rg -U -q 'work_item_artifact_get.*metadata.*section manifest' "$agents_md" || \
+  fail 'AGENTS.md: artifact_get progressive disclosure rule missing'
+rg -U -q 'Artifact revision độc lập Work Item revision' "$agents_md" || \
+  fail 'AGENTS.md: artifact revision must stay independent from Work Item revision'
+rg -U -q 'latest canonical Work Item > artifact|current Work Item thắng' "$agents_md" || \
+  fail 'AGENTS.md: canonical Work Item precedence over stale artifacts missing'
+rg -U -q 'artifact chỉ là DoD requirement nếu user explicitly yêu cầu' "$agents_md" || \
+  fail 'AGENTS.md: optional artifacts must not become unconditional Definition of Done'
 
 # CRITICAL INVARIANT — DO NOT REMOVE OR WEAKEN THIS CHECK merely to make a
 # migration/check pass. Delegation silence is part of the synchronous execution
@@ -145,6 +169,14 @@ if [[ -f "$skill" ]]; then
     'work_item_get' \
     'expected_revision' \
     'delegate_repo_task' \
+    '^## Optional detailed artifacts$' \
+    'not created automatically by this skill' \
+    'work_item_artifact_create' \
+    'work_item_artifact_get' \
+    'work_item_artifact_read' \
+    'next_cursor' \
+    'exact artifact revision' \
+    'Explicit user gates override autonomous continuation' \
     'knowledge_search → knowledge_read → knowledge_write'; do
     rg -q "$pattern" "$skill" || fail "ticket-work-item skill: missing contract: $pattern"
   done
