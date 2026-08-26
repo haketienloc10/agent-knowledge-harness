@@ -39,7 +39,7 @@ agent-work-item list --status blocked --limit 20
 
 Count trên header luôn là count toàn store; filter chỉ áp dụng cho bảng ticket bên dưới.
 
-## Detail
+## Task detail
 
 ```bash
 agent-work-item show redmine:113387
@@ -57,10 +57,14 @@ Detail được bố cục để nhìn một lượt toàn canonical snapshot/ma
 - blockers;
 - handoffs;
 - next actions;
-- checkpoints.
+- checkpoints;
+- thin artifact index.
 
 Section rỗng vẫn được hiển thị với count `0` để dễ thấy task còn blocker/question/
-handoff hay không.
+handoff/artifact hay không.
+
+Artifact index không chứa body. Mỗi row chỉ cho biết artifact id/type/state/revision,
+section count, size, title và Work Item revision mà artifact dựa vào.
 
 Raw JSON chỉ dùng khi debug:
 
@@ -68,11 +72,64 @@ Raw JSON chỉ dùng khi debug:
 agent-work-item show redmine:113387 --json
 ```
 
+JSON này vẫn chỉ gắn thin artifact index, không hydrate artifact body.
+
+## Artifact detail
+
+Artifact là detail optional như intake, investigation, plan, review hoặc report. Chỉ khi
+cần xem detail mới dùng `artifact`.
+
+Xem metadata + section outline, không đọc body:
+
+```bash
+agent-work-item artifact redmine:113387 report:1 --manifest
+```
+
+Xem full artifact:
+
+```bash
+agent-work-item artifact redmine:113387 report:1
+```
+
+CLI stream từng stored chunk ra stdout thay vì gom toàn body vào memory trước khi in.
+Điều này phù hợp với report/investigation dài.
+
+Chỉ xem một section:
+
+```bash
+agent-work-item artifact redmine:113387 report:1 \
+  --section verification
+```
+
+Output manifest cho biết:
+
+```text
+artifact state/type/revision
+based_on_work_item_revision
+created/updated
+section count / total size
+summary
+ordered section manifest
+```
+
+Sau manifest, nếu không dùng `--manifest`, body được in theo từng heading:
+
+```text
+## Requirement review  [requirements]
+...
+
+## Verification  [verification]
+...
+```
+
 ## Read-only guarantee
 
-CLI mở SQLite bằng URI `mode=ro`. Nó không dùng Work Item mutation API, không tạo
-schema, không chạy write PRAGMA và không thay revision/document state. `work-item-template-check.sh`
-khóa invariant này và phải fail nếu CLI có mutation path.
+CLI mở SQLite bằng URI `mode=ro`. Nó không dùng Work Item/artifact mutation API, không
+tạo schema, không chạy write PRAGMA và không thay revision/document/artifact state.
+`work-item-template-check.sh` khóa invariant này và phải fail nếu CLI có mutation path.
+
+Nếu DB cũ chưa từng được artifact-capable MCP mở thì `show` coi artifact count là `0`.
+CLI không tự tạo artifact schema; artifact schema chỉ được MCP storage layer tạo lazily.
 
 ## Installation
 
@@ -84,3 +141,5 @@ agent-work-item       # read-only human viewer
 ```
 
 Cả hai wrapper nhận cùng `WORK_ITEM_DB_PATH` do installer cấu hình.
+
+Chi tiết artifact contract và payload bounds nằm trong `ARTIFACTS.md`.
