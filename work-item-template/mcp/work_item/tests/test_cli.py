@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
+from unittest.mock import patch
 
 from artifacts import append_artifact, create_artifact, finalize_artifact
 from cli import (
@@ -44,6 +45,41 @@ class WorkItemCliTests(unittest.TestCase):
                 repositories=[repo],
             ),
         )
+
+    def _create_report(self, item_id: str = "redmine:77") -> tuple[dict, dict]:
+        created = self._create(item_id, title="Artifact UX", repo="repo-a")
+        artifact = create_artifact(
+            self.db,
+            created["id"],
+            artifact_type="report",
+            title="Final report",
+            summary="Review from requirement through verification",
+            based_on_work_item_revision=created["revision"],
+        )
+        artifact = append_artifact(
+            self.db,
+            created["id"],
+            artifact["artifact_id"],
+            expected_artifact_revision=artifact["revision"],
+            section_id="requirements",
+            section_title="Requirement review",
+            content="Detailed requirement evidence that should not appear in thin show output.",
+        )
+        artifact = append_artifact(
+            self.db,
+            created["id"],
+            artifact["artifact_id"],
+            expected_artifact_revision=artifact["revision"],
+            section_id="requirements",
+            content="\nSecond stored chunk.",
+        )
+        artifact = finalize_artifact(
+            self.db,
+            created["id"],
+            artifact["artifact_id"],
+            expected_artifact_revision=artifact["revision"],
+        )
+        return created, artifact
 
     def test_list_shows_total_and_status_counts(self) -> None:
         self._create("redmine:1", title="First ticket", repo="repo-a")
@@ -110,31 +146,8 @@ class WorkItemCliTests(unittest.TestCase):
         self.assertIn("stress test passed", output)
         self.assertIn("revision=2", output)
 
-    def test_show_has_thin_artifact_index_and_artifact_command_has_full_content(self) -> None:
-        created = self._create("redmine:77", title="Artifact UX", repo="repo-a")
-        artifact = create_artifact(
-            self.db,
-            created["id"],
-            artifact_type="report",
-            title="Final report",
-            summary="Review from requirement through verification",
-            based_on_work_item_revision=created["revision"],
-        )
-        artifact = append_artifact(
-            self.db,
-            created["id"],
-            artifact["artifact_id"],
-            expected_artifact_revision=artifact["revision"],
-            section_id="requirements",
-            section_title="Requirement review",
-            content="Detailed requirement evidence that should not appear in thin show output.",
-        )
-        artifact = finalize_artifact(
-            self.db,
-            created["id"],
-            artifact["artifact_id"],
-            expected_artifact_revision=artifact["revision"],
-        )
+    def test_show_has_thin_index_and_text_artifact_streams_full_content(self) -> None:
+        created, artifact = self._create_report()
 
         show_out = io.StringIO()
         with redirect_stdout(show_out):
@@ -145,14 +158,19 @@ class WorkItemCliTests(unittest.TestCase):
         self.assertNotIn("Detailed requirement evidence", show_out.getvalue())
 
         artifact_out = io.StringIO()
-        with redirect_stdout(artifact_out):
-            artifact_rc = main(["artifact", created["id"], artifact["artifact_id"]])
+        with patch(
+            "cli._get_artifact_json_readonly",
+            side_effect=AssertionError("text mode must not materialize full artifact JSON"),
+        ):
+            with redirect_stdout(artifact_out):
+                artifact_rc = main(["artifact", created["id"], artifact["artifact_id"]])
         self.assertEqual(artifact_rc, 0)
         self.assertIn("Requirement review", artifact_out.getvalue())
         self.assertIn("Detailed requirement evidence", artifact_out.getvalue())
+        self.assertIn("Second stored chunk", artifact_out.getvalue())
 
-    def test_list_and_show_commands_do_not_write_database(self) -> None:
-        created = self._create("redmine:9", title="Read only", repo="repo-a")
+    def test_list_show_and_artifact_commands_do_not_write_database(self) -> None:
+        created, artifact = self._create_report("redmine:9")
         before = get_work_item(self.db, created["id"])
         before_mtime = self.db.stat().st_mtime_ns
 
@@ -162,15 +180,27 @@ class WorkItemCliTests(unittest.TestCase):
         show_out = io.StringIO()
         with redirect_stdout(show_out):
             show_rc = main(["show", created["id"]])
+        artifact_out = io.StringIO()
+        with redirect_stdout(artifact_out):
+            artifact_rc = main(["artifact", created["id"], artifact["artifact_id"]])
+        json_out = io.StringIO()
+        with redirect_stdout(json_out):
+            json_rc = main(
+                ["artifact", created["id"], artifact["artifact_id"], "--json"]
+            )
 
         after_mtime = self.db.stat().st_mtime_ns
         after = get_work_item(self.db, created["id"])
         self.assertEqual(list_rc, 0)
         self.assertEqual(show_rc, 0)
+        self.assertEqual(artifact_rc, 0)
+        self.assertEqual(json_rc, 0)
         self.assertEqual(before["revision"], after["revision"])
         self.assertEqual(before_mtime, after_mtime)
         self.assertIn("WORK ITEMS", list_out.getvalue())
-        self.assertIn("ARTIFACTS (0)", show_out.getvalue())
+        self.assertIn("ARTIFACTS (1)", show_out.getvalue())
+        self.assertIn("Detailed requirement evidence", artifact_out.getvalue())
+        self.assertIn('"content": "Detailed requirement evidence', json_out.getvalue())
 
 
 if __name__ == "__main__":
