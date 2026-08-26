@@ -1,7 +1,7 @@
 {
   "version": 5,
   "from_ref": "a2f63c178efd735fbc72005dd1edb50851182b85",
-  "to_ref": "3a693ea11374065f0906f0ba604bdc1c7028d389",
+  "to_ref": "ca4f21706021abd6b09445349e5c7c9b66eca96b",
   "description": "adopt user-scoped Global Work Item task truth, remove workspace-local task skeleton, and catch up post-v4 routing policy",
   "workspace": {
     "merge": [],
@@ -19,9 +19,7 @@
       "workspace-template/.qiqi/tasks/active/README.md",
       "workspace-template/.qiqi/tasks/completed/README.md"
     ],
-    "manual_review": [
-      "workspace-template/.qiqi/tasks"
-    ]
+    "manual_review": []
   },
   "repo": {
     "merge": [
