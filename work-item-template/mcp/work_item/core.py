@@ -34,6 +34,7 @@ REQUIRED_COLLECTIONS = (
     "checkpoints",
 )
 IMMUTABLE_UPDATE_FIELDS = {"id", "revision", "created_at", "updated_at"}
+DERIVED_FIELDS = {"artifacts"}
 
 
 class WorkItemError(RuntimeError):
@@ -176,6 +177,11 @@ def _validate_repo_map(value: Any) -> None:
 def validate_document(document: Any) -> dict[str, Any]:
     if not isinstance(document, dict):
         raise ValidationError("work item document must be an object")
+    derived = sorted(DERIVED_FIELDS.intersection(document))
+    if derived:
+        raise ValidationError(
+            "work item document must not persist derived fields: " + ", ".join(derived)
+        )
 
     item_id = _required_text(document.get("id"), "id", max_chars=256)
     if not WORK_ITEM_ID_RE.fullmatch(item_id):
@@ -403,6 +409,11 @@ def update_work_item(
     if immutable:
         raise ValidationError(
             "changes must not modify immutable fields: " + ", ".join(immutable)
+        )
+    derived = sorted(DERIVED_FIELDS.intersection(changes))
+    if derived:
+        raise ValidationError(
+            "changes must not modify derived fields: " + ", ".join(derived)
         )
 
     conn = _connect(db_path)
