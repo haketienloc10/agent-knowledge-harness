@@ -11,45 +11,142 @@ import textwrap
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable
-
-from core import (
-    NotFoundError,
-    ValidationError,
-    get_work_item,
-    list_work_items,
-    resolve_db_path,
-)
+from urllib.parse import quote
 
 STATUS_ORDER = ("active", "waiting", "blocked", "done", "cancelled")
+
+
+class CliError(RuntimeError):
+    pass
+
+
+class CliNotFoundError(CliError):
+    pass
 
 
 def _db_path() -> Path:
     raw = os.environ.get("WORK_ITEM_DB_PATH", "").strip()
     if not raw:
-        raise RuntimeError(
+        raise CliError(
             "WORK_ITEM_DB_PATH must point to the global Work Item SQLite database"
         )
-    return resolve_db_path(raw)
+    path = Path(raw).expanduser().resolve()
+    if path.exists() and path.is_dir():
+        raise CliError(f"Work Item DB path is a directory: {path}")
+    return path
+
+
+def _connect_readonly(db_path: Path) -> sqlite3.Connection:
+    if not db_path.is_file():
+        raise CliError(f"Work Item database does not exist: {db_path}")
+    uri = f"file:{quote(str(db_path), safe='/')}?mode=ro"
+    try:
+        conn = sqlite3.connect(uri, uri=True, timeout=5.0)
+    except sqlite3.Error as exc:
+        raise CliError(f"cannot open Work Item database read-only: {exc}") from exc
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def _decode_row(row: sqlite3.Row) -> dict[str, Any]:
+    try:
+        item = json.loads(row["document_json"])
+    except (TypeError, json.JSONDecodeError) as exc:
+        raise CliError(f"invalid Work Item JSON for {row['id']}: {exc}") from exc
+    item["revision"] = row["revision"]
+    item["created_at"] = row["created_at"]
+    item["updated_at"] = row["updated_at"]
+    return item
 
 
 def _summarize_work_items(db_path: Path) -> dict[str, Any]:
-    """Read exact ticket counts without creating a second task store or write path."""
-    conn = sqlite3.connect(db_path, timeout=5.0)
+    conn = _connect_readonly(db_path)
     try:
         rows = conn.execute(
             "SELECT status, COUNT(*) AS count FROM work_items GROUP BY status"
         ).fetchall()
-    except sqlite3.OperationalError as exc:
-        if "no such table" in str(exc):
-            return {"total": 0, "statuses": {status: 0 for status in STATUS_ORDER}}
-        raise RuntimeError(f"cannot read Work Item database: {exc}") from exc
+    except sqlite3.Error as exc:
+        raise CliError(f"cannot count Work Items: {exc}") from exc
     finally:
         conn.close()
     counts = {status: 0 for status in STATUS_ORDER}
-    for status, count in rows:
+    unknown = 0
+    for row in rows:
+        status = str(row["status"])
+        count = int(row["count"])
         if status in counts:
-            counts[status] = int(count)
-    return {"total": sum(counts.values()), "statuses": counts}
+            counts[status] = count
+        else:
+            unknown += count
+    return {"total": sum(counts.values()) + unknown, "statuses": counts, "unknown": unknown}
+
+
+def _list_work_items(
+    db_path: Path,
+    *,
+    status: str | None = None,
+    repository: str | None = None,
+    limit: int = 50,
+) -> list[dict[str, Any]]:
+    if status is not None and status not in STATUS_ORDER:
+        raise CliError(f"unsupported status filter: {status}")
+    if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 200:
+        raise CliError("limit must be an integer between 1 and 200")
+
+    conn = _connect_readonly(db_path)
+    try:
+        if status is None:
+            rows = conn.execute(
+                "SELECT * FROM work_items ORDER BY updated_at DESC, id ASC"
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM work_items WHERE status = ? ORDER BY updated_at DESC, id ASC",
+                (status,),
+            ).fetchall()
+    except sqlite3.Error as exc:
+        raise CliError(f"cannot list Work Items: {exc}") from exc
+    finally:
+        conn.close()
+
+    result: list[dict[str, Any]] = []
+    for row in rows:
+        item = _decode_row(row)
+        repos = item.get("repos", {})
+        if repository is not None and repository not in repos:
+            continue
+        result.append(
+            {
+                "id": item.get("id", row["id"]),
+                "title": item.get("title", ""),
+                "status": item.get("status", row["status"]),
+                "phase": item.get("phase", ""),
+                "revision": item["revision"],
+                "updated_at": item["updated_at"],
+                "repositories": sorted(repos),
+            }
+        )
+        if len(result) >= limit:
+            break
+    return result
+
+
+def _get_work_item(db_path: Path, item_id: str) -> dict[str, Any]:
+    item_id = item_id.strip()
+    if not item_id:
+        raise CliError("Work Item id must not be empty")
+    conn = _connect_readonly(db_path)
+    try:
+        row = conn.execute(
+            "SELECT * FROM work_items WHERE id = ?", (item_id,)
+        ).fetchone()
+    except sqlite3.Error as exc:
+        raise CliError(f"cannot read Work Item {item_id}: {exc}") from exc
+    finally:
+        conn.close()
+    if row is None:
+        raise CliNotFoundError(f"Work Item not found: {item_id}")
+    return _decode_row(row)
 
 
 def _width() -> int:
@@ -101,11 +198,11 @@ def _status_label(status: str) -> str:
 
 def render_list(summary: dict[str, Any], items: list[dict[str, Any]]) -> str:
     counts = summary["statuses"]
-    count_line = "  ".join(
-        [f"TOTAL {summary['total']}"]
-        + [f"{status.upper()} {counts.get(status, 0)}" for status in STATUS_ORDER]
-    )
-    lines = ["WORK ITEMS", count_line, _line()]
+    parts = [f"TOTAL {summary['total']}"]
+    parts.extend(f"{status.upper()} {counts.get(status, 0)}" for status in STATUS_ORDER)
+    if summary.get("unknown"):
+        parts.append(f"UNKNOWN {summary['unknown']}")
+    lines = ["WORK ITEMS", "  ".join(parts), _line()]
 
     if not items:
         lines.append("No Work Items matched the current filters.")
@@ -119,11 +216,10 @@ def render_list(summary: dict[str, Any], items: list[dict[str, Any]]) -> str:
     fixed = id_w + status_w + phase_w + repos_w + updated_w + 10
     title_w = max(16, _width() - fixed)
 
-    header = (
+    lines.append(
         f"{'ID':<{id_w}}  {'STATUS':<{status_w}}  {'PHASE':<{phase_w}}  "
         f"{'REPOS':<{repos_w}}  {'UPDATED':<{updated_w}}  TITLE"
     )
-    lines.append(header)
     lines.append(_line())
     for item in items:
         updated = _local_time(item["updated_at"])[:16]
@@ -185,13 +281,7 @@ def _render_object_fields(lines: list[str], obj: dict[str, Any], *, indent: str 
                         if isinstance(entry, (dict, list))
                         else str(entry)
                     )
-                    lines.extend(
-                        _wrap(
-                            rendered,
-                            indent=f"{indent}  - ",
-                            subsequent=f"{indent}    ",
-                        )
-                    )
+                    lines.extend(_wrap(rendered, indent=f"{indent}  - ", subsequent=f"{indent}    "))
         elif isinstance(value, dict):
             lines.append(f"{indent}{label}:")
             for nested_key, nested_value in sorted(value.items()):
@@ -208,13 +298,7 @@ def _render_object_fields(lines: list[str], obj: dict[str, Any], *, indent: str 
                     )
                 )
         else:
-            lines.extend(
-                _wrap(
-                    value,
-                    indent=f"{indent}{label}: ",
-                    subsequent=f"{indent}  ",
-                )
-            )
+            lines.extend(_wrap(value, indent=f"{indent}{label}: ", subsequent=f"{indent}  "))
 
 
 def _render_records(lines: list[str], title: str, records: list[dict[str, Any]]) -> None:
@@ -284,24 +368,18 @@ def render_detail(item: dict[str, Any]) -> str:
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="agent-work-item",
-        description="Read-only human view of the canonical Global Work Item database.",
+        description="Strictly read-only human view of the canonical Global Work Item database.",
     )
     sub = parser.add_subparsers(dest="command")
 
-    list_parser = sub.add_parser(
-        "list", help="Show ticket counts and a compact Work Item table."
-    )
+    list_parser = sub.add_parser("list", help="Show ticket counts and a compact Work Item table.")
     list_parser.add_argument("--status", choices=STATUS_ORDER)
     list_parser.add_argument("--repository")
     list_parser.add_argument("--limit", type=int, default=50)
 
-    show_parser = sub.add_parser(
-        "show", help="Show one Work Item in a full human-readable layout."
-    )
+    show_parser = sub.add_parser("show", help="Show one Work Item in a full human-readable layout.")
     show_parser.add_argument("id")
-    show_parser.add_argument(
-        "--json", action="store_true", help="Print the canonical document as JSON."
-    )
+    show_parser.add_argument("--json", action="store_true", help="Print the canonical document as JSON.")
     return parser
 
 
@@ -313,18 +391,18 @@ def main(argv: list[str] | None = None) -> int:
     try:
         db = _db_path()
         if command == "list":
-            status = getattr(args, "status", None)
-            repository = getattr(args, "repository", None)
-            limit = getattr(args, "limit", 50)
             summary = _summarize_work_items(db)
-            items = list_work_items(
-                db, status=status, repository=repository, limit=limit
+            items = _list_work_items(
+                db,
+                status=getattr(args, "status", None),
+                repository=getattr(args, "repository", None),
+                limit=getattr(args, "limit", 50),
             )
             print(render_list(summary, items))
             return 0
 
         if command == "show":
-            item = get_work_item(db, args.id)
+            item = _get_work_item(db, args.id)
             if args.json:
                 print(json.dumps(item, ensure_ascii=False, indent=2, sort_keys=False))
             else:
@@ -332,10 +410,10 @@ def main(argv: list[str] | None = None) -> int:
             return 0
 
         parser.error(f"unknown command: {command}")
-    except NotFoundError as exc:
+    except CliNotFoundError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 4
-    except (ValidationError, RuntimeError) as exc:
+    except CliError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
     return 0
