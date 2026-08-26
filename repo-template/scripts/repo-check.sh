@@ -39,6 +39,11 @@ for pattern in \
   'work_item_update' \
   'revision conflict' \
   'current Git root' \
+  '^## Optional Work Item Artifacts$' \
+  'work_item_artifact_get' \
+  'work_item_artifact_read' \
+  'expected_artifact_revision' \
+  'based_on_work_item_revision' \
   '^## Shared Knowledge MCP$' \
   'knowledge_search' \
   'knowledge_read' \
@@ -72,6 +77,22 @@ rg -U -q 'cross-repo impact: fact, affected boundary/repository, evidence, next 
   fail 'AGENTS.md: actionable cross-repo handoff shape missing'
 rg -U -q 'Knowledge review.*knowledge_write|Knowledge review/write' "$agents" || \
   fail 'AGENTS.md: Knowledge finalization missing'
+
+# CRITICAL OPTIONAL-ARTIFACT INVARIANTS — do not weaken/remove these checks just
+# to pass a migration. Artifact tools are progressive detail, not default ceremony,
+# task truth, or a way to widen child repository authority.
+rg -U -q 'MUST NOT create artifact.*TaskPacket/user request.*nói rõ|MUST NOT create artifact.*explicit' "$agents" || \
+  fail 'AGENTS.md: artifact creation must remain explicit-only'
+rg -U -q 'work_item_get.*bounded thin artifact index' "$agents" || \
+  fail 'AGENTS.md: Work Item reads must not hydrate artifact bodies'
+rg -U -q 'work_item_artifact_get.*metadata.*section manifest' "$agents" || \
+  fail 'AGENTS.md: artifact_get progressive disclosure rule missing'
+rg -U -q 'latest Work Item thắng|latest canonical Work Item.*wins|latest canonical Work Item.*thắng' "$agents" || \
+  fail 'AGENTS.md: canonical Work Item must take precedence over stale artifact detail'
+rg -U -q 'Artifact revision độc lập Work Item revision|Artifact revision.*independent' "$agents" || \
+  fail 'AGENTS.md: artifact revision must stay independent from Work Item revision'
+rg -U -q 'không dùng artifact để thực hiện/suy diễn sibling work|không mở rộng repo authority' "$agents" || \
+  fail 'AGENTS.md: artifacts must not widen child repository authority'
 
 if rg -q 'knowledge_read\(keywords|workspace `knowledge/`|knowledge/INDEX\.md|result_path|fixed result schema' "$agents"; then
   fail 'AGENTS.md: legacy knowledge/result contract found'
