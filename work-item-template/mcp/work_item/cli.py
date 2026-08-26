@@ -5,6 +5,7 @@ import argparse
 import json
 import os
 import shutil
+import sqlite3
 import sys
 import textwrap
 from datetime import datetime
@@ -17,7 +18,6 @@ from core import (
     get_work_item,
     list_work_items,
     resolve_db_path,
-    summarize_work_items,
 )
 
 STATUS_ORDER = ("active", "waiting", "blocked", "done", "cancelled")
@@ -30,6 +30,26 @@ def _db_path() -> Path:
             "WORK_ITEM_DB_PATH must point to the global Work Item SQLite database"
         )
     return resolve_db_path(raw)
+
+
+def _summarize_work_items(db_path: Path) -> dict[str, Any]:
+    """Read exact ticket counts without creating a second task store or write path."""
+    conn = sqlite3.connect(db_path, timeout=5.0)
+    try:
+        rows = conn.execute(
+            "SELECT status, COUNT(*) AS count FROM work_items GROUP BY status"
+        ).fetchall()
+    except sqlite3.OperationalError as exc:
+        if "no such table" in str(exc):
+            return {"total": 0, "statuses": {status: 0 for status in STATUS_ORDER}}
+        raise RuntimeError(f"cannot read Work Item database: {exc}") from exc
+    finally:
+        conn.close()
+    counts = {status: 0 for status in STATUS_ORDER}
+    for status, count in rows:
+        if status in counts:
+            counts[status] = int(count)
+    return {"total": sum(counts.values()), "statuses": counts}
 
 
 def _width() -> int:
@@ -131,12 +151,24 @@ def _render_string_list(lines: list[str], title: str, values: Iterable[str]) -> 
         lines.append("  -")
         return
     for index, value in enumerate(values, 1):
-        wrapped = _wrap(value, indent=f"  {index}. ", subsequent="     ")
-        lines.extend(wrapped)
+        lines.extend(_wrap(value, indent=f"  {index}. ", subsequent="     "))
 
 
 def _render_object_fields(lines: list[str], obj: dict[str, Any], *, indent: str = "    ") -> None:
-    preferred = ["status", "type", "kind", "repo", "owner", "from", "to", "question", "answer", "summary", "source", "at"]
+    preferred = [
+        "status",
+        "type",
+        "kind",
+        "repo",
+        "owner",
+        "from",
+        "to",
+        "question",
+        "answer",
+        "summary",
+        "source",
+        "at",
+    ]
     keys = [key for key in preferred if key in obj]
     keys.extend(sorted(key for key in obj if key not in keys and key != "id"))
     for key in keys:
@@ -148,18 +180,41 @@ def _render_object_fields(lines: list[str], obj: dict[str, Any], *, indent: str 
                 lines.append(f"{indent}  -")
             else:
                 for entry in value:
-                    if isinstance(entry, (dict, list)):
-                        rendered = json.dumps(entry, ensure_ascii=False, sort_keys=True)
-                    else:
-                        rendered = str(entry)
-                    lines.extend(_wrap(rendered, indent=f"{indent}  - ", subsequent=f"{indent}    "))
+                    rendered = (
+                        json.dumps(entry, ensure_ascii=False, sort_keys=True)
+                        if isinstance(entry, (dict, list))
+                        else str(entry)
+                    )
+                    lines.extend(
+                        _wrap(
+                            rendered,
+                            indent=f"{indent}  - ",
+                            subsequent=f"{indent}    ",
+                        )
+                    )
         elif isinstance(value, dict):
             lines.append(f"{indent}{label}:")
             for nested_key, nested_value in sorted(value.items()):
-                rendered = json.dumps(nested_value, ensure_ascii=False, sort_keys=True) if isinstance(nested_value, (dict, list)) else str(nested_value)
-                lines.extend(_wrap(rendered, indent=f"{indent}  {nested_key}: ", subsequent=f"{indent}    "))
+                rendered = (
+                    json.dumps(nested_value, ensure_ascii=False, sort_keys=True)
+                    if isinstance(nested_value, (dict, list))
+                    else str(nested_value)
+                )
+                lines.extend(
+                    _wrap(
+                        rendered,
+                        indent=f"{indent}  {nested_key}: ",
+                        subsequent=f"{indent}    ",
+                    )
+                )
         else:
-            lines.extend(_wrap(value, indent=f"{indent}{label}: ", subsequent=f"{indent}  "))
+            lines.extend(
+                _wrap(
+                    value,
+                    indent=f"{indent}{label}: ",
+                    subsequent=f"{indent}  ",
+                )
+            )
 
 
 def _render_records(lines: list[str], title: str, records: list[dict[str, Any]]) -> None:
@@ -169,8 +224,7 @@ def _render_records(lines: list[str], title: str, records: list[dict[str, Any]])
         return
     for index, record in enumerate(records, 1):
         record_id = record.get("id")
-        heading = f"  {index}. {record_id}" if record_id else f"  {index}."
-        lines.append(heading)
+        lines.append(f"  {index}. {record_id}" if record_id else f"  {index}.")
         _render_object_fields(lines, record)
 
 
@@ -186,7 +240,6 @@ def render_detail(item: dict[str, Any]) -> str:
 
     _section(lines, "SUMMARY")
     lines.extend(_wrap(item.get("summary", "")))
-
     _render_string_list(lines, "CURRENT REQUIREMENTS", item.get("current_requirements", []))
 
     repos = item.get("repos", {})
@@ -196,8 +249,13 @@ def render_detail(item: dict[str, Any]) -> str:
     else:
         for repo, state in sorted(repos.items()):
             lines.append(f"  {repo}  {_status_label(state.get('status', 'unknown'))}")
-            summary = state.get("summary", "")
-            lines.extend(_wrap(summary, indent="    summary: ", subsequent="      "))
+            lines.extend(
+                _wrap(
+                    state.get("summary", ""),
+                    indent="    summary: ",
+                    subsequent="      ",
+                )
+            )
             verification = state.get("verification", [])
             lines.append(f"    verification ({len(verification)}):")
             if not verification:
@@ -205,7 +263,11 @@ def render_detail(item: dict[str, Any]) -> str:
             else:
                 for entry in verification:
                     lines.extend(_wrap(entry, indent="      - ", subsequent="        "))
-            extras = {k: v for k, v in state.items() if k not in {"status", "summary", "verification"}}
+            extras = {
+                key: value
+                for key, value in state.items()
+                if key not in {"status", "summary", "verification"}
+            }
             if extras:
                 _render_object_fields(lines, extras, indent="    ")
 
@@ -216,7 +278,6 @@ def render_detail(item: dict[str, Any]) -> str:
     _render_records(lines, "HANDOFFS", item.get("handoffs", []))
     _render_records(lines, "NEXT ACTIONS", item.get("next_actions", []))
     _render_records(lines, "CHECKPOINTS", item.get("checkpoints", []))
-
     return "\n".join(lines)
 
 
@@ -227,15 +288,20 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     sub = parser.add_subparsers(dest="command")
 
-    list_parser = sub.add_parser("list", help="Show ticket counts and a compact Work Item table.")
+    list_parser = sub.add_parser(
+        "list", help="Show ticket counts and a compact Work Item table."
+    )
     list_parser.add_argument("--status", choices=STATUS_ORDER)
     list_parser.add_argument("--repository")
     list_parser.add_argument("--limit", type=int, default=50)
 
-    show_parser = sub.add_parser("show", help="Show one Work Item in a full human-readable layout.")
+    show_parser = sub.add_parser(
+        "show", help="Show one Work Item in a full human-readable layout."
+    )
     show_parser.add_argument("id")
-    show_parser.add_argument("--json", action="store_true", help="Print the canonical document as JSON.")
-
+    show_parser.add_argument(
+        "--json", action="store_true", help="Print the canonical document as JSON."
+    )
     return parser
 
 
@@ -250,8 +316,10 @@ def main(argv: list[str] | None = None) -> int:
             status = getattr(args, "status", None)
             repository = getattr(args, "repository", None)
             limit = getattr(args, "limit", 50)
-            summary = summarize_work_items(db)
-            items = list_work_items(db, status=status, repository=repository, limit=limit)
+            summary = _summarize_work_items(db)
+            items = list_work_items(
+                db, status=status, repository=repository, limit=limit
+            )
             print(render_list(summary, items))
             return 0
 
