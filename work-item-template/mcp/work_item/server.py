@@ -10,7 +10,9 @@ from pydantic import Field
 
 from artifacts import (
     ARTIFACT_CHUNK_MAX_BYTES,
+    ARTIFACT_LIST_MAX,
     ARTIFACT_READ_MAX_BYTES,
+    ARTIFACT_READ_MIN_BYTES,
     ArtifactConflictError,
     ArtifactNotFoundError,
     append_artifact,
@@ -40,9 +42,13 @@ ArtifactId = Annotated[str, Field(min_length=3, max_length=128)]
 SectionId = Annotated[str, Field(min_length=1, max_length=128)]
 Revision = Annotated[int, Field(ge=1)]
 ListLimit = Annotated[int, Field(ge=1, le=200)]
-ArtifactListLimit = Annotated[int, Field(ge=1, le=100)]
-ArtifactReadLimit = Annotated[int, Field(ge=1, le=ARTIFACT_READ_MAX_BYTES)]
-ArtifactContent = Annotated[str, Field(min_length=1, max_length=ARTIFACT_CHUNK_MAX_BYTES)]
+ArtifactListLimit = Annotated[int, Field(ge=1, le=ARTIFACT_LIST_MAX)]
+ArtifactReadLimit = Annotated[
+    int, Field(ge=ARTIFACT_READ_MIN_BYTES, le=ARTIFACT_READ_MAX_BYTES)
+]
+ArtifactContent = Annotated[
+    str, Field(min_length=1, max_length=ARTIFACT_CHUNK_MAX_BYTES)
+]
 
 
 def _db_path() -> Path:
@@ -101,7 +107,9 @@ def _raise_actionable_error(exc: WorkItemError) -> None:
 
 def _with_artifacts(item: dict[str, Any]) -> dict[str, Any]:
     result = dict(item)
-    result["artifacts"] = list_artifacts(_db_path(), item["id"], limit=100)
+    result["artifacts"] = list_artifacts(
+        _db_path(), item["id"], limit=ARTIFACT_LIST_MAX
+    )
     return result
 
 
@@ -288,7 +296,7 @@ async def work_item_artifact_read(
     cursor: str | None = None,
     limit_bytes: ArtifactReadLimit = ARTIFACT_READ_MAX_BYTES,
 ) -> dict[str, Any]:
-    """Read at most 32000 UTF-8 bytes from one artifact section using an opaque continuation cursor."""
+    """Read 4..32000 UTF-8 bytes from one artifact section using a continuation cursor."""
     try:
         return read_artifact_section(
             _db_path(),
