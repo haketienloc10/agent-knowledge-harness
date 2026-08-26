@@ -73,47 +73,44 @@ skill="$home/skills/knowledge-distill/SKILL.md"
 installer="$home/scripts/install-user-mcp.sh"
 skill_installer="$home/scripts/install-user-skill.sh"
 
-[[ "$(rg -c '^@mcp\.tool\(\)$' "$server" || true)" == "2" ]] || \
-  fail 'knowledge server must expose exactly two MCP tools'
+[[ "$(rg -c '^@mcp\.tool\(\)$' "$server" || true)" == "3" ]] || \
+  fail 'knowledge server must expose exactly three MCP tools'
+rg -q '^async def knowledge_search\(' "$server" || fail 'missing knowledge_search tool'
 rg -q '^async def knowledge_read\(' "$server" || fail 'missing knowledge_read tool'
 rg -q '^async def knowledge_write\(' "$server" || fail 'missing knowledge_write tool'
-rg -q 'keywords: ReadKeywords' "$server" || \
-  fail 'knowledge_read must expose typed keyword constraints'
-rg -q 'context: KnowledgeReadContext \| None' "$server" || \
-  fail 'knowledge_read context must use closed typed schema'
+rg -q 'keywords: SearchKeywords' "$server" || \
+  fail 'knowledge_search must expose typed keyword constraints'
+rg -q 'context: KnowledgeSearchContext \| None' "$server" || \
+  fail 'knowledge_search context must use closed typed schema'
+rg -q 'ids: ReadIds' "$server" || \
+  fail 'knowledge_read must accept exact bounded ids'
 rg -q 'entries: WriteEntries' "$server" || \
   fail 'knowledge_write must expose typed nested entry schema'
+rg -q '\) -> KnowledgeSearchResult:' "$server" || \
+  fail 'knowledge_search must expose structured output schema'
 rg -q '\) -> KnowledgeReadResult:' "$server" || \
   fail 'knowledge_read must expose structured output schema'
 rg -q '\) -> KnowledgeWriteResult:' "$server" || \
   fail 'knowledge_write must expose structured output schema'
-if rg -q 'entries: list\[dict\[str, Any\]\]' "$server"; then
-  fail 'knowledge_write must not regress to generic dict input schema'
-fi
+rg -q 'routing decision cards' "$server" || \
+  fail 'server instructions must state search cards are discovery-only'
+rg -q 'search intentionally does not return revision' "$server" || \
+  fail 'server instructions must preserve read-before-update guardrail'
 rg -q 'knowledge-distill' "$server" || \
   fail 'knowledge_write contract must route semantic distillation through knowledge-distill'
-rg -q 'task premise' "$server" || \
-  fail 'knowledge_write contract must reject unverified task-premise persistence'
-rg -q 'PRECALL LENGTH GATE' "$server" || \
-  fail 'knowledge_write contract must expose the pre-call length gate'
-rg -q '300 characters or less' "$server" || \
-  fail 'knowledge_write contract must expose the summary preflight budget'
-rg -q '600 characters or less' "$server" || \
-  fail 'knowledge_write contract must expose the source-note preflight budget'
-rg -q 'SERIALIZATION RECOVERY' "$server" || \
-  fail 'knowledge_write contract must expose caller-side serialization recovery'
-rg -q 'Do not resend the same multi-entry batch' "$server" || \
-  fail 'knowledge_write serialization recovery must forbid unchanged batch retry'
-rg -q 'one entry per typed `knowledge_write` call' "$server" || \
-  fail 'knowledge_write serialization recovery must require single-entry fallback'
-rg -q 'not persisted' "$server" || \
-  fail 'knowledge_write serialization recovery must not claim failed entries persisted'
+
 rg -q 'extra="forbid"' "$contracts" || \
   fail 'typed knowledge models must reject unknown fields'
 rg -q "routing fields must be nested under the 'routing' object" "$contracts" || \
   fail 'typed write schema must explain flat routing mistakes'
 rg -q 'filesystem fields are owned by Knowledge MCP' "$contracts" || \
   fail 'typed write schema must explain filesystem ownership'
+rg -q 'MAX_READ_RESULTS' "$contracts" || \
+  fail 'knowledge_read ids must have a hard hydration bound'
+rg -q '^class KnowledgeSearchHit' "$contracts" || \
+  fail 'missing thin search-hit schema'
+rg -q '^class KnowledgeReadItem' "$contracts" || \
+  fail 'missing full read-item schema'
 rg -q 'Hard maximum is 500' "$contracts" || \
   fail 'routing.summary schema must expose its hard maximum'
 rg -q 'target 300 characters or less' "$contracts" || \
@@ -128,7 +125,7 @@ rg -q '"pydantic>=2,<3"' "$project_file" || \
 for pattern in \
   'Persist what the work established, not what the task assumed' \
   'Compression must not increase certainty' \
-  'Extract durable candidates from the evidence, not the task title' \
+  'candidate meaning' \
   'remaining uncertainty' \
   'immutable commit/revision' \
   'bug premise' \
@@ -136,26 +133,22 @@ for pattern in \
   'Run payload readiness before calling knowledge_write' \
   'routing.summary.*retrieval abstract' \
   'non-empty `sources` list' \
-  'typed `knowledge_write` payload' \
+  'Build typed write payload' \
   'repair only the fields' \
-  'do not weaken' \
+  'Do not weaken' \
   'Summary and source-note budget gate' \
-  'Write `content` first' \
-  'Draft `routing.summary` and `sources\[\]\.note` last' \
+  'Viết `content` trước' \
+  'Draft `routing.summary`' \
   '300 characters or less' \
   '600 characters or less' \
   'deterministically' \
   'Do not mechanically truncate' \
-  'durable conclusion.*critical boundary' \
-  'stable provenance location.*exact behavior/boundary' \
   'Tool-call JSON serialization recovery' \
-  'input JSON failed to parse' \
-  'do .*not.*resend.*same multi-entry batch' \
-  'one typed tool call with exactly one' \
-  'preserve.*exact `id`' \
-  '`expected_revision` obtained from `knowledge_read`' \
-  'do not manually construct.*JSON string' \
-  'not persisted'; do
+  'knowledge_search' \
+  'decision card' \
+  'knowledge_read' \
+  'one or two' \
+  'revision'; do
   rg -q "$pattern" "$skill" || fail "knowledge-distill missing quality gate: $pattern"
 done
 
@@ -190,7 +183,11 @@ for contract in \
   'os\.replace' \
   'canonical_relative_path' \
   'INDEX_FILENAME' \
-  'MAX_DOCUMENT_BYTES'; do
+  'MAX_DOCUMENT_BYTES' \
+  'MAX_SEARCH_RESULTS' \
+  'MAX_READ_RESULTS' \
+  'search_knowledge' \
+  'read_knowledge'; do
   rg -q "$contract" "$core" || fail "knowledge core missing contract: $contract"
 done
 

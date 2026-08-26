@@ -7,20 +7,23 @@ from pathlib import Path
 from mcp.server import MCPServer
 
 from contracts import (
-    KnowledgeReadContext,
     KnowledgeReadResult,
+    KnowledgeSearchContext,
+    KnowledgeSearchResult,
     KnowledgeWriteResult,
-    ReadKeywords,
-    ReadLimit,
+    ReadIds,
+    SearchKeywords,
+    SearchLimit,
     WriteEntries,
 )
 from core import (
-    DEFAULT_RESULTS,
+    DEFAULT_SEARCH_RESULTS,
     ConflictError,
     KnowledgeError,
     ValidationError,
     read_knowledge,
     resolve_store_root,
+    search_knowledge,
     write_knowledge,
 )
 
@@ -46,20 +49,21 @@ def _raise_actionable_error(exc: KnowledgeError) -> None:
         if "already exists or collides" in lowered:
             raise ValueError(
                 "code=create_conflict; "
-                f"{message}; action=search/read the existing knowledge first and update it "
-                "with exact id + expected_revision instead of retrying create"
+                f"{message}; action=call knowledge_search for the concept, hydrate the "
+                "existing item with knowledge_read, then update with exact id + "
+                "expected_revision instead of retrying create"
             ) from exc
         if "does not exist for update" in lowered:
             raise ValueError(
                 "code=missing_update_target; "
-                f"{message}; action=call knowledge_read/search again; create only if no "
+                f"{message}; action=call knowledge_search again; create only if no "
                 "existing knowledge covers the concept"
             ) from exc
         if "index is stale" in lowered or "index points to a different id" in lowered:
             raise ValueError(
                 "code=stale_index; "
                 f"{message}; action=do not retry unchanged; the store operator must run "
-                "knowledge reindex/check before this knowledge can be read safely"
+                "knowledge reindex/check before search/read can be trusted"
             ) from exc
         raise ValueError(f"code=knowledge_conflict; {message}") from exc
     if isinstance(exc, ValidationError):
@@ -68,50 +72,39 @@ def _raise_actionable_error(exc: KnowledgeError) -> None:
             f"{message}; action=inspect the typed tool schema and correct the payload "
             "instead of guessing filesystem fields or flattening nested routing metadata"
         ) from exc
+    if "knowledge id does not exist" in lowered:
+        raise ValueError(
+            "code=missing_read_target; "
+            f"{message}; action=call knowledge_search again and read only exact returned ids"
+        ) from exc
     raise RuntimeError(f"code=knowledge_store_error; {message}") from exc
 
 
 mcp = MCPServer(
     "Shared Knowledge",
     instructions=(
-        "Repository-independent durable knowledge service. Use knowledge_read after "
-        "understanding the current work and generating several task-relevant search "
-        "terms. The caller may provide repo/domain context only as ranking hints; "
-        "knowledge is not permission-scoped to the current repository. Before every "
-        "knowledge_write required by agent policy, apply the installed knowledge-distill "
-        "skill to the evidence from the current work. Persist the durable conclusion the "
-        "evidence actually established, not an unverified task, ticket, incident, or bug "
-        "premise; preserve material inference and remaining uncertainty. Use "
-        "knowledge_write during finalization only after that semantic distillation: "
-        "persist reusable, non-trivial, evidence-backed knowledge, or pass an empty "
-        "entries list when a required review found nothing durable. The knowledge_write "
-        "schema is strict and nested: summary, when_to_read, keywords, and aliases belong "
-        "under routing. Create omits id/revision; update uses exact id + expected_revision "
-        "from knowledge_read. If tool input cannot be parsed as JSON before this MCP runs, "
-        "do not resend the same multi-entry batch: retry surviving candidates one entry "
-        "per typed tool call without expanding them, and preserve exact update identity. "
-        "Callers never choose a file path, filename, directory, INDEX path, or language "
-        "field."
+        "Repository-independent durable knowledge service with progressive disclosure. "
+        "Use knowledge_search after understanding the current work; search returns bounded "
+        "routing decision cards, not evidence sufficient for implementation or update. "
+        "Hydrate only the one or two selected exact ids with knowledge_read before relying "
+        "on durable content. knowledge_read returns the exact revision and full semantic "
+        "payload required for safe updates; search intentionally does not return revision. "
+        "Before knowledge_write, apply the installed knowledge-distill skill. Create omits "
+        "id/revision; update uses exact id + expected_revision from knowledge_read. Callers "
+        "never choose knowledge filesystem paths or add a language field."
     ),
 )
 
 
 @mcp.tool()
-async def knowledge_read(
-    keywords: ReadKeywords,
-    context: KnowledgeReadContext | None = None,
-    limit: ReadLimit = DEFAULT_RESULTS,
-) -> KnowledgeReadResult:
-    """Read relevant shared durable knowledge using explicit typed search inputs.
-
-    Generate several task-relevant concepts before calling. Canonical English
-    concepts are preferred for routing, with original-language/project aliases when
-    useful. `context.repo` and `context.domain` are optional ranking hints only.
-    The result schema exposes stable id/path/revision so updates never guess identity
-    or filesystem location.
-    """
+async def knowledge_search(
+    keywords: SearchKeywords,
+    context: KnowledgeSearchContext | None = None,
+    limit: SearchLimit = DEFAULT_SEARCH_RESULTS,
+) -> KnowledgeSearchResult:
+    """Discover relevant knowledge as bounded routing cards; hydrate selected ids separately."""
     try:
-        result = read_knowledge(
+        result = search_knowledge(
             _store_root(),
             keywords,
             context.model_dump(exclude_none=True) if context is not None else None,
@@ -119,39 +112,27 @@ async def knowledge_read(
         )
     except KnowledgeError as exc:
         _raise_actionable_error(exc)
+    return KnowledgeSearchResult.model_validate(result)
+
+
+@mcp.tool()
+async def knowledge_read(ids: ReadIds) -> KnowledgeReadResult:
+    """Hydrate one or two exact knowledge ids with full semantic content and revision."""
+    try:
+        result = read_knowledge(_store_root(), ids)
+    except KnowledgeError as exc:
+        _raise_actionable_error(exc)
     return KnowledgeReadResult.model_validate(result)
 
 
 @mcp.tool()
 async def knowledge_write(entries: WriteEntries) -> KnowledgeWriteResult:
-    """Persist knowledge only after applying the installed knowledge-distill skill.
+    """Persist verified durable knowledge after applying the installed knowledge-distill skill.
 
-    Distill from evidence, not from the task premise: do not create a bug/ticket-named
-    durable claim unless the work actually verified that claim. Preserve important
-    fact-vs-inference boundaries and unresolved uncertainty. Compression must not
-    increase certainty. Search the candidate conclusion before create/update.
-
-    PRECALL LENGTH GATE: measure bounded prose fields before calling when possible.
-    Keep `routing.summary` at 300 characters or less and each `sources[].note` at
-    600 characters or less. These are conservative budgets below the typed schema's
-    hard limits; rewrite instead of mechanically truncating oversized fields.
-
-    SERIALIZATION RECOVERY: an `input JSON failed to parse` / `could not be parsed as
-    JSON` error occurs before this tool body and means nothing was validated or written
-    by that call. Do not resend the same multi-entry batch. Retry surviving candidates
-    one entry per typed `knowledge_write` call, preserve exact update `id` and
-    `expected_revision`, do not expand the content while retrying, and do not manually
-    construct a JSON string. If one single-entry call still cannot serialize, report
-    that candidate as not persisted instead of probing alternative payload shapes.
-
-    CREATE: omit `id` and `expected_revision`.
-    UPDATE: provide exact `id` + `expected_revision` returned by knowledge_read.
-    ROUTING: put `summary`, `when_to_read`, `keywords`, and optional `aliases`
-    inside the nested `routing` object.
-    NEVER provide path/filename/directory/INDEX fields; Knowledge MCP owns them.
-    `content` may be Vietnamese, English, or mixed; there is no `language` field.
-    Pass `entries=[]` only when policy required a finalization review and the
-    knowledge-distill procedure found nothing durable to persist.
+    Search the candidate concept before create/update. Create omits id/revision. Update
+    requires the exact id + expected_revision from a full knowledge_read. Keep routing
+    nested, provenance non-empty, and filesystem-owned/language fields out of the payload.
+    Pass entries=[] only when policy required a final review and no durable candidate remains.
     """
     payload = [entry.model_dump(exclude_none=True) for entry in entries]
     try:

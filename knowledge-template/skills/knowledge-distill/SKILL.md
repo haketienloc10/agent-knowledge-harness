@@ -1,287 +1,220 @@
 ---
 name: knowledge-distill
-description: Use immediately before any Shared Knowledge finalization review or knowledge_write. Distill verified reusable conclusions from investigation, implementation, tests, runtime evidence, or decisions; separate established facts from inference and uncertainty; never turn an unverified task or bug premise into durable knowledge.
+description: Dùng ngay trước mọi Shared Knowledge finalization review hoặc knowledge_write. Chắt lọc kết luận reusable đã được evidence xác nhận; tách fact, inference và uncertainty; không biến premise chưa xác minh của task/bug thành durable knowledge.
 ---
 
 # Knowledge Distillation
 
-Use this procedure whenever current policy requires a durable knowledge review and
-before every `knowledge_write`, including an empty review.
+Dùng procedure này khi policy yêu cầu durable knowledge review và trước mọi
+`knowledge_write`, kể cả empty review.
 
-The output of this skill is a set of **durable conclusions supported by evidence**,
-not a summary of the task that happened to lead to them.
+Output của skill là **durable conclusions được evidence hỗ trợ**, không phải bản tóm
+tắt task đã dẫn tới investigation.
 
 ## Core rule
 
 **Persist what the work established, not what the task assumed.**
 
-A bug report, ticket title, user suspicion, attempted fix, search query, or working
-hypothesis is investigation input. It becomes durable knowledge only if evidence
-actually establishes it.
+Bug report, ticket title, user suspicion, attempted fix, search query hoặc working
+hypothesis chỉ là investigation input. Chúng chỉ trở thành durable knowledge khi
+evidence thật sự xác lập conclusion tương ứng.
 
-If an investigation does **not** confirm its original bug hypothesis but does
-establish a reusable boundary, invariant, negative finding, diagnostic rule,
-ownership fact, contract, operational constraint, or missing-observability fact,
-persist that verified conclusion under its own semantic identity. Do not create a
-bug-named entry and bury the real knowledge inside it.
+Nếu investigation không xác nhận bug premise ban đầu nhưng xác lập một boundary,
+invariant, negative finding, diagnostic rule, ownership fact, contract, operational
+constraint hoặc observability gap có tính reusable, persist conclusion đã verify đó
+với semantic identity riêng.
 
 ## Procedure
 
-### 1. Build an evidence ledger
+### 1. Lập evidence ledger
 
-Before naming a candidate, reconstruct what the work actually established. Separate:
+Trước khi đặt tên candidate, phân loại evidence thành:
 
-- **verified source/code facts**: properties established by current owner source,
-  configuration, schema, or static control/data flow;
-- **verified test/runtime observations**: behavior directly observed in tests, logs,
-  traces, commands, or runtime artifacts;
-- **trusted decisions/contracts**: explicit user, architecture, specification, or
-  decision evidence that is authoritative for the conclusion;
-- **inferences**: conclusions reasonably implied by multiple facts but not directly
-  observed;
-- **remaining uncertainty**: relevant questions the evidence did not resolve.
+- **verified source/code facts**: source, config, schema, static control/data flow;
+- **verified test/runtime observations**: test, log, trace, command, runtime artifact;
+- **trusted decisions/contracts**: user/architecture/spec/decision evidence có thẩm quyền;
+- **inferences**: kết luận hợp lý suy ra từ nhiều facts nhưng chưa trực tiếp quan sát;
+- **remaining uncertainty**: câu hỏi material mà evidence chưa giải quyết.
 
-Do not collapse these categories merely to make the final knowledge shorter.
+Không trộn các nhóm này chỉ để làm knowledge ngắn hơn.
 
-### 2. Extract durable candidates from the evidence, not the task title
+### 2. Rút durable candidate từ evidence, không từ task title
 
-For each possible candidate, ask:
+Với mỗi candidate, kiểm tra:
 
-- Would this change a future implementation, investigation, verification, design,
-  ownership, or operational decision?
-- Is it non-trivial enough that rereading current source is not the cheapest path?
-- Is it expected to survive beyond this task/branch/session?
-- Does the evidence establish the candidate strongly enough to persist it?
+- Nó có thay đổi future implementation, investigation, verification, design,
+  ownership hoặc operational decision không?
+- Nó có đủ non-trivial để việc đọc lại source hiện tại không phải con đường rẻ hơn?
+- Nó có khả năng sống lâu hơn task/branch/session hiện tại không?
+- Evidence có xác lập candidate đủ mạnh để persist không?
 
-Useful durable candidates include verified invariants, system/repo boundaries,
-contracts, flow properties, ownership, compatibility constraints, diagnostic
-interpretation rules, recurring operational behavior, stable verification behavior,
-and durable decisions.
+Candidate tốt gồm invariant, boundary, contract, ownership, compatibility constraint,
+diagnostic interpretation rule, recurring operational behavior, verification rule và
+durable decision.
 
-A **negative investigation result** is useful only when it rules out or narrows a
-stable boundary. `Could not reproduce bug X` by itself is task status, not durable
-knowledge. `Within one verified service lifecycle, code can emit at most one command`
-may be durable because it changes how future duplicate-event evidence is interpreted.
+Negative result chỉ hữu ích khi nó thu hẹp một boundary ổn định. `Không reproduce bug
+X` tự nó là task status, không phải durable knowledge.
 
-### 3. Calibrate every claim to its evidence
+### 3. Calibrate claim theo evidence
 
-**Compression must not increase certainty.** Distillation may shorten evidence but
-must never make a stronger claim than the sources establish.
+**Compression must not increase certainty.**
 
-In particular:
+Distillation được phép ngắn hơn evidence nhưng không được mạnh hơn evidence. Đặc biệt:
 
-- distinguish static code-path properties from runtime delivery guarantees;
-- distinguish one observed execution from all possible executions;
-- distinguish absence of evidence from evidence of absence;
-- use words such as `always`, `never`, `exactly once`, `at most one`, `guarantees`,
-  or `impossible` only when the cited boundary genuinely proves them;
-- preserve materially relevant uncertainty instead of silently resolving it.
+- static code-path property không đồng nghĩa runtime delivery guarantee;
+- một observed execution không đại diện cho mọi execution;
+- absence of evidence không phải evidence of absence;
+- chỉ dùng `always`, `never`, `exactly once`, `at most one`, `guarantees`, `impossible`
+  khi boundary được cited thực sự chứng minh chúng;
+- giữ remaining uncertainty nếu nó có thể đổi future decision.
 
-If a conclusion is partly inferred, state the inference as such or phrase the exact
-boundary the evidence supports.
+### 4. Chọn semantic identity từ durable conclusion
 
-### 4. Choose semantic identity from the durable conclusion
+Chọn `scope`, `canonical_name`, title theo conclusion đã biết, không theo incident/ticket.
 
-Choose `scope`, `canonical_name`, and title from **what is known**, not from the
-incident/ticket wording that initiated investigation.
+- scope: `global`, `system`, `repo`, `domain`;
+- `canonical_name`: lowercase kebab-case;
+- `scope.id`: lowercase letters/numbers, chỉ dùng `.` hoặc `-` làm separator;
+- không dùng ticket ID, temporary branch hoặc unverified bug hypothesis làm identity.
 
-- Use `global`, `system`, `repo`, or `domain` according to where the conclusion is
-  reusable; current repository is not a permission boundary.
-- `canonical_name` is concise lowercase kebab-case canonical terminology.
-- `scope.id` uses the same lowercase convention, with `.` or `-` as the only
-  separators (for example `search-air`, `payment.retry`). Never use `_`, `/`, or a
-  filesystem-style path.
-- Do not make ticket IDs, temporary branch names, or an unverified bug hypothesis
-  the semantic identity. Keep useful ticket/legacy terms in aliases or provenance.
+Legacy/project/multilingual terms hữu ích có thể đặt trong aliases.
 
-### 5. Search existing knowledge using the candidate meaning
+### 5. Search trước, hydrate sau
 
-Before create/update, call `knowledge_read` for the **candidate conclusion**, using
-canonical concepts plus useful project/legacy/original-language aliases.
+Trước create/update, luôn dedupe theo **candidate meaning** bằng progressive disclosure:
 
-Do not search only the original task wording. Prefer updating an existing concept
-over creating a duplicate. For update, use the exact returned `id` and
-`expected_revision` and re-distill if the revision conflicts.
+1. Gọi `knowledge_search` với khoảng 3–8 discriminative concepts; ưu tiên canonical
+   English concepts và thêm project/original-language aliases khi hữu ích.
+2. Search result là **decision card** phục vụ chọn document, không phải evidence đủ để
+   implementation, verification hay update. Card chỉ chứa bounded routing metadata.
+3. Nếu một hoặc hai candidate có vẻ liên quan, gọi `knowledge_read(ids=[...])` với exact
+   ID đã chọn để hydrate full semantic content.
+4. Không dựa vào search summary/card như durable fact cuối cùng khi conclusion material
+   cần content, provenance hoặc uncertainty của document.
+5. `knowledge_search` cố ý không trả revision. Update chỉ được dùng exact `id` +
+   `expected_revision` từ full `knowledge_read`.
+6. Nếu nhiều card gần nhau, read tối đa one or two candidate mỗi call; không hydrate
+   top-N chỉ vì search `limit` lớn.
 
-### 6. Make provenance strong enough to audit the claims
+Ưu tiên update existing concept thay vì create duplicate. Revision conflict phải
+`knowledge_read` lại rồi re-distill.
 
-Every material durable claim must be traceable to `sources`.
+### 6. Làm provenance đủ mạnh để audit
 
-For repository evidence, prefer an immutable commit/revision in `ref`. A moving
-branch-only ref is weaker provenance; use it only when an immutable revision cannot
-be established and keep the resulting certainty appropriately bounded.
+Mọi material durable claim phải truy được về `sources`.
 
-Use source notes to identify the relevant behavior/boundary when that helps a future
-reader verify the conclusion. A source note is a compact provenance pointer, not an
-evidence dump or file-by-file investigation log. Put detailed evidence in `content`
-and use additional source entries only when they represent genuinely distinct
-provenance. Do not persist guesses or unsupported hypotheses as facts merely because
-a source was attached.
+Với repository evidence, ưu tiên immutable commit/revision trong `ref`. Moving branch
+là provenance yếu hơn. `sources[].note` là compact pointer tới behavior/boundary đã
+verify, không phải evidence dump.
 
-### 7. Preserve fact, implication, and uncertainty in content
+Không persist guess/hypothesis chỉ vì có source đi kèm.
 
-Content should make the reusable conclusion easy to consume without overstating it.
-When a candidate contains mixed certainty, structure or word it so a future reader
-can distinguish:
+### 7. Giữ fact, implication và uncertainty trong content
 
-- what is established;
-- what diagnostic/design implication follows;
-- what remains unresolved and would require runtime or owner evidence.
+Content phải giúp future reader phân biệt khi material:
 
-Headings such as `Established`, `Diagnostic implication`, and `Remaining uncertainty`
-are optional; the distinction is mandatory when materially relevant.
+- điều gì đã established;
+- diagnostic/design implication nào theo sau;
+- điều gì vẫn unresolved và cần runtime/owner evidence.
 
-Do not write a chronological investigation diary. Keep only evidence needed to
-understand and audit the durable conclusion.
+Không viết chronological investigation diary. Chỉ giữ evidence cần để hiểu và audit
+durable conclusion.
 
-### 8. Make routing describe future retrieval, not current task status
+Full `knowledge_read` trả semantic `content` không chứa canonical H1; title/routing là
+field riêng. Khi update, giữ nguyên metadata không thay đổi thay vì reconstruct từ
+search card.
 
-Build one nested `routing` object:
+### 8. Routing phục vụ future retrieval
 
-- `summary`: state the most important reusable distinction/boundary, including a
-  critical counterexample or limitation when omitting it would cause future
-  misinterpretation;
-- `when_to_read`: future situations where this knowledge can change a decision;
-- `keywords`: concise canonical concepts, normally English;
-- `aliases`: multilingual, legacy, acronym, ticket, symbol, and project terms useful
-  for retrieval.
+Build một nested `routing` object:
 
-Do not flatten routing fields at the entry top level.
+- `summary`: reusable distinction/boundary quan trọng nhất và critical limitation nếu
+  bỏ nó sẽ gây hiểu sai;
+- `when_to_read`: future situations nơi knowledge này có thể đổi decision;
+- `keywords`: concise canonical concepts, thường English;
+- `aliases`: multilingual, legacy, acronym, ticket, symbol và project terms hữu ích.
 
-### 9. Build the typed write payload
+`routing.summary` là retrieval abstract, không phải overflow storage cho investigation.
 
-- Create: omit `id` and `expected_revision`.
-- Update: use exact `id` + `expected_revision` returned by `knowledge_read`.
-- Never provide `path`, `filename`, `directory`, `index_path`, `index`, or any other
-  filesystem-routing field.
-- `content` may use Vietnamese, English, or mixed language. Do not create a
-  `language` field.
-- Knowledge MCP owns ID/path/render/index/locking/revision/persistence mechanics.
+### 9. Build typed write payload
+
+- Create: omit `id` và `expected_revision`.
+- Update: exact `id` + `expected_revision` từ full `knowledge_read`.
+- Không truyền `path`, `filename`, `directory`, `index_path`, `index` hoặc filesystem
+  routing field khác.
+- `content` có thể Vietnamese / English / mixed; không có field `language`.
+- Knowledge MCP sở hữu ID/path/render/index/locking/revision/persistence mechanics.
 
 ### 10. Run payload readiness before calling knowledge_write
 
-After semantic distillation is complete, convert each surviving candidate into the
-current typed `knowledge_write` payload and inspect the tool schema before the call.
-The typed schema is authoritative for required fields and hard field limits if they
-change.
-
-**`routing.summary` is a retrieval abstract, not overflow storage for the
-investigation.** Keep only the smallest durable distinction that helps a future
-agent decide whether to read the document. Put supporting evidence, ruled-out
-hypotheses, caveats, detailed reasoning, and materially relevant uncertainty in
-`content`.
+Viết `content` trước. Draft `routing.summary` và `sources[].note` sau cùng.
 
 #### Summary and source-note budget gate
 
-Write `content` first. Draft `routing.summary` and `sources[].note` last.
+Trước call:
 
-A good `routing.summary` normally contains one reusable boundary or decision in one
-or two short sentences. For the current schema, **do not call `knowledge_write`
-until the summary is 300 characters or less**. Each `sources[].note` should be a
-compact provenance pointer and must be 600 characters or less before the call.
-These are conservative preflight budgets below the schema's hard limits.
+- `routing.summary`: target **300 characters or less**;
+- mỗi `sources[].note`: target **600 characters or less**;
+- khi environment hỗ trợ count, đo **deterministically** bằng `len(...)` hoặc equivalent;
+- nếu không count chính xác được, dùng fallback chặt hơn khoảng 200/400 chars.
 
-When the execution environment can count characters, measure these fields
-**deterministically** before the tool call (`len(...)` or an equivalent exact count);
-do not estimate by eye. If exact counting is unavailable, use a stricter fallback:
-summary about 200 characters or less and each source note about 400 characters or
-less.
-
-Do not mechanically truncate an oversized field. Rewrite `routing.summary` as:
+Do not mechanically truncate field quá dài. Rewrite summary thành:
 
 `durable conclusion + critical boundary`
 
-For an oversized source note, keep only:
+Rewrite source note thành:
 
-`stable provenance location + exact behavior/boundary verified there`
+`stable provenance location + exact behavior/boundary`
 
-Move evidence enumeration, implementation walkthroughs, long source/method lists,
-ruled-out branches, and detailed uncertainty into `content`. Keep only an uncertainty
-qualifier that is essential to prevent future misinterpretation.
+Detailed evidence, ruled-out hypotheses và uncertainty đi vào `content`. Mọi persisted
+entry phải có non-empty `sources` list.
 
-Every persisted entry must include a non-empty `sources` list. Metadata compression
-must not delete provenance or uncertainty merely to satisfy a field limit.
+Trước call, xác nhận ít nhất:
 
-Before the call, verify at minimum:
+1. candidate phản ánh evidence đã established, không phải task premise;
+2. `routing` nested và summary nằm trong budget;
+3. `sources` non-empty, notes nằm trong budget, provenance đủ audit;
+4. detailed evidence/uncertainty nằm trong `content`;
+5. update identity/revision đến từ full `knowledge_read`;
+6. không có filesystem-owned/unsupported field;
+7. `scope.id` và `canonical_name` dùng đúng separator.
 
-1. the candidate describes what the evidence established, not the task premise;
-2. `routing` is nested and `routing.summary` passes the deterministic summary budget;
-3. `sources` is present and non-empty, each source note passes its budget, and
-   provenance remains sufficient to audit material claims;
-4. detailed evidence and uncertainty live in `content`, not in routing/source-note
-   metadata;
-5. create/update identity and revision follow the current typed schema;
-6. no filesystem-owned or unsupported fields are present;
-7. `scope.id` and `canonical_name` use only lowercase letters/numbers with `.` or
-   `-` separators (no `_`, no `/`).
-
-If validation still fails, inspect the typed schema/error, repair only the fields
-named by that error, re-run the deterministic length preflight, and retry once. Do
-not probe alternative payload shapes by trial and error, and do not weaken or
-silently truncate the durable claim merely to make validation pass.
+Nếu validation fail, inspect typed schema/error, **repair only the fields** được nêu,
+rồi retry một lần. Do not weaken verified claim chỉ để validation pass.
 
 #### Tool-call JSON serialization recovery
 
-A tool-input error such as `input JSON failed to parse` or `could not be parsed as
-JSON` happens **before** the Knowledge MCP validates or writes anything. Treat it as
-a caller-side serialization failure, not as a schema rejection and not as evidence
-that any candidate was persisted.
+`input JSON failed to parse` / `could not be parsed as JSON` xảy ra trước MCP body và
+không chứng minh candidate nào đã persisted.
 
-If a multi-entry `knowledge_write` fails this way:
+Nếu multi-entry write gặp lỗi serialization:
 
-- do **not** resend or expand the same multi-entry batch;
-- retry each surviving candidate separately as one typed tool call with exactly one
-  entry (`knowledge_write(entries=[candidate])`);
-- preserve the candidate's distilled semantics and, for updates, the exact `id` and
-  `expected_revision` obtained from `knowledge_read`;
-- do not manually construct, quote, concatenate, or paste a JSON string for tool
-  arguments; submit the typed object directly through the tool call;
-- do not add more prose while retrying merely to explain the failure;
-- after each successful single-entry write, continue with the next candidate; a
-  failure for one candidate must not cause already persisted candidates to be
-  rewritten as a batch.
+- không resend cùng multi-entry batch;
+- retry surviving candidates từng entry bằng typed `knowledge_write` call;
+- giữ exact update `id` + `expected_revision` từ `knowledge_read`;
+- không manually construct/paste JSON string;
+- nếu single-entry vẫn không serialize, report candidate là **not persisted** và dừng
+  probing payload shapes.
 
-If a single-entry call still cannot be serialized, do not keep retrying alternative
-payload shapes. Report that candidate as **not persisted**, keep its durable
-conclusion separate from persisted knowledge, and continue finalization without
-claiming the write succeeded.
+### 11. Quyết định có write hay không
 
-### 11. Decide whether to write
+Chỉ write candidate vượt qua quality gates.
 
-Write only candidates that survive the quality gates above.
+Reject candidate chỉ là:
 
-Reject candidates that are merely:
+- task status / working log;
+- obvious fact rẻ hơn khi đọc live source;
+- unverified ticket/bug premise;
+- root-cause guess/hypothesis chưa đủ evidence;
+- temporary implementation detail không có expected reuse;
+- `bug not reproduced` nhưng không có durable boundary học được.
 
-- task status, working logs, or a report of actions performed;
-- an obvious fact cheaply readable from current source;
-- a ticket/bug premise that was not verified;
-- an unverified hypothesis or root-cause guess;
-- a temporary implementation detail with no expected reuse;
-- `bug not reproduced` without a durable boundary learned from that result.
+Nếu policy yêu cầu review nhưng không còn candidate, gọi
+`knowledge_write(entries=[])`. Nếu policy cho phép skip review toàn bộ, không gọi empty
+write như ceremony.
 
-If policy required a review but no durable candidate remains, call
-`knowledge_write(entries=[])`. If policy allowed the entire write review to be
-skipped, do not call an empty write as ceremony.
+## Conflict với live truth
 
-## Example: investigation premise differs from durable knowledge
-
-Suppose the task is “investigate duplicate price-difference mail.” Investigation
-does not prove which component duplicated a physical email, but it verifies that:
-
-- one service lifecycle reaches the mail trigger at most once after processing its
-  internal loop;
-- downstream delivery lacks an end-to-end logical correlation/deduplication key;
-- repeated internal log blocks alone therefore do not prove multiple submissions;
-- runtime correlation across request entry, spool/file creation, and SMTP delivery
-  is still required to locate physical duplication.
-
-Do **not** create knowledge whose identity claims `duplicate-mail-bug` was found.
-Persist the verified reusable concept instead, for example an
-`...-idempotency-boundary` or `...-duplicate-mail-diagnostic-boundary`, with the
-unresolved physical duplication point preserved as uncertainty.
-
-## Conflict with live truth
-
-If shared knowledge conflicts with current owner source/test or stronger live owner
-evidence, live owner evidence wins for the current work. Re-distill and update the
-shared knowledge only after the replacement conclusion is verified.
+Nếu shared knowledge conflict với current owner source/test hoặc live owner evidence
+mạnh hơn, live evidence thắng cho current work. Chỉ update shared knowledge sau khi
+replacement conclusion đã được verify.

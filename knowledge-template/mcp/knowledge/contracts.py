@@ -4,7 +4,13 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from core import MAX_CONTENT_CHARS, MAX_RESULTS
+from core import (
+    MAX_CONTENT_CHARS,
+    MAX_READ_RESULTS,
+    MAX_SEARCH_MATCHES,
+    MAX_SEARCH_RESULTS,
+    MAX_SEARCH_WHEN_TO_READ,
+)
 
 CanonicalName = Annotated[
     str,
@@ -35,10 +41,7 @@ KnowledgeId = Annotated[
     Field(
         min_length=1,
         max_length=260,
-        description=(
-            "Exact stable knowledge id returned by knowledge_read. Supply only for "
-            "updates."
-        ),
+        description="Exact stable semantic knowledge id. This is not a filesystem path.",
     ),
 ]
 Revision = Annotated[
@@ -170,7 +173,7 @@ class KnowledgeSource(StrictModel):
 class KnowledgeWriteEntry(StrictModel):
     id: KnowledgeId | None = Field(
         default=None,
-        description="Update only: exact id returned by knowledge_read. Omit for create.",
+        description="Update only: exact id from knowledge_read. Omit for create.",
     )
     expected_revision: Revision | None = Field(
         default=None,
@@ -250,7 +253,7 @@ class KnowledgeWriteEntry(StrictModel):
         return self
 
 
-class KnowledgeReadContext(StrictModel):
+class KnowledgeSearchContext(StrictModel):
     repo: Annotated[str, Field(min_length=1, max_length=120)] | None = Field(
         default=None,
         description="Optional current-repository ranking hint only.",
@@ -261,24 +264,34 @@ class KnowledgeReadContext(StrictModel):
     )
 
 
-ReadKeywords = Annotated[
+SearchKeywords = Annotated[
     list[SearchTerm],
     Field(
         min_length=1,
         max_length=20,
         description=(
-            "Task-relevant search terms. Prefer several canonical concepts plus "
-            "original-language/project aliases when useful."
+            "Task-relevant search terms. Prefer several discriminative canonical "
+            "concepts plus original-language/project aliases when useful."
         ),
     ),
 ]
-ReadLimit = Annotated[
+SearchLimit = Annotated[
     int,
     Field(
         ge=1,
-        le=MAX_RESULTS,
+        le=MAX_SEARCH_RESULTS,
         description=(
-            f"Maximum number of ranked knowledge documents to return (1-{MAX_RESULTS})."
+            f"Maximum number of ranked decision cards to return (1-{MAX_SEARCH_RESULTS})."
+        ),
+    ),
+]
+ReadIds = Annotated[
+    list[KnowledgeId],
+    Field(
+        min_length=1,
+        max_length=MAX_READ_RESULTS,
+        description=(
+            f"Exact ids selected from knowledge_search to hydrate (1-{MAX_READ_RESULTS})."
         ),
     ),
 ]
@@ -308,22 +321,48 @@ class KnowledgeWriteResult(StrictModel):
     changes: list[KnowledgeChange]
 
 
+class KnowledgeSearchMatch(StrictModel):
+    query: SearchTerm
+    field: Literal[
+        "exact_id",
+        "canonical_name",
+        "keyword",
+        "alias",
+        "when_to_read",
+        "summary",
+    ]
+
+
+class KnowledgeSearchHit(StrictModel):
+    id: KnowledgeId
+    title: Title
+    scope: KnowledgeScope
+    summary: Summary
+    when_to_read: Annotated[
+        list[WhenToRead],
+        Field(min_length=1, max_length=MAX_SEARCH_WHEN_TO_READ),
+    ]
+    matches: Annotated[
+        list[KnowledgeSearchMatch],
+        Field(min_length=1, max_length=MAX_SEARCH_MATCHES),
+    ]
+    score: int
+
+
+class KnowledgeSearchResult(StrictModel):
+    results: list[KnowledgeSearchHit]
+
+
 class KnowledgeReadItem(StrictModel):
     id: KnowledgeId
-    path: str
     revision: Revision
     canonical_name: CanonicalName
     title: Title
     scope: KnowledgeScope
-    summary: Summary
-    matched_keywords: list[str]
-    match_reason: list[str]
-    score: int
+    routing: KnowledgeRouting
     sources: list[KnowledgeSource]
     content: str
 
 
 class KnowledgeReadResult(StrictModel):
-    keywords: list[str]
-    context: KnowledgeReadContext | None
     results: list[KnowledgeReadItem]

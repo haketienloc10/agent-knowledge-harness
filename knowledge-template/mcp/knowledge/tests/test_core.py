@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -11,12 +12,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from core import (  # noqa: E402
     ConflictError,
+    KnowledgeError,
     ValidationError,
     check_store,
     read_knowledge,
     reindex_store,
     render_index,
     scan_documents,
+    search_knowledge,
     write_knowledge,
 )
 
@@ -61,43 +64,83 @@ class KnowledgeCoreTest(unittest.TestCase):
         result = write_knowledge(self.root, [create_entry()])
         change = result["changes"][0]
         self.assertEqual(change["operation"], "created")
-        self.assertEqual(
-            change["id"], "domain:checkout.payment:retry-after-commit"
-        )
+        self.assertEqual(change["id"], "domain:checkout.payment:retry-after-commit")
         expected = self.root / "domains/checkout/payment/retry-after-commit.md"
         self.assertTrue(expected.is_file())
         checked = check_store(self.root)
         self.assertTrue(checked["ok"], checked["errors"])
 
-    def test_read_matches_english_and_vietnamese_aliases(self):
+    def test_search_matches_english_and_vietnamese_aliases_without_hydrating_content(self):
         write_knowledge(self.root, [create_entry()])
-        english = read_knowledge(
+        english = search_knowledge(
             self.root, ["payment retry", "idempotency", "transaction commit"]
         )
         self.assertEqual(len(english["results"]), 1)
-        vietnamese = read_knowledge(self.root, ["retry thanh toán", "sau commit"])
+        vietnamese = search_knowledge(self.root, ["retry thanh toán", "sau commit"])
         self.assertEqual(len(vietnamese["results"]), 1)
-        self.assertIn("Sau khi transaction", vietnamese["results"][0]["content"])
+        hit = vietnamese["results"][0]
+        self.assertEqual(hit["id"], "domain:checkout.payment:retry-after-commit")
+        self.assertLessEqual(len(hit["when_to_read"]), 3)
+        self.assertLessEqual(len(hit["matches"]), 3)
+        for forbidden in ("content", "sources", "revision", "path", "canonical_name"):
+            self.assertNotIn(forbidden, hit)
+
+    def test_read_hydrates_exact_id_with_round_trip_semantic_payload(self):
+        created = write_knowledge(self.root, [create_entry()])["changes"][0]
+        result = read_knowledge(self.root, [created["id"]])
+        self.assertEqual(len(result["results"]), 1)
+        item = result["results"][0]
+        self.assertEqual(item["revision"], created["revision"])
+        self.assertEqual(item["canonical_name"], "retry-after-commit")
+        self.assertEqual(item["routing"], create_entry()["routing"])
+        self.assertEqual(item["sources"], create_entry()["sources"])
+        self.assertEqual(item["content"], create_entry()["content"])
+        self.assertFalse(item["content"].startswith("# Retry after commit"))
+        self.assertNotIn("path", item)
+
+    def test_read_limits_exact_hydration_to_two_unique_ids(self):
+        entries = [
+            create_entry(name="first-rule", title="First rule"),
+            create_entry(name="second-rule", title="Second rule"),
+            create_entry(name="third-rule", title="Third rule"),
+        ]
+        changes = write_knowledge(self.root, entries)["changes"]
+        with self.assertRaises(ValidationError):
+            read_knowledge(self.root, [change["id"] for change in changes])
+        with self.assertRaises(ValidationError):
+            read_knowledge(self.root, [changes[0]["id"], changes[0]["id"]])
+
+    def test_missing_exact_read_target_fails_clearly(self):
+        with self.assertRaises(KnowledgeError) as raised:
+            read_knowledge(self.root, ["domain:checkout.payment:not-there"])
+        self.assertIn("knowledge id does not exist", str(raised.exception))
 
     def test_repo_context_is_only_a_ranking_hint(self):
         write_knowledge(self.root, [create_entry()])
-        result = read_knowledge(
+        result = search_knowledge(
             self.root,
             ["payment retry"],
             context={"repo": "another-repo"},
         )
         self.assertEqual(len(result["results"]), 1)
 
-    def test_context_does_not_create_relevance_without_lexical_match(self):
+    def test_context_does_not_create_relevance_without_semantic_match(self):
         write_knowledge(self.root, [create_entry()])
-        result = read_knowledge(
+        result = search_knowledge(
             self.root,
             ["unrelated mail delivery"],
             context={"domain": "checkout.payment"},
         )
         self.assertEqual(result["results"], [])
 
-    def test_repo_context_boosts_existing_lexical_match(self):
+    def test_title_scope_and_path_do_not_create_relevance_by_themselves(self):
+        entry = create_entry(name="generic-rule", title="Rare needle title")
+        entry["scope"] = {"kind": "repo", "id": "rare-needle"}
+        write_knowledge(self.root, [entry])
+        result = search_knowledge(self.root, ["rare needle"])
+        self.assertEqual(result["results"], [])
+
+    def test_repo_context_boosts_existing_semantic_match(self):
         checkout = create_entry(name="checkout-retry", title="Checkout retry")
         checkout["scope"] = {"kind": "repo", "id": "checkout"}
         checkout["sources"][0]["locator"] = "checkout:src/payment/retry.ts"
@@ -107,7 +150,7 @@ class KnowledgeCoreTest(unittest.TestCase):
         ledger["sources"][0]["locator"] = "ledger:src/payment/retry.ts"
 
         write_knowledge(self.root, [checkout, ledger])
-        result = read_knowledge(
+        result = search_knowledge(
             self.root,
             ["payment retry"],
             context={"repo": "checkout"},
@@ -115,10 +158,9 @@ class KnowledgeCoreTest(unittest.TestCase):
 
         self.assertEqual(len(result["results"]), 2)
         self.assertEqual(result["results"][0]["id"], "repo:checkout:checkout-retry")
-        self.assertIn("context: repo scope", result["results"][0]["match_reason"])
         self.assertGreater(result["results"][0]["score"], result["results"][1]["score"])
 
-    def test_domain_context_boosts_existing_lexical_match(self):
+    def test_domain_context_boosts_existing_semantic_match(self):
         payment = create_entry(name="payment-retry", title="Payment retry")
         payment["scope"] = {"kind": "domain", "id": "checkout.payment"}
 
@@ -127,7 +169,7 @@ class KnowledgeCoreTest(unittest.TestCase):
         booking["sources"][0]["locator"] = "checkout:src/booking/retry.ts"
 
         write_knowledge(self.root, [payment, booking])
-        result = read_knowledge(
+        result = search_knowledge(
             self.root,
             ["payment retry"],
             context={"domain": "checkout.payment"},
@@ -138,8 +180,39 @@ class KnowledgeCoreTest(unittest.TestCase):
             result["results"][0]["id"],
             "domain:checkout.payment:payment-retry",
         )
-        self.assertIn("context: domain scope", result["results"][0]["match_reason"])
         self.assertGreater(result["results"][0]["score"], result["results"][1]["score"])
+
+    def test_search_response_stays_small_with_ten_large_documents(self):
+        entries = []
+        for index in range(10):
+            entry = create_entry(name=f"large-rule-{index}", title=f"Large rule {index}")
+            entry["routing"]["summary"] = f"Large payment retry rule number {index}."
+            entry["content"] = (f"large content {index} " * 900).strip()
+            entries.append(entry)
+        write_knowledge(self.root, entries)
+        result = search_knowledge(self.root, ["payment retry"], limit=10)
+        self.assertEqual(len(result["results"]), 10)
+        encoded = json.dumps(result, ensure_ascii=False)
+        self.assertLess(len(encoded), 12_000)
+        self.assertNotIn("large content", encoded)
+
+    def test_update_can_be_built_from_full_read_without_losing_routing(self):
+        created = write_knowledge(self.root, [create_entry()])["changes"][0]
+        current = read_knowledge(self.root, [created["id"]])["results"][0]
+        update = {
+            "id": current["id"],
+            "expected_revision": current["revision"],
+            "canonical_name": current["canonical_name"],
+            "title": current["title"],
+            "scope": current["scope"],
+            "routing": current["routing"],
+            "content": current["content"] + "\n\nBổ sung verified.",
+            "sources": current["sources"],
+        }
+        updated = write_knowledge(self.root, [update])["changes"][0]
+        reread = read_knowledge(self.root, [updated["id"]])["results"][0]
+        self.assertIn("Bổ sung verified.", reread["content"])
+        self.assertEqual(reread["routing"], current["routing"])
 
     def test_update_requires_revision_and_rejects_stale_write(self):
         created = write_knowledge(self.root, [create_entry()])["changes"][0]
@@ -155,7 +228,7 @@ class KnowledgeCoreTest(unittest.TestCase):
         with self.assertRaises(ConflictError):
             write_knowledge(self.root, [stale])
 
-    def test_external_edit_makes_index_stale_until_reindex(self):
+    def test_external_edit_makes_search_and_read_stale_until_reindex(self):
         created = write_knowledge(self.root, [create_entry()])["changes"][0]
         path = self.root / created["path"]
         text = path.read_text(encoding="utf-8")
@@ -164,9 +237,13 @@ class KnowledgeCoreTest(unittest.TestCase):
             encoding="utf-8",
         )
         with self.assertRaises(ConflictError):
-            read_knowledge(self.root, ["payment retry"])
+            search_knowledge(self.root, ["payment retry"])
+        with self.assertRaises(ConflictError):
+            read_knowledge(self.root, [created["id"]])
         reindex_store(self.root)
-        result = read_knowledge(self.root, ["payment retry"])
+        searched = search_knowledge(self.root, ["payment retry"])
+        self.assertEqual(searched["results"][0]["id"], created["id"])
+        result = read_knowledge(self.root, [created["id"]])
         self.assertIn("lần nữa", result["results"][0]["content"])
 
     def test_manual_wrong_path_is_rejected(self):
