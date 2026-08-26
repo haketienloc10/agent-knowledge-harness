@@ -31,6 +31,7 @@ Không scan toàn repo/docs hoặc gọi MCP như ceremony.
 | Concern | Source of truth |
 |---|---|
 | Product-task state, requirements, Q&A/decision/change, blocker/handoff | Global Work Item MCP |
+| Optional long-form task detail requested by user | Work Item artifact tools |
 | Current implementation behavior | live repo source/test |
 | Repository architecture | `ARCHITECTURE.md` + live source |
 | Verification commands | `docs/VERIFY.md` + live CI/manifest |
@@ -93,6 +94,33 @@ current repo evidence
 
 Child không tự sửa/delegate sibling.
 
+## Optional Work Item Artifacts
+
+Artifact là detail optional như `intake`, `investigation`, `plan`, `review`, `report`; artifact **không phải task truth** và không thay Work Item state.
+
+### Explicit-only authority
+
+Agent **MUST NOT create artifact chỉ vì artifact tools tồn tại**. Chỉ contribute/create artifact khi TaskPacket/user request nói rõ cần artifact/detail report đó. Nếu TaskPacket không truyền explicit artifact requirement, normal repo work chỉ persist canonical Work Item evidence/checkpoint như trước.
+
+Artifact không mở rộng repo authority: child chỉ viết detail về current Git root/evidence nó thực sự xác lập và không dùng artifact để thực hiện/suy diễn sibling work.
+
+### Progressive disclosure
+
+- `work_item_get` chỉ có bounded thin artifact index.
+- `work_item_artifact_get` chỉ metadata + section manifest.
+- Chỉ đọc section cần thiết bằng `work_item_artifact_read`; follow `next_cursor` khi cần.
+- Không hydrate full investigation/report nếu TaskPacket chỉ cần task status hoặc một section.
+
+Nếu QiQi truyền exact artifact identity/revision cần contribute, dùng identity đó; không list/read toàn artifact set như ceremony.
+
+### Artifact writes
+
+Artifact body có thể dài nên append theo bounded chunks. Mỗi append dùng exact `expected_artifact_revision`; stale artifact revision → `work_item_artifact_get` → reconcile → retry.
+
+`based_on_work_item_revision` chỉ ra canonical snapshot artifact dựa vào. Nếu artifact detail conflict latest Work Item, latest Work Item thắng và agent handoff inconsistency thay vì silently dùng artifact cũ.
+
+Artifact revision độc lập Work Item revision. Không update Work Item chỉ để phản ánh chunk append/finalize. `complete` artifact không append tiếp.
+
 ## Shared Knowledge MCP
 
 Public tools:
@@ -103,7 +131,7 @@ knowledge_read(ids)
 knowledge_write(entries)
 ```
 
-Work Item task state và reusable Knowledge không thay nhau.
+Work Item task state, optional task artifact và reusable Knowledge không thay nhau.
 
 ### Khi nào dùng
 
@@ -159,7 +187,7 @@ QiQi là handoff broker duy nhất cho cross-repo execution; Work Item là share
 
 ### Input từ QiQi
 
-TaskPacket gồm original user request, repo-local objective, scope/out-of-scope, Work Item ID/revision khi có, required external context + provenance/certainty, constraints, acceptance, verification và known unknowns.
+TaskPacket gồm original user request, repo-local objective, scope/out-of-scope, Work Item ID/revision khi có, required external context + provenance/certainty, constraints, acceptance, verification và known unknowns. Nếu user explicitly yêu cầu artifact mà child phải contribute, TaskPacket phải truyền artifact objective và exact artifact identity/revision khi đã tồn tại.
 
 ### Closed-world context rule
 
@@ -173,10 +201,11 @@ Trước final substantive Work Item turn:
 
 1. update canonical Work Item với current-repo evidence + material blocker/question/handoff/checkpoint;
 2. conflict thì reread/reconcile/retry;
-3. làm Knowledge review/write riêng nếu reusable conclusion;
-4. finalize native response với evidence/verification/remaining work.
+3. nếu explicit artifact requirement thuộc current repo, append/finalize đúng artifact scope bằng artifact revision riêng;
+4. làm Knowledge review/write riêng nếu reusable conclusion;
+5. finalize native response với evidence/verification/remaining work.
 
-Final response không fixed headings nhưng giữ material implementation/investigation conclusion, paths/evidence, verification result, blocker, Work Item persistence failure, knowledge persistence result/failure và **cross-repo impact: fact, affected boundary/repository, evidence, next action** khi có.
+Final response không fixed headings nhưng giữ material implementation/investigation conclusion, paths/evidence, verification result, blocker, Work Item/artifact persistence failure, knowledge persistence result/failure và **cross-repo impact: fact, affected boundary/repository, evidence, next action** khi có.
 
 Agent không claim global Work Item complete.
 
@@ -187,7 +216,7 @@ Agent không claim global Work Item complete.
 - External decision/input cần thiết → persist question/blocker khi phù hợp rồi handoff QiQi.
 - Verification claim phải có actual command/check + result.
 - Không đổi regression mới thành legacy issue để hoàn thành task.
-- Không ghi secret/dữ liệu nhạy cảm vào Work Item, Knowledge hoặc final response.
+- Không ghi secret/dữ liệu nhạy cảm vào Work Item, artifact, Knowledge hoặc final response.
 
 ## Cross-repo Impact
 
@@ -202,4 +231,4 @@ Khi current repo ảnh hưởng sibling boundary:
 
 Chọn verification nhỏ nhất đủ chứng minh thay đổi rồi mở rộng theo risk/`docs/VERIFY.md`.
 
-Task repo-local chỉ hoàn thành khi objective/acceptance đạt, verification liên quan đã chạy hoặc caveat rõ, Work Item material state đã persist khi applicable, và Knowledge review/write đã xử lý theo policy.
+Task repo-local chỉ hoàn thành khi objective/acceptance đạt, verification liên quan đã chạy hoặc caveat rõ, Work Item material state đã persist khi applicable, explicit artifact requirement đã persist/complete hoặc failure được báo rõ, và Knowledge review/write đã xử lý theo policy.
