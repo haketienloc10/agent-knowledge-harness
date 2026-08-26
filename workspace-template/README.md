@@ -39,8 +39,8 @@ scripts/workspace-check.sh
 docs/WORKSPACE_SETUP.md
 ```
 
-Workspace cố ý không có `.qiqi/tasks/`, `work-items.sqlite3` hoặc `knowledge/` để
-tránh tạo truth store thứ hai cạnh user-scoped MCP services.
+Workspace không có task/knowledge store riêng; task truth và reusable knowledge nằm
+sau user-scoped MCP services.
 
 ## Ba MCP/service concern độc lập
 
@@ -124,7 +124,7 @@ investigation -> planning -> implementation -> unit_test -> it -> uat
 ```
 
 Q&A/customer decision và requirement evolution được persist trong cùng canonical
-Work Item, không nhét vào conversation memory hoặc `.qiqi/tasks`.
+Work Item, không nhét vào conversation memory.
 
 ### Trước delegation
 
