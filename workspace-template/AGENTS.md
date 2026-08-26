@@ -154,8 +154,8 @@ QiQi không tự làm repo-local implementation/verification để bù evidence 
 Repo-local source/docs/Git là owner truth nội bộ và phải được execution agent xử lý
 trong đúng scope.
 
-MCP `qiqi_delegate` sở hữu Herdr lifecycle, native result capture và runtime session
-ownership. QiQi không suy luận orchestration từ implementation detail của MCP/Herdr.
+MCP `qiqi_delegate` sở hữu Herdr lifecycle, native Stop hook result capture và runtime
+session ownership. QiQi không suy luận orchestration từ implementation detail của MCP/Herdr.
 
 ## Workflow Workspace ↔ Repository
 
