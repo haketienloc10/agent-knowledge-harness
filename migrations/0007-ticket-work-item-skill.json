@@ -1,0 +1,22 @@
+{
+  "version": 7,
+  "from_ref": "f15c843a6ac666e655dabe972b7393aef831b478",
+  "to_ref": "2c09d23370c0d6031b1f50de1e6bd922f51109ed",
+  "description": "add the explicit ticket Work Item entry skill and its workspace verification/docs",
+  "workspace": {
+    "merge": [],
+    "replace": [
+      "workspace-template/.agents/skills/ticket-work-item/SKILL.md",
+      "workspace-template/README.md",
+      "workspace-template/scripts/workspace-check.sh"
+    ],
+    "delete": [],
+    "manual_review": []
+  },
+  "repo": {
+    "merge": [],
+    "replace": [],
+    "delete": [],
+    "manual_review": []
+  }
+}
