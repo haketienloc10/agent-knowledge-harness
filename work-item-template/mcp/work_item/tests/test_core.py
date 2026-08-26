@@ -1,10 +1,10 @@
 from __future__ import annotations
 
+import sys
 import tempfile
 import threading
 import unittest
 from pathlib import Path
-import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -155,6 +155,22 @@ class WorkItemCoreTests(unittest.TestCase):
                 created["revision"],
                 {"id": "redmine:999"},
             )
+
+    def test_derived_artifacts_field_cannot_be_persisted_or_patched(self) -> None:
+        doc = new_document(item_id="redmine:derived", title="Derived field guard")
+        doc["artifacts"] = [{"artifact_id": "report:fake"}]
+        with self.assertRaises(ValidationError):
+            create_work_item(self.db, doc)
+
+        created = self._create("redmine:derived-update")
+        with self.assertRaises(ValidationError):
+            update_work_item(
+                self.db,
+                created["id"],
+                created["revision"],
+                {"artifacts": []},
+            )
+        self.assertNotIn("artifacts", get_work_item(self.db, created["id"]))
 
     def test_invalid_nested_status_is_rejected(self) -> None:
         created = self._create()
