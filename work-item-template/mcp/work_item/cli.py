@@ -60,7 +60,7 @@ def _decode_row(row: sqlite3.Row) -> dict[str, Any]:
         item = json.loads(row["document_json"])
     except (TypeError, json.JSONDecodeError) as exc:
         raise CliError(f"invalid Work Item JSON for {row['id']}: {exc}") from exc
-    item["revision"] = row["revision"]
+    item["revision"] = int(row["revision"])
     item["created_at"] = row["created_at"]
     item["updated_at"] = row["updated_at"]
     return item
@@ -108,7 +108,8 @@ def _list_work_items(
             ).fetchall()
         else:
             rows = conn.execute(
-                "SELECT * FROM work_items WHERE status = ? ORDER BY updated_at DESC, id ASC",
+                "SELECT * FROM work_items WHERE status = ? "
+                "ORDER BY updated_at DESC, id ASC",
                 (status,),
             ).fetchall()
     except sqlite3.Error as exc:
@@ -169,7 +170,8 @@ def _list_artifacts_readonly(db_path: Path, item_id: str) -> list[dict[str, Any]
                    COALESCE(SUM(s.byte_count), 0) AS byte_count
             FROM work_item_artifacts a
             LEFT JOIN work_item_artifact_sections s
-              ON s.work_item_id = a.work_item_id AND s.artifact_id = a.artifact_id
+              ON s.work_item_id = a.work_item_id
+             AND s.artifact_id = a.artifact_id
             WHERE a.work_item_id = ?
             GROUP BY a.work_item_id, a.artifact_id
             ORDER BY a.updated_at DESC, a.artifact_id ASC
@@ -183,8 +185,8 @@ def _list_artifacts_readonly(db_path: Path, item_id: str) -> list[dict[str, Any]
                 "state": row["state"],
                 "title": row["title"],
                 "summary": row["summary"],
-                "based_on_work_item_revision": row["based_on_work_item_revision"],
-                "revision": row["revision"],
+                "based_on_work_item_revision": int(row["based_on_work_item_revision"]),
+                "revision": int(row["revision"]),
                 "section_count": int(row["section_count"]),
                 "char_count": int(row["char_count"]),
                 "byte_count": int(row["byte_count"]),
@@ -198,56 +200,83 @@ def _list_artifacts_readonly(db_path: Path, item_id: str) -> list[dict[str, Any]
         conn.close()
 
 
-def _get_artifact_readonly(db_path: Path, item_id: str, artifact_id: str) -> dict[str, Any]:
+def _artifact_header_and_sections(
+    conn: sqlite3.Connection,
+    item_id: str,
+    artifact_id: str,
+    section_id: str | None = None,
+) -> tuple[sqlite3.Row, list[sqlite3.Row]]:
+    if not _table_exists(conn, "work_item_artifacts"):
+        raise CliNotFoundError(f"Artifact not found: {item_id}/{artifact_id}")
+    artifact = conn.execute(
+        "SELECT * FROM work_item_artifacts "
+        "WHERE work_item_id = ? AND artifact_id = ?",
+        (item_id, artifact_id),
+    ).fetchone()
+    if artifact is None:
+        raise CliNotFoundError(f"Artifact not found: {item_id}/{artifact_id}")
+
+    params: list[Any] = [item_id, artifact_id]
+    section_clause = ""
+    if section_id is not None:
+        section_clause = " AND section_id = ?"
+        params.append(section_id)
+    sections = conn.execute(
+        f"""
+        SELECT section_id, title, section_order, chunk_count, char_count, byte_count
+        FROM work_item_artifact_sections
+        WHERE work_item_id = ? AND artifact_id = ?{section_clause}
+        ORDER BY section_order ASC, section_id ASC
+        """,
+        params,
+    ).fetchall()
+    if section_id is not None and not sections:
+        raise CliNotFoundError(
+            f"Artifact section not found: {item_id}/{artifact_id}/{section_id}"
+        )
+    return artifact, sections
+
+
+def _get_artifact_json_readonly(
+    db_path: Path,
+    item_id: str,
+    artifact_id: str,
+    section_id: str | None = None,
+) -> dict[str, Any]:
+    """Materialize full content only for the explicit human --json path."""
     conn = _connect_readonly(db_path)
     try:
-        if not _table_exists(conn, "work_item_artifacts"):
-            raise CliNotFoundError(f"Artifact not found: {item_id}/{artifact_id}")
-        artifact = conn.execute(
-            "SELECT * FROM work_item_artifacts WHERE work_item_id = ? AND artifact_id = ?",
-            (item_id, artifact_id),
-        ).fetchone()
-        if artifact is None:
-            raise CliNotFoundError(f"Artifact not found: {item_id}/{artifact_id}")
-        sections = conn.execute(
-            """
-            SELECT section_id, title, section_order, chunk_count, char_count, byte_count
-            FROM work_item_artifact_sections
-            WHERE work_item_id = ? AND artifact_id = ?
-            ORDER BY section_order ASC, section_id ASC
-            """,
-            (item_id, artifact_id),
-        ).fetchall()
-        result = {
+        artifact, sections = _artifact_header_and_sections(
+            conn, item_id, artifact_id, section_id
+        )
+        result: dict[str, Any] = {
             "work_item_id": item_id,
             "artifact_id": artifact["artifact_id"],
             "type": artifact["type"],
             "state": artifact["state"],
             "title": artifact["title"],
             "summary": artifact["summary"],
-            "based_on_work_item_revision": artifact["based_on_work_item_revision"],
-            "revision": artifact["revision"],
+            "based_on_work_item_revision": int(artifact["based_on_work_item_revision"]),
+            "revision": int(artifact["revision"]),
             "created_at": artifact["created_at"],
             "updated_at": artifact["updated_at"],
             "sections": [],
         }
         for section in sections:
             chunks = conn.execute(
-                """
-                SELECT content FROM work_item_artifact_chunks
-                WHERE work_item_id = ? AND artifact_id = ? AND section_id = ?
-                ORDER BY chunk_index ASC
-                """,
+                "SELECT content FROM work_item_artifact_chunks "
+                "WHERE work_item_id = ? AND artifact_id = ? AND section_id = ? "
+                "ORDER BY chunk_index ASC",
                 (item_id, artifact_id, section["section_id"]),
             ).fetchall()
             result["sections"].append(
                 {
                     "section_id": section["section_id"],
                     "title": section["title"],
-                    "order": section["section_order"],
-                    "chunk_count": section["chunk_count"],
-                    "char_count": section["char_count"],
-                    "byte_count": section["byte_count"],
+                    "order": int(section["section_order"]),
+                    "chunk_count": int(section["chunk_count"]),
+                    "char_count": int(section["char_count"]),
+                    "byte_count": int(section["byte_count"]),
                     "content": "".join(str(chunk["content"]) for chunk in chunks),
                 }
             )
@@ -285,7 +314,12 @@ def _truncate(value: str, width: int) -> str:
     return value if len(value) <= width else value[: width - 1] + "…"
 
 
-def _wrap(value: Any, *, indent: str = "  ", subsequent: str | None = None) -> list[str]:
+def _wrap(
+    value: Any,
+    *,
+    indent: str = "  ",
+    subsequent: str | None = None,
+) -> list[str]:
     text = _single_line(value)
     if not text:
         return [indent + "-"]
@@ -359,7 +393,12 @@ def _render_string_list(lines: list[str], title: str, values: Iterable[str]) -> 
         lines.extend(_wrap(value, indent=f"  {index}. ", subsequent="     "))
 
 
-def _render_object_fields(lines: list[str], obj: dict[str, Any], *, indent: str = "    ") -> None:
+def _render_object_fields(
+    lines: list[str],
+    obj: dict[str, Any],
+    *,
+    indent: str = "    ",
+) -> None:
     preferred = [
         "status",
         "type",
@@ -390,7 +429,13 @@ def _render_object_fields(lines: list[str], obj: dict[str, Any], *, indent: str 
                         if isinstance(entry, (dict, list))
                         else str(entry)
                     )
-                    lines.extend(_wrap(rendered, indent=f"{indent}  - ", subsequent=f"{indent}    "))
+                    lines.extend(
+                        _wrap(
+                            rendered,
+                            indent=f"{indent}  - ",
+                            subsequent=f"{indent}    ",
+                        )
+                    )
         elif isinstance(value, dict):
             lines.append(f"{indent}{label}:")
             for nested_key, nested_value in sorted(value.items()):
@@ -407,7 +452,13 @@ def _render_object_fields(lines: list[str], obj: dict[str, Any], *, indent: str 
                     )
                 )
         else:
-            lines.extend(_wrap(value, indent=f"{indent}{label}: ", subsequent=f"{indent}  "))
+            lines.extend(
+                _wrap(
+                    value,
+                    indent=f"{indent}{label}: ",
+                    subsequent=f"{indent}  ",
+                )
+            )
 
 
 def _render_records(lines: list[str], title: str, records: list[dict[str, Any]]) -> None:
@@ -432,8 +483,16 @@ def _render_artifact_index(lines: list[str], artifacts: list[dict[str, Any]]) ->
             f"type={artifact['type']}  rev={artifact['revision']}  "
             f"sections={artifact['section_count']}  bytes={artifact['byte_count']}"
         )
-        lines.extend(_wrap(artifact.get("title", ""), indent="    title: ", subsequent="      "))
-        lines.extend(_wrap(artifact.get("summary", ""), indent="    summary: ", subsequent="      "))
+        lines.extend(
+            _wrap(artifact.get("title", ""), indent="    title: ", subsequent="      ")
+        )
+        lines.extend(
+            _wrap(
+                artifact.get("summary", ""),
+                indent="    summary: ",
+                subsequent="      ",
+            )
+        )
         lines.append(
             f"    based on Work Item revision: {artifact['based_on_work_item_revision']}"
         )
@@ -442,7 +501,8 @@ def _render_artifact_index(lines: list[str], artifacts: list[dict[str, Any]]) ->
 def render_detail(item: dict[str, Any]) -> str:
     lines = [
         _line("="),
-        f"{item['id']}  {_status_label(item['status'])}  phase={item['phase']}  revision={item['revision']}",
+        f"{item['id']}  {_status_label(item['status'])}  "
+        f"phase={item['phase']}  revision={item['revision']}",
         _single_line(item["title"]),
         f"Created: {_local_time(item['created_at'])}",
         f"Updated: {_local_time(item['updated_at'])}",
@@ -493,41 +553,67 @@ def render_detail(item: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def render_artifact(artifact: dict[str, Any], *, section_id: str | None = None) -> str:
-    selected = artifact["sections"]
-    if section_id is not None:
-        selected = [section for section in selected if section["section_id"] == section_id]
-        if not selected:
-            raise CliNotFoundError(
-                f"Artifact section not found: {artifact['work_item_id']}/{artifact['artifact_id']}/{section_id}"
-            )
-
-    lines = [
-        _line("="),
-        f"{artifact['work_item_id']} / {artifact['artifact_id']}  "
-        f"[{str(artifact['state']).upper()}]  type={artifact['type']}  revision={artifact['revision']}",
-        _single_line(artifact["title"]),
-        f"Based on Work Item revision: {artifact['based_on_work_item_revision']}",
-        f"Created: {_local_time(artifact['created_at'])}",
-        f"Updated: {_local_time(artifact['updated_at'])}",
-        _line("="),
-        "",
-        "SUMMARY",
-        _line("-"),
-    ]
-    lines.extend(_wrap(artifact.get("summary", "")))
-    for section in selected:
-        lines.extend(
-            [
-                "",
-                f"{section['order']}. {section['title']}  [{section['section_id']}]",
-                f"   chunks={section['chunk_count']}  chars={section['char_count']}  bytes={section['byte_count']}",
-                _line("-"),
-            ]
+def _print_artifact_stream(
+    db_path: Path,
+    item_id: str,
+    artifact_id: str,
+    section_id: str | None = None,
+) -> None:
+    """Stream human text output chunk-by-chunk without materializing the artifact body."""
+    conn = _connect_readonly(db_path)
+    try:
+        artifact, sections = _artifact_header_and_sections(
+            conn, item_id, artifact_id, section_id
         )
-        content = str(section.get("content", ""))
-        lines.append(content if content else "-")
-    return "\n".join(lines)
+        print(_line("="))
+        print(
+            f"{item_id} / {artifact['artifact_id']}  "
+            f"[{str(artifact['state']).upper()}]  type={artifact['type']}  "
+            f"revision={artifact['revision']}"
+        )
+        print(_single_line(artifact["title"]))
+        print(f"Based on Work Item revision: {artifact['based_on_work_item_revision']}")
+        print(f"Created: {_local_time(artifact['created_at'])}")
+        print(f"Updated: {_local_time(artifact['updated_at'])}")
+        print(_line("="))
+        print()
+        print("SUMMARY")
+        print(_line("-"))
+        for line in _wrap(artifact["summary"]):
+            print(line)
+
+        for section in sections:
+            print()
+            print(
+                f"{section['section_order']}. {section['title']}  "
+                f"[{section['section_id']}]"
+            )
+            print(
+                f"   chunks={section['chunk_count']}  chars={section['char_count']}  "
+                f"bytes={section['byte_count']}"
+            )
+            print(_line("-"))
+            rows = conn.execute(
+                "SELECT content FROM work_item_artifact_chunks "
+                "WHERE work_item_id = ? AND artifact_id = ? AND section_id = ? "
+                "ORDER BY chunk_index ASC",
+                (item_id, artifact_id, section["section_id"]),
+            )
+            wrote = False
+            ended_with_newline = True
+            for row in rows:
+                text = str(row["content"])
+                sys.stdout.write(text)
+                wrote = True
+                ended_with_newline = text.endswith("\n")
+            if not wrote:
+                sys.stdout.write("-\n")
+            elif not ended_with_newline:
+                sys.stdout.write("\n")
+    except sqlite3.Error as exc:
+        raise CliError(f"cannot read Work Item artifact: {exc}") from exc
+    finally:
+        conn.close()
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -537,20 +623,30 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     sub = parser.add_subparsers(dest="command")
 
-    list_parser = sub.add_parser("list", help="Show ticket counts and a compact Work Item table.")
+    list_parser = sub.add_parser(
+        "list", help="Show ticket counts and a compact Work Item table."
+    )
     list_parser.add_argument("--status", choices=STATUS_ORDER)
     list_parser.add_argument("--repository")
     list_parser.add_argument("--limit", type=int, default=50)
 
-    show_parser = sub.add_parser("show", help="Show one Work Item plus a thin artifact index.")
+    show_parser = sub.add_parser(
+        "show", help="Show one Work Item plus a thin artifact index."
+    )
     show_parser.add_argument("id")
-    show_parser.add_argument("--json", action="store_true", help="Print Work Item plus artifact index as JSON.")
+    show_parser.add_argument(
+        "--json", action="store_true", help="Print Work Item plus artifact index as JSON."
+    )
 
-    artifact_parser = sub.add_parser("artifact", help="Show full optional artifact content for human inspection.")
+    artifact_parser = sub.add_parser(
+        "artifact", help="Show full optional artifact content for human inspection."
+    )
     artifact_parser.add_argument("id", help="Canonical Work Item id")
     artifact_parser.add_argument("artifact_id")
     artifact_parser.add_argument("--section", dest="section_id", help="Show only one section")
-    artifact_parser.add_argument("--json", action="store_true", help="Print the complete selected artifact as JSON.")
+    artifact_parser.add_argument(
+        "--json", action="store_true", help="Materialize and print selected artifact as JSON."
+    )
     return parser
 
 
@@ -582,27 +678,15 @@ def main(argv: list[str] | None = None) -> int:
             return 0
 
         if command == "artifact":
-            artifact = _get_artifact_readonly(db, args.id, args.artifact_id)
-            if args.section_id is not None:
-                sections = [
-                    section
-                    for section in artifact["sections"]
-                    if section["section_id"] == args.section_id
-                ]
-                if not sections:
-                    raise CliNotFoundError(
-                        f"Artifact section not found: {args.id}/{args.artifact_id}/{args.section_id}"
-                    )
-                if args.json:
-                    selected = dict(artifact)
-                    selected["sections"] = sections
-                    print(json.dumps(selected, ensure_ascii=False, indent=2, sort_keys=False))
-                else:
-                    print(render_artifact(artifact, section_id=args.section_id))
-            elif args.json:
+            if args.json:
+                artifact = _get_artifact_json_readonly(
+                    db, args.id, args.artifact_id, args.section_id
+                )
                 print(json.dumps(artifact, ensure_ascii=False, indent=2, sort_keys=False))
             else:
-                print(render_artifact(artifact))
+                _print_artifact_stream(
+                    db, args.id, args.artifact_id, args.section_id
+                )
             return 0
 
         parser.error(f"unknown command: {command}")
