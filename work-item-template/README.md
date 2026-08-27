@@ -141,11 +141,31 @@ Artifact chỉ được materialize khi người dùng explicitly yêu cầu lo�
 workflow explicit yêu cầu artifact. Không tạo artifact như progress bookkeeping mặc
 định.
 
-MVP types:
+MVP types vẫn cố định:
 
 ```text
 intake | investigation | plan | review | report
 ```
+
+Section/header **không cố định**. Repo có advisory config dễ chỉnh tại:
+
+```text
+work-item-template/config/artifact-templates.json
+```
+
+Config chỉ gợi ý `section.id`, `title`, `purpose` cho từng type. Server load/validate
+config một lần khi MCP process khởi động; `work_item_artifact_create` trả derived
+`template_guidance`, nhưng guidance không persist và không bắt buộc/cấm/reorder section.
+Artifact cũ không thay đổi khi config được sửa.
+
+Có thể dùng custom config path:
+
+```bash
+export WORK_ITEM_ARTIFACT_TEMPLATES_PATH="$HOME/.config/agent-work-items/artifact-templates.json"
+```
+
+Env phải tồn tại lúc Codex/Claude/MCP process được mở. Không set thì dùng repo default.
+Sửa config chỉ cần restart/fresh MCP process, **không cần database migration**.
 
 `work_item_get` trả Work Item cùng **thin artifact index**. Index này là derived
 metadata, không được persist trong `work_items.document_json`. Core từ chối create hoặc
@@ -167,10 +187,11 @@ Work Item revision tăng và không cạnh tranh optimistic writer với task-st
 Hard payload/storage bounds:
 
 ```text
-write chunk        <= 32,000 UTF-8 bytes/call
-read section       4..32,000 UTF-8 bytes/call
-artifacts/item     <= 50
-sections/artifact  <= 100
+write chunk          <= 32,000 UTF-8 bytes/call
+read section         4..32,000 UTF-8 bytes/call
+artifacts/item       <= 50
+sections/artifact    <= 100
+template config file <= 64,000 bytes
 ```
 
 Artifact lifecycle:
@@ -382,6 +403,7 @@ work_item_artifact_sections
 work_item_artifact_chunks
 ```
 
+Artifact template config là startup advisory file, **không phải persistence table/store**.
 Không có filesystem/Markdown task-artifact store thứ hai.
 
 ## Human CLI
@@ -420,7 +442,9 @@ Installer tạo:
 ```
 
 và đăng ký MCP tên `work_item` cho Codex/Claude CLI đang có. Nếu registration cùng
-tên trỏ sang runtime khác, installer fail thay vì overwrite âm thầm.
+tên trỏ sang runtime khác, installer fail thay vì overwrite âm thầm. Wrapper chỉ set
+`WORK_ITEM_DB_PATH` và giữ inherited environment, nên optional
+`WORK_ITEM_ARTIFACT_TEMPLATES_PATH` được truyền qua nếu set khi client/MCP được mở.
 
 ## Verification
 
@@ -448,11 +472,14 @@ Test/check cover ít nhất:
 - bounded read + revision-bound continuation cursor;
 - exact preservation của Markdown/code whitespace;
 - artifact/section MVP caps;
+- configurable artifact template default/override/startup validation;
+- guidance load-once, detached create-response và storage independence;
+- section ngoài template vẫn hợp lệ vì template chỉ advisory;
 - finalize empty bị reject và complete artifact immutable;
 - human CLI thin artifact index/full explicit artifact view;
 - human CLI text stream + explicit JSON materialization đều read-only;
-- static invariant cho MCP tool count, typed update surface, post-commit mutation response,
-  bounded payload và read-only boundary.
+- static invariant cho MCP tool count, typed update surface, template/storage boundary,
+  post-commit mutation response, bounded payload và read-only boundary.
 
 Khi rollout thực tế, mở fresh Codex/Claude session để MCP client discover tool surface
 mới và smoke test QiQi + repository child trên cùng database.
