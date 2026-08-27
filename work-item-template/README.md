@@ -198,7 +198,7 @@ Canonical Work Item tools:
 work_item_get(id)
 work_item_list(status?, repository?, limit?)
 work_item_create(id, title, summary?, status?, phase?, current_requirements?, repositories?)
-work_item_update(id, expected_revision, changes)
+work_item_update(id, expected_revision, changes: WorkItemPatch)
 ```
 
 Optional artifact tools:
@@ -212,7 +212,7 @@ work_item_artifact_read(id, artifact_id, section_id, cursor?, limit_bytes?)
 work_item_artifact_finalize(id, artifact_id, expected_artifact_revision)
 ```
 
-`work_item_update` dùng JSON merge-patch semantics:
+`work_item_update` vẫn dùng JSON merge-patch semantics:
 
 - nested object merge;
 - array replace nguyên tử;
@@ -222,6 +222,49 @@ work_item_artifact_finalize(id, artifact_id, expected_artifact_revision)
 
 Arrays replace nguyên tử là intentional cho MVP: caller phải đọc Work Item hiện tại,
 reconcile full intended array, rồi update bằng exact revision.
+
+### Typed WorkItemPatch
+
+MCP expose schema cụ thể cho `changes` thay vì generic `dict`. Mục đích là để agent
+không phải đoán shape hoặc ý nghĩa của semantic fields:
+
+```text
+questions[]     = external/product ambiguity records; không phải string/note
+changes[]       = requirement/scope evolution; không phải generic code/progress log
+blockers[]      = điều thực sự chặn tiến độ; không phải risk/note chung
+handoffs[]      = remaining work chuyển giữa repo/owner
+next_actions[]  = object có action + repo hoặc owner; không phải list[string]
+checkpoints[]   = material milestone/evidence; không phải terminal/activity log
+repos           = map theo repo, nested object merge
+```
+
+Canonical examples:
+
+```yaml
+questions:
+  - id: q1
+    status: open
+    question: SMTP capacity thực tế là bao nhiêu?
+
+blockers:
+  - id: b1
+    status: open
+    summary: Chưa xác định producer-side bulk classifier.
+
+next_actions:
+  - repo: sg_mail
+    action: Xác định classification boundary.
+```
+
+Các nested semantic record cho phép provenance/evidence mở rộng như `source`,
+`evidence`, `decided_by`, `caused_by_decision`, nhưng top-level patch field lạ bị từ
+chối. Serialization dùng `exclude_unset=True`: field omitted nghĩa là không đổi, còn
+explicit `null` vẫn được giữ để core áp JSON merge-patch deletion.
+
+Expected update-domain failures (`work_item_validation`, `revision_conflict`, missing
+Work Item) trả structured result với `updated=false` để agent thấy nguyên nhân và action
+thay vì chỉ nhận generic `Error executing tool`. Unexpected runtime/store failures vẫn
+là MCP tool errors.
 
 ## Optimistic concurrency
 
@@ -391,6 +434,11 @@ Test/check cover ít nhất:
 - questions/decisions/requirement changes;
 - nested repo state merge;
 - stale Work Item revision và concurrent writers;
+- typed `WorkItemPatch` semantic shapes/descriptions;
+- reject các payload từng gây retry: question string/`text`, blocker string, invalid change enum,
+  next-action string/missing owner;
+- preserve nested provenance, repo partial merge và explicit merge-patch `null`;
+- structured update validation/conflict/not-found results;
 - immutable metadata và derived `artifacts` guard;
 - artifact create/list/get manifest;
 - stale artifact writer revision;
@@ -403,8 +451,8 @@ Test/check cover ít nhất:
 - finalize empty bị reject và complete artifact immutable;
 - human CLI thin artifact index/full explicit artifact view;
 - human CLI text stream + explicit JSON materialization đều read-only;
-- static invariant cho MCP tool count, post-commit mutation response, bounded payload
-  và read-only boundary.
+- static invariant cho MCP tool count, typed update surface, post-commit mutation response,
+  bounded payload và read-only boundary.
 
 Khi rollout thực tế, mở fresh Codex/Claude session để MCP client discover tool surface
 mới và smoke test QiQi + repository child trên cùng database.
