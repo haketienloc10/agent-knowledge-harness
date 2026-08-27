@@ -44,19 +44,23 @@ Repo có default advisory templates cho 5 type tại:
 work-item-template/config/artifact-templates.json
 ```
 
-Ví dụ default `report` hiện gợi ý:
+Default `report` hiện được định hướng cho Redmine Textile với 8 mục:
 
 ```text
-original-request
-requirement-review
-investigation
-implementation
-verification
-code-review
-final-assessment
+root-cause-requirement   -> h3. +1. Root-cause/requirement:+
+solution                 -> h3. +2. Solution:+
+affected                 -> h3. +3. Affected:+
+impact-module-analysis   -> h3. +4. Impact Module Analysis+
+sql-report               -> h3. +5. SQL_Report+
+commits                  -> h3. +6. Commits:+
+testcase-ut              -> h3. +7. Testcase /UT:+
+deploy                   -> h3. +8. Deploy:+
 ```
 
-Đây là guidance có thể chỉnh sửa, không phải danh sách section bắt buộc.
+`purpose` của từng section hướng dẫn cách dùng `p((.`/Textile bullets và khóa các
+placeholder phải để user tự điền khi chưa có evidence, ví dụ
+`<<branch user tự điền>>` và `<<pre4 user tự điền>>`. Đây vẫn là guidance có thể chỉnh
+sửa, không phải danh sách section bắt buộc.
 
 ## Configurable artifact template guidance
 
@@ -68,12 +72,12 @@ Mỗi configured type có dạng:
 ```json
 {
   "report": {
-    "description": "Final task report ...",
+    "description": "Redmine-ready final report in Textile style ...",
     "sections": [
       {
-        "id": "original-request",
-        "title": "Original Request",
-        "purpose": "The original user or ticket request."
+        "id": "root-cause-requirement",
+        "title": "h3. +1. Root-cause/requirement:+",
+        "purpose": "Explain the effective requirement and verified root cause ..."
       }
     ]
   }
@@ -109,12 +113,12 @@ hoặc config vượt hard bound 64,000 bytes.
   "state": "draft",
   "revision": 1,
   "template_guidance": {
-    "description": "Final task report ...",
+    "description": "Redmine-ready final report in Textile style ...",
     "sections": [
       {
-        "id": "original-request",
-        "title": "Original Request",
-        "purpose": "The original user or ticket request."
+        "id": "root-cause-requirement",
+        "title": "h3. +1. Root-cause/requirement:+",
+        "purpose": "Explain the effective requirement and verified root cause ..."
       }
     ]
   }
@@ -297,10 +301,17 @@ Full artifact chỉ đọc khi yêu cầu:
 
 ```bash
 agent-work-item artifact redmine:113387 report:1
-agent-work-item artifact redmine:113387 report:1 --section code-review
+agent-work-item artifact redmine:113387 report:1 --section solution
 ```
 
 Human CLI mở SQLite bằng `mode=ro`. Text-mode artifact view stream từng stored chunk
 trực tiếp ra terminal; nó không materialize toàn artifact trong RAM. Chỉ explicit
 `--json` mới materialize full selected artifact để in JSON. Cả hai path đều read-only
 và không kéo body vào LLM/MCP context.
+
+Human CLI là diagnostic/inspection view và có metadata/counter riêng quanh từng section;
+nó **không** phải raw Redmine Textile renderer. Redmine formatting trong default
+`report` template là guidance cho agent khi tạo/report artifact content. Nếu sau này cần
+copy-paste nguyên artifact thành một Textile document không có CLI decoration, đó nên là
+một explicit raw/render command riêng thay vì thay đổi read-only diagnostic output hiện
+tại.
