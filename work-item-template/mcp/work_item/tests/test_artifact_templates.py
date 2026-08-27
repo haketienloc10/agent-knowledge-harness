@@ -10,6 +10,7 @@ from unittest.mock import patch
 from artifact_templates import (
     ARTIFACT_TEMPLATE_FILE_MAX_BYTES,
     ARTIFACT_TEMPLATES_ENV,
+    DEFAULT_ARTIFACT_TEMPLATES_PATH,
     ArtifactTemplateConfigError,
     load_artifact_templates,
     resolve_artifact_templates_path,
@@ -34,7 +35,7 @@ class ArtifactTemplateConfigTests(unittest.TestCase):
         return path
 
     def test_default_config_loads_all_fixed_artifact_types(self) -> None:
-        templates = load_artifact_templates()
+        templates = load_artifact_templates(DEFAULT_ARTIFACT_TEMPLATES_PATH)
         self.assertEqual(
             set(templates), {"intake", "investigation", "plan", "review", "report"}
         )
