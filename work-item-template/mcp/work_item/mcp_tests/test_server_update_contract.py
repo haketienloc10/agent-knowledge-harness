@@ -1,21 +1,31 @@
 from __future__ import annotations
 
+import ast
 import sys
 import unittest
 from pathlib import Path
-from typing import get_type_hints
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from core import ConflictError, NotFoundError, ValidationError
-from models import WorkItemPatch
-from server import _work_item_update_error_result, work_item_update
+from server import _work_item_update_error_result
 
 
 class WorkItemUpdateServerContractTests(unittest.TestCase):
     def test_update_tool_exposes_typed_patch(self) -> None:
-        hints = get_type_hints(work_item_update)
-        self.assertIs(hints["changes"], WorkItemPatch)
+        server_path = Path(__file__).resolve().parents[1] / "server.py"
+        tree = ast.parse(server_path.read_text(encoding="utf-8"))
+        update = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.AsyncFunctionDef) and node.name == "work_item_update"
+        )
+        args = {
+            arg.arg: ast.unparse(arg.annotation)
+            for arg in update.args.args
+            if arg.annotation is not None
+        }
+        self.assertEqual(args["changes"], "WorkItemPatch")
 
     def test_validation_failure_is_structured(self) -> None:
         result = _work_item_update_error_result(
