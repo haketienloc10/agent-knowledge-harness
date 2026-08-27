@@ -8,6 +8,7 @@ from typing import Any, Annotated, Literal
 from mcp.server import MCPServer
 from pydantic import Field
 
+from artifact_templates import load_artifact_templates, template_guidance_for
 from artifacts import (
     ARTIFACT_CHUNK_MAX_BYTES,
     ARTIFACT_LIST_MAX,
@@ -81,6 +82,10 @@ ArtifactContent = Annotated[
         ),
     ),
 ]
+
+# Artifact templates are advisory configuration, loaded and validated exactly once when
+# the MCP process starts. Restart the MCP process after changing the config file.
+ARTIFACT_TEMPLATES = load_artifact_templates()
 
 
 def _db_path() -> Path:
@@ -194,6 +199,17 @@ def _with_artifacts(item: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+def _with_template_guidance(
+    artifact: dict[str, Any], artifact_type: str
+) -> dict[str, Any]:
+    """Attach advisory startup config without changing the stored artifact manifest."""
+    result = dict(artifact)
+    result["template_guidance"] = template_guidance_for(
+        ARTIFACT_TEMPLATES, artifact_type
+    )
+    return result
+
+
 mcp = MCPServer(
     "Global Work Item",
     instructions=(
@@ -215,7 +231,9 @@ mcp = MCPServer(
         "field; required fields cannot be removed. A missing work_item_get is normal startup control "
         "flow and returns found=false so QiQi can create the item. Optional task artifacts provide "
         "progressive-disclosure detail for explicit user-requested intake, investigation, plan, review "
-        "or report material. Do not create artifacts merely as normal progress bookkeeping. "
+        "or report material. Do not create artifacts merely as normal progress bookkeeping. Artifact "
+        "types remain fixed, while configurable template guidance only recommends section ids, titles "
+        "and purposes; it is not persisted and never requires, forbids, or reorders artifact sections. "
         "work_item_get returns only thin artifact metadata. Full artifact content must be read by "
         "section through bounded work_item_artifact_read calls. Artifact writes are independently "
         "revisioned, append-only while draft, limited to 32000 UTF-8 bytes per call, and become "
@@ -338,9 +356,13 @@ async def work_item_artifact_create(
     based_on_work_item_revision: Revision,
     artifact_id: ArtifactId | None = None,
 ) -> dict[str, Any]:
-    """Create optional draft artifact metadata based on the exact current Work Item revision."""
+    """Create a draft artifact and return optional advisory section template guidance.
+
+    Template guidance is loaded once at MCP startup, is not persisted, and does not enforce
+    section presence, order, titles, or exclusivity. Callers may omit, reorder, or add sections.
+    """
     try:
-        return create_artifact(
+        artifact = create_artifact(
             _db_path(),
             id,
             artifact_type=type,
@@ -349,6 +371,7 @@ async def work_item_artifact_create(
             based_on_work_item_revision=based_on_work_item_revision,
             artifact_id=artifact_id,
         )
+        return _with_template_guidance(artifact, type)
     except WorkItemError as exc:
         _raise_actionable_error(exc)
 
