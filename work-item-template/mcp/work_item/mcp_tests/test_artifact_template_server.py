@@ -7,9 +7,6 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
-
-import server
 
 
 class ArtifactTemplateServerTests(unittest.TestCase):
@@ -21,39 +18,50 @@ class ArtifactTemplateServerTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temp.cleanup()
 
-    def _subprocess_env(self, config_path: Path) -> dict[str, str]:
+    def _subprocess_env(self, config_path: Path | None) -> dict[str, str]:
         env = os.environ.copy()
-        env["WORK_ITEM_ARTIFACT_TEMPLATES_PATH"] = str(config_path)
+        if config_path is None:
+            env.pop("WORK_ITEM_ARTIFACT_TEMPLATES_PATH", None)
+        else:
+            env["WORK_ITEM_ARTIFACT_TEMPLATES_PATH"] = str(config_path)
         existing = env.get("PYTHONPATH", "")
         env["PYTHONPATH"] = str(self.project) + (os.pathsep + existing if existing else "")
         return env
 
-    def test_create_response_helper_attaches_advisory_guidance(self) -> None:
-        result = server._with_template_guidance(
-            {"artifact_id": "report:1", "type": "report", "revision": 1},
-            "report",
+    def _run(self, code: str, config_path: Path | None = None) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [sys.executable, "-c", code],
+            env=self._subprocess_env(config_path),
+            text=True,
+            capture_output=True,
+            check=False,
         )
-        self.assertEqual(result["artifact_id"], "report:1")
-        self.assertEqual(
-            result["template_guidance"]["sections"][0]["id"], "original-request"
-        )
+
+    def test_default_create_response_attaches_detached_advisory_guidance(self) -> None:
+        code = r'''
+import server
+result = server._with_template_guidance(
+    {"artifact_id": "report:1", "type": "report", "revision": 1},
+    "report",
+)
+assert result["artifact_id"] == "report:1"
+assert result["template_guidance"]["sections"][0]["id"] == "original-request"
+result["template_guidance"]["sections"][0]["title"] = "Mutated"
+assert server.ARTIFACT_TEMPLATES["report"]["sections"][0]["title"] == "Original Request"
+'''
+        completed = self._run(code)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
 
     def test_missing_configured_template_returns_null_guidance(self) -> None:
-        with patch.object(server, "ARTIFACT_TEMPLATES", {}):
-            result = server._with_template_guidance(
-                {"artifact_id": "report:1", "type": "report"}, "report"
-            )
-        self.assertIsNone(result["template_guidance"])
-
-    def test_guidance_response_cannot_mutate_startup_config(self) -> None:
-        result = server._with_template_guidance(
-            {"artifact_id": "report:1", "type": "report"}, "report"
-        )
-        result["template_guidance"]["sections"][0]["title"] = "Mutated"
-        self.assertEqual(
-            server.ARTIFACT_TEMPLATES["report"]["sections"][0]["title"],
-            "Original Request",
-        )
+        config = self.root / "empty.json"
+        config.write_text("{}", encoding="utf-8")
+        code = r'''
+import server
+result = server._with_template_guidance({"artifact_id": "report:1"}, "report")
+assert result["template_guidance"] is None
+'''
+        completed = self._run(code, config)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
 
     def test_server_loads_custom_template_once_per_process(self) -> None:
         config = self.root / "templates.json"
@@ -87,13 +95,7 @@ result = server._with_template_guidance({"artifact_id": "report:1"}, "report")
 assert result["template_guidance"]["description"] == "Startup value"
 assert result["template_guidance"]["sections"][0]["id"] == "one"
 '''
-        completed = subprocess.run(
-            [sys.executable, "-c", code],
-            env=self._subprocess_env(config),
-            text=True,
-            capture_output=True,
-            check=False,
-        )
+        completed = self._run(code, config)
         self.assertEqual(completed.returncode, 0, completed.stderr)
 
     def test_invalid_custom_template_fails_server_startup(self) -> None:
@@ -109,13 +111,7 @@ assert result["template_guidance"]["sections"][0]["id"] == "one"
             ),
             encoding="utf-8",
         )
-        completed = subprocess.run(
-            [sys.executable, "-c", "import server"],
-            env=self._subprocess_env(config),
-            text=True,
-            capture_output=True,
-            check=False,
-        )
+        completed = self._run("import server", config)
         self.assertNotEqual(completed.returncode, 0)
         self.assertIn("unsupported types", completed.stderr)
 
