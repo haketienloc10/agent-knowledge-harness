@@ -45,9 +45,21 @@ result = server._with_template_guidance(
     "report",
 )
 assert result["artifact_id"] == "report:1"
-assert result["template_guidance"]["sections"][0]["id"] == "original-request"
+sections = result["template_guidance"]["sections"]
+assert [section["id"] for section in sections] == [
+    "root-cause-requirement",
+    "solution",
+    "affected",
+    "impact-module-analysis",
+    "sql-report",
+    "commits",
+    "testcase-ut",
+    "deploy",
+]
+assert sections[0]["title"] == "h3. +1. Root-cause/requirement:+"
+assert sections[-1]["title"] == "h3. +8. Deploy:+"
 result["template_guidance"]["sections"][0]["title"] = "Mutated"
-assert server.ARTIFACT_TEMPLATES["report"]["sections"][0]["title"] == "Original Request"
+assert server.ARTIFACT_TEMPLATES["report"]["sections"][0]["title"] == "h3. +1. Root-cause/requirement:+"
 '''
         completed = self._run(code)
         self.assertEqual(completed.returncode, 0, completed.stderr)
