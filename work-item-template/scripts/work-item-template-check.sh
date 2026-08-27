@@ -14,15 +14,21 @@ for command in python3 uv rg; do
   command -v "$command" >/dev/null 2>&1 || fail "missing command: $command"
 done
 
-for file in "$home/CLI.md" "$home/ARTIFACTS.md"; do
-  [[ -f "$file" ]] || fail "missing documentation: ${file#$home/}"
+for file in "$home/CLI.md" "$home/ARTIFACTS.md" "$home/config/artifact-templates.json"; do
+  [[ -f "$file" ]] || fail "missing required Work Item file: ${file#$home/}"
 done
 
 PYTHONPATH="$project" python3 -m unittest discover -s "$project/tests" -v || \
-  fail 'Work Item core/CLI/artifact unit tests failed'
+  fail 'Work Item core/CLI/artifact/template unit tests failed'
 PYTHONPATH="$project" uv run --project "$project" python -m unittest discover -s "$project/mcp_tests" -v || \
-  fail 'Work Item typed MCP contract tests failed'
-python3 -m py_compile "$project/core.py" "$project/server.py" "$project/artifacts.py" "$project/cli.py" "$project/models.py" || \
+  fail 'Work Item typed MCP/template contract tests failed'
+python3 -m py_compile \
+  "$project/core.py" \
+  "$project/server.py" \
+  "$project/artifacts.py" \
+  "$project/artifact_templates.py" \
+  "$project/cli.py" \
+  "$project/models.py" || \
   fail 'Work Item Python syntax check failed'
 bash -n "$home/scripts/work-item-mcp-server.sh" || \
   fail 'work-item-mcp-server.sh: invalid Bash syntax'
@@ -34,6 +40,8 @@ bash -n "$home/scripts/install-user-mcp.sh" || \
 server="$project/server.py"
 core="$project/core.py"
 artifacts="$project/artifacts.py"
+artifact_templates="$project/artifact_templates.py"
+artifact_template_config="$home/config/artifact-templates.json"
 models="$project/models.py"
 cli="$project/cli.py"
 installer="$home/scripts/install-user-mcp.sh"
@@ -68,8 +76,14 @@ for pattern in \
   'do not encode' \
   'Do not create artifacts merely as normal progress bookkeeping' \
   'Artifact read cursors are bound to one artifact revision' \
-  'Artifact mutations never advance'; do
-  rg -q "$pattern" "$server" || fail "server.py: missing contract: $pattern"
+  'Artifact mutations never advance' \
+  'load_artifact_templates' \
+  'ARTIFACT_TEMPLATES = load_artifact_templates()' \
+  '_with_template_guidance' \
+  'template_guidance' \
+  'not persisted' \
+  'does not enforce'; do
+  rg -F -q "$pattern" "$server" || fail "server.py: missing contract: $pattern"
 done
 
 tool_count="$(rg -c '^@mcp\.tool\(\)$' "$server" || true)"
@@ -103,6 +117,34 @@ assert "except (ValidationError, ConflictError, NotFoundError)" in source
 PY
 then
   fail 'server.py: work_item_update must expose WorkItemPatch and return structured expected-domain failures'
+fi
+
+# CRITICAL ARTIFACT TEMPLATE BOUNDARY — guidance is startup advisory data only.
+# It may enrich artifact-create response from memory, but storage/list/get/read/finalize
+# must remain independent of template config and must not enforce template sections.
+if ! SERVER_PATH="$server" python3 - <<'PY'
+import ast
+import os
+from pathlib import Path
+
+path = Path(os.environ["SERVER_PATH"])
+text = path.read_text(encoding="utf-8")
+tree = ast.parse(text)
+funcs = {
+    node.name: ast.get_source_segment(text, node) or ""
+    for node in tree.body
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+}
+create = funcs["work_item_artifact_create"]
+helper = funcs["_with_template_guidance"]
+assert "create_artifact(" in create
+assert "_with_template_guidance" in create
+assert "template_guidance_for" in helper
+assert "list_artifacts(" not in create
+assert "get_artifact(" not in create
+PY
+then
+  fail 'server.py: artifact create must attach advisory in-memory guidance without a post-commit DB enrichment query'
 fi
 
 # CRITICAL MUTATION RESPONSE INVARIANT — DO NOT REMOVE OR WEAKEN THIS CHECK.
@@ -183,6 +225,38 @@ then
 fi
 
 for pattern in \
+  'ARTIFACT_TEMPLATES_ENV = "WORK_ITEM_ARTIFACT_TEMPLATES_PATH"' \
+  'config" / "artifact-templates.json"' \
+  'ARTIFACT_TEMPLATE_FILE_MAX_BYTES = 64_000' \
+  'ARTIFACT_TEMPLATE_SECTION_MAX = 100' \
+  'class ArtifactTemplateConfigError' \
+  'resolve_artifact_templates_path' \
+  'validate_artifact_templates' \
+  'load_artifact_templates' \
+  'template_guidance_for' \
+  'unsupported types' \
+  'duplicate id' \
+  'unknown fields' \
+  'copy.deepcopy'; do
+  rg -F -q "$pattern" "$artifact_templates" || \
+    fail "artifact_templates.py: missing config contract: $pattern"
+done
+
+# Parse the shipped config through the same stdlib validator used at MCP startup.
+if ! PYTHONPATH="$project" ARTIFACT_TEMPLATE_CONFIG="$artifact_template_config" python3 - <<'PY'
+import os
+from artifact_templates import load_artifact_templates
+
+templates = load_artifact_templates(os.environ["ARTIFACT_TEMPLATE_CONFIG"])
+assert set(templates) == {"intake", "investigation", "plan", "review", "report"}
+assert templates["report"]["sections"][0]["id"] == "original-request"
+assert templates["report"]["sections"][-1]["id"] == "final-assessment"
+PY
+then
+  fail 'config/artifact-templates.json: default artifact template config is invalid'
+fi
+
+for pattern in \
   'ARTIFACT_TYPES = .*intake.*investigation.*plan.*review.*report' \
   'ARTIFACT_CHUNK_MAX_BYTES = 32_000' \
   'ARTIFACT_READ_MIN_BYTES = 4' \
@@ -205,6 +279,11 @@ for pattern in \
   'ON DELETE CASCADE'; do
   rg -q "$pattern" "$artifacts" || fail "artifacts.py: missing bounded artifact contract: $pattern"
 done
+
+# Template config must never become an artifact storage dependency or second truth source.
+if rg -q 'artifact_templates|ARTIFACT_TEMPLATES|template_guidance' "$artifacts"; then
+  fail 'artifacts.py: artifact storage must not import, persist, or enforce template guidance'
+fi
 
 # CRITICAL PAYLOAD/REVISION INVARIANTS — DO NOT REMOVE OR WEAKEN THESE CHECKS
 # merely to make a change pass. Artifact bodies must never become an unbounded
