@@ -34,12 +34,48 @@ class ArtifactTemplateConfigTests(unittest.TestCase):
         path.write_text(json.dumps(value), encoding="utf-8")
         return path
 
-    def test_default_config_loads_all_fixed_artifact_types(self) -> None:
+    def test_default_config_loads_all_fixed_artifact_types_and_redmine_report(self) -> None:
         templates = load_artifact_templates(DEFAULT_ARTIFACT_TEMPLATES_PATH)
         self.assertEqual(
             set(templates), {"intake", "investigation", "plan", "review", "report"}
         )
-        self.assertEqual(templates["report"]["sections"][-1]["id"], "final-assessment")
+        report = templates["report"]
+        self.assertEqual(
+            [section["id"] for section in report["sections"]],
+            [
+                "root-cause-requirement",
+                "solution",
+                "affected",
+                "impact-module-analysis",
+                "sql-report",
+                "commits",
+                "testcase-ut",
+                "deploy",
+            ],
+        )
+        self.assertEqual(
+            report["sections"][0]["title"],
+            "h3. +1. Root-cause/requirement:+",
+        )
+        self.assertEqual(report["sections"][-1]["title"], "h3. +8. Deploy:+")
+        self.assertIn(
+            "<<branch user tự điền>>",
+            next(section for section in report["sections"] if section["id"] == "commits")[
+                "purpose"
+            ],
+        )
+        self.assertIn(
+            "<<pre4 user tự điền>>",
+            next(section for section in report["sections"] if section["id"] == "deploy")[
+                "purpose"
+            ],
+        )
+        self.assertIn(
+            "never invent passing tests",
+            next(section for section in report["sections"] if section["id"] == "testcase-ut")[
+                "purpose"
+            ],
+        )
 
     def test_custom_env_path_overrides_default(self) -> None:
         path = self._write_json(
