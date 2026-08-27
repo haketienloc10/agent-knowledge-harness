@@ -249,8 +249,25 @@ from artifact_templates import load_artifact_templates
 
 templates = load_artifact_templates(os.environ["ARTIFACT_TEMPLATE_CONFIG"])
 assert set(templates) == {"intake", "investigation", "plan", "review", "report"}
-assert templates["report"]["sections"][0]["id"] == "original-request"
-assert templates["report"]["sections"][-1]["id"] == "final-assessment"
+report = templates["report"]
+assert [section["id"] for section in report["sections"]] == [
+    "root-cause-requirement",
+    "solution",
+    "affected",
+    "impact-module-analysis",
+    "sql-report",
+    "commits",
+    "testcase-ut",
+    "deploy",
+]
+assert report["sections"][0]["title"] == "h3. +1. Root-cause/requirement:+"
+assert report["sections"][-1]["title"] == "h3. +8. Deploy:+"
+commits = next(section for section in report["sections"] if section["id"] == "commits")
+deploy = next(section for section in report["sections"] if section["id"] == "deploy")
+testcase = next(section for section in report["sections"] if section["id"] == "testcase-ut")
+assert "<<branch user tự điền>>" in commits["purpose"]
+assert "<<pre4 user tự điền>>" in deploy["purpose"]
+assert "never invent passing tests" in testcase["purpose"]
 PY
 then
   fail 'config/artifact-templates.json: default artifact template config is invalid'
