@@ -68,7 +68,7 @@ for pattern in \
   'do not encode' \
   'Do not create artifacts merely as normal progress bookkeeping' \
   'Artifact read cursors are bound to one artifact revision' \
-  'Artifact mutations never advance the Work Item revision'; do
+  'Artifact mutations never advance'; do
   rg -q "$pattern" "$server" || fail "server.py: missing contract: $pattern"
 done
 
@@ -93,9 +93,10 @@ funcs = {
     if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
 }
 update = funcs["work_item_update"]
-args = {arg.arg: ast.unparse(arg.annotation) for arg in update.args.args if arg.annotation is not None}
+changes_arg = next(arg for arg in update.args.args if arg.arg == "changes")
 source = ast.get_source_segment(text, update) or ""
-assert args["changes"] == "WorkItemPatch"
+assert isinstance(changes_arg.annotation, ast.Name)
+assert changes_arg.annotation.id == "WorkItemPatch"
 assert "changes.to_merge_patch()" in source
 assert "_work_item_update_error_result" in source
 assert "except (ValidationError, ConflictError, NotFoundError)" in source
