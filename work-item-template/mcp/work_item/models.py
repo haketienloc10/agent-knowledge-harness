@@ -95,7 +95,7 @@ class BlockerPatch(_SemanticRecord):
     id: str = Field(description="Stable blocker id within the Work Item, for example b1.")
     status: BlockerStatus = Field(description="Blocker lifecycle: open or resolved.")
     summary: str = Field(
-        description="Condition materially preventing progress. Do not use blockers for generic risks or notes."
+        description="Condition materially preventing progress; not generic risks or notes."
     )
 
 
@@ -133,8 +133,8 @@ class NextActionPatch(_SemanticRecord):
 class CheckpointPatch(_SemanticRecord):
     summary: str = Field(
         description=(
-            "Material milestone/evidence summary. Do not store terminal transcript, commands, "
-            "or routine progress bookkeeping here."
+            "Material milestone/evidence summary; not terminal logs, commands, or routine progress "
+            "bookkeeping."
         )
     )
     repo: str | None = Field(
@@ -184,7 +184,7 @@ class WorkItemPatch(BaseModel):
     questions: list[QuestionPatch] | None = Field(
         default=None,
         description=(
-            "Full replacement of material external/product ambiguities. Not free-form notes or strings. "
+            "Full replacement of material external/product ambiguities; not free-form notes or strings. "
             "Each record requires id and question; arrays replace atomically."
         ),
     )
@@ -212,7 +212,7 @@ class WorkItemPatch(BaseModel):
     blockers: list[BlockerPatch] | None = Field(
         default=None,
         description=(
-            "Full replacement of conditions materially blocking progress. Not generic risks or notes. "
+            "Full replacement of conditions materially blocking progress; not generic risks or notes. "
             "Arrays replace atomically."
         ),
     )
@@ -233,7 +233,7 @@ class WorkItemPatch(BaseModel):
     checkpoints: list[CheckpointPatch] | None = Field(
         default=None,
         description=(
-            "Full replacement of material milestone/evidence summaries. Not terminal logs or routine "
+            "Full replacement of material milestone/evidence summaries; not terminal logs or routine "
             "activity history. Arrays replace atomically."
         ),
     )
