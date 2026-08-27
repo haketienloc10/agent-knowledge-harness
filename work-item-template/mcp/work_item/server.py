@@ -34,12 +34,36 @@ from core import (
     resolve_db_path,
     update_work_item,
 )
+from models import WorkItemPatch, WorkItemStatus
 
-WorkItemStatus = Literal["active", "waiting", "blocked", "done", "cancelled"]
 ArtifactType = Literal["intake", "investigation", "plan", "review", "report"]
-WorkItemId = Annotated[str, Field(min_length=3, max_length=256)]
-ArtifactId = Annotated[str, Field(min_length=3, max_length=128)]
-SectionId = Annotated[str, Field(min_length=1, max_length=128)]
+WorkItemId = Annotated[
+    str,
+    Field(
+        min_length=3,
+        max_length=256,
+        pattern=r"^[a-z][a-z0-9_-]*:[A-Za-z0-9][A-Za-z0-9._-]*$",
+        description="Canonical Work Item id in <source>:<external-id> form, for example redmine:116655.",
+    ),
+]
+ArtifactId = Annotated[
+    str,
+    Field(
+        min_length=3,
+        max_length=128,
+        pattern=r"^[a-z][a-z0-9_-]*:[A-Za-z0-9][A-Za-z0-9._-]*$",
+        description="Artifact id in <type>:<id> form, for example report:1.",
+    ),
+]
+SectionId = Annotated[
+    str,
+    Field(
+        min_length=1,
+        max_length=128,
+        pattern=r"^[a-z][a-z0-9_-]*$",
+        description="Lowercase artifact section id using letters, digits, _ or -.",
+    ),
+]
 Revision = Annotated[int, Field(ge=1)]
 ListLimit = Annotated[int, Field(ge=1, le=200)]
 ArtifactListLimit = Annotated[int, Field(ge=1, le=ARTIFACT_LIST_MAX)]
@@ -47,7 +71,15 @@ ArtifactReadLimit = Annotated[
     int, Field(ge=ARTIFACT_READ_MIN_BYTES, le=ARTIFACT_READ_MAX_BYTES)
 ]
 ArtifactContent = Annotated[
-    str, Field(min_length=1, max_length=ARTIFACT_CHUNK_MAX_BYTES)
+    str,
+    Field(
+        min_length=1,
+        max_length=ARTIFACT_CHUNK_MAX_BYTES,
+        description=(
+            "One artifact content chunk. Server limit is 32000 UTF-8 bytes, not characters; "
+            "split larger content into multiple append calls."
+        ),
+    ),
 ]
 
 
@@ -69,6 +101,48 @@ def _not_found_result(item_id: str, exc: NotFoundError) -> dict[str, Any]:
             "code": "work_item_not_found",
             "message": str(exc),
             "action": "verify the canonical task id or create the Work Item",
+        },
+    }
+
+
+def _work_item_update_error_result(
+    item_id: str,
+    exc: ValidationError | ConflictError | NotFoundError,
+) -> dict[str, Any]:
+    """Return expected update-domain failures as visible structured control flow."""
+    if isinstance(exc, ValidationError):
+        return {
+            "updated": False,
+            "id": item_id,
+            "error": {
+                "code": "work_item_validation",
+                "message": str(exc),
+                "action": (
+                    "fix the patch to match the WorkItemPatch schema; semantic arrays are full "
+                    "replacements, then retry with the same revision unless the Work Item changed"
+                ),
+            },
+        }
+    if isinstance(exc, ConflictError):
+        return {
+            "updated": False,
+            "id": item_id,
+            "error": {
+                "code": "revision_conflict",
+                "message": str(exc),
+                "action": (
+                    "call work_item_get, reconcile against the current document including any full "
+                    "array replacement, then retry with its exact revision"
+                ),
+            },
+        }
+    return {
+        "updated": False,
+        "id": item_id,
+        "error": {
+            "code": "work_item_not_found",
+            "message": str(exc),
+            "action": "verify the canonical task id or let QiQi create it",
         },
     }
 
@@ -133,18 +207,21 @@ mcp = MCPServer(
         "it discovered. Cross-repo remaining work is recorded and returned to QiQi; child agents "
         "must not modify sibling repositories. Work Item state is task truth, not reusable system "
         "knowledge and not runtime session state. Updates use optimistic concurrency: always pass "
-        "the exact revision returned by work_item_get/list and reread on conflict. The changes "
-        "object uses JSON merge-patch semantics: nested objects merge, arrays replace atomically, "
-        "and null removes a field; required fields cannot be removed. A missing work_item_get is "
-        "normal startup control flow and returns found=false so QiQi can create the item. "
-        "Optional task artifacts provide progressive-disclosure detail for explicit user-requested "
-        "intake, investigation, plan, review or report material. Do not create artifacts merely as "
-        "normal progress bookkeeping. work_item_get returns only thin artifact metadata. Full artifact "
-        "content must be read by section through bounded work_item_artifact_read calls. Artifact writes "
-        "are independently revisioned, append-only while draft, limited to 32000 UTF-8 bytes per call, "
-        "and become immutable after finalize. Artifact read cursors are bound to one artifact revision; "
-        "restart a section read if the artifact changes between pages. Artifact mutations never advance "
-        "the Work Item revision. If artifact detail conflicts with newer canonical Work Item state, the "
+        "the exact revision returned by work_item_get/list and reread on conflict. work_item_update "
+        "exposes a typed WorkItemPatch: use canonical record objects for questions, decisions, "
+        "requirement/scope changes, blockers, handoffs, next actions and checkpoints; do not encode "
+        "those semantic collections as plain strings or generic activity logs. The patch uses JSON "
+        "merge-patch semantics: nested objects merge, arrays replace atomically, and null removes a "
+        "field; required fields cannot be removed. A missing work_item_get is normal startup control "
+        "flow and returns found=false so QiQi can create the item. Optional task artifacts provide "
+        "progressive-disclosure detail for explicit user-requested intake, investigation, plan, review "
+        "or report material. Do not create artifacts merely as normal progress bookkeeping. "
+        "work_item_get returns only thin artifact metadata. Full artifact content must be read by "
+        "section through bounded work_item_artifact_read calls. Artifact writes are independently "
+        "revisioned, append-only while draft, limited to 32000 UTF-8 bytes per call, and become "
+        "immutable after finalize. Artifact read cursors are bound to one artifact revision; restart "
+        "a section read if the artifact changes between pages. Artifact mutations never advance the "
+        "Work Item revision. If artifact detail conflicts with newer canonical Work Item state, the "
         "Work Item wins."
     ),
 )
@@ -207,17 +284,22 @@ async def work_item_create(
 async def work_item_update(
     id: WorkItemId,
     expected_revision: Revision,
-    changes: dict[str, Any],
+    changes: WorkItemPatch,
 ) -> dict[str, Any]:
-    """Atomically merge changes into a Work Item using exact optimistic revision control.
+    """Atomically merge a typed WorkItemPatch using exact optimistic revision control.
 
-    Nested objects merge. Arrays are replaced as a whole, which keeps MVP semantics explicit:
-    read the current document, reconcile the full intended array value, then update using that
-    exact revision. `artifacts` is derived metadata reserved by core and cannot be persisted.
+    Nested objects merge. Semantic arrays are full replacements: read the current Work Item,
+    reconcile the complete intended array, then update using that exact revision. The schema
+    distinguishes requirements, questions, decisions, requirement/scope changes, blockers,
+    handoffs, next actions and checkpoints so callers should not guess record shapes or meanings.
+    `artifacts` is derived metadata reserved by core and cannot be persisted.
     """
     try:
+        patch = changes.to_merge_patch()
         # Mutation success must not depend on a second, post-commit artifact query.
-        return update_work_item(_db_path(), id, expected_revision, changes)
+        return update_work_item(_db_path(), id, expected_revision, patch)
+    except (ValidationError, ConflictError, NotFoundError) as exc:
+        return _work_item_update_error_result(id, exc)
     except WorkItemError as exc:
         _raise_actionable_error(exc)
 
