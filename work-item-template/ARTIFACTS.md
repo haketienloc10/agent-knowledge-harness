@@ -23,6 +23,8 @@ Artifact có revision riêng. Append/finalize artifact không tăng Work Item re
 
 ## MVP artifact types
 
+Artifact type là contract cố định của MVP:
+
 ```text
 intake
 investigation
@@ -31,7 +33,18 @@ review
 report
 ```
 
-Ví dụ `report` có thể chứa các section:
+Type không tạo workflow FSM và không bắt buộc task phải có đủ artifact.
+
+**Section/header không phải schema cố định.** `section_id` và `section_title` được caller
+chọn khi append chunk đầu tiên của section. Storage chỉ giữ section thực tế đã được tạo.
+
+Repo có default advisory templates cho 5 type tại:
+
+```text
+work-item-template/config/artifact-templates.json
+```
+
+Ví dụ default `report` hiện gợi ý:
 
 ```text
 original-request
@@ -43,12 +56,99 @@ code-review
 final-assessment
 ```
 
-Type không tạo workflow FSM và không bắt buộc task phải có đủ artifact.
+Đây là guidance có thể chỉnh sửa, không phải danh sách section bắt buộc.
+
+## Configurable artifact template guidance
+
+Template config chỉ giúp agent chọn section/header nhất quán. Nó **không** trở thành
+canonical artifact state và không biến artifact thành workflow engine.
+
+Mỗi configured type có dạng:
+
+```json
+{
+  "report": {
+    "description": "Final task report ...",
+    "sections": [
+      {
+        "id": "original-request",
+        "title": "Original Request",
+        "purpose": "The original user or ticket request."
+      }
+    ]
+  }
+}
+```
+
+Các key type vẫn phải thuộc 5 MVP type cố định. Một type có thể được bỏ khỏi config;
+khi đó create artifact type đó vẫn hợp lệ nhưng `template_guidance` trả `null`.
+
+MCP load và validate config **một lần khi process khởi động**. Sửa config không làm
+process đang chạy tự reload; mở/restart MCP session để nhận template mới.
+
+Default path là file trong repo ở trên. Có thể override bằng environment variable:
+
+```bash
+export WORK_ITEM_ARTIFACT_TEMPLATES_PATH="$HOME/.config/agent-work-items/artifact-templates.json"
+```
+
+Environment variable phải tồn tại ở process mở Codex/Claude/MCP. Stable wrapper không
+sanitize environment nên giá trị này được truyền qua. Nếu không set, server dùng repo
+default config.
+
+Config dùng JSON để không thêm parser/dependency ngoài stdlib. Startup fail rõ ràng nếu
+file không tồn tại, JSON invalid, type/field không hỗ trợ, section id invalid/duplicate,
+hoặc config vượt hard bound 64,000 bytes.
+
+`work_item_artifact_create` trả manifest vừa tạo cộng derived guidance:
+
+```json
+{
+  "artifact_id": "report:1",
+  "type": "report",
+  "state": "draft",
+  "revision": 1,
+  "template_guidance": {
+    "description": "Final task report ...",
+    "sections": [
+      {
+        "id": "original-request",
+        "title": "Original Request",
+        "purpose": "The original user or ticket request."
+      }
+    ]
+  }
+}
+```
+
+Boundary bắt buộc:
+
+```text
+template_guidance
+  = advisory startup config
+
+stored artifact sections
+  = actual artifact truth
+```
+
+Template **không**:
+
+- persist vào artifact tables;
+- tăng artifact/Work Item revision;
+- bắt buộc section phải tồn tại;
+- cấm section ngoài template;
+- ép section order/title;
+- làm finalize fail vì thiếu section template.
+
+Artifact đã tạo trước khi sửa config không thay đổi. Config mới chỉ thay guidance của
+`work_item_artifact_create` trong MCP process khởi động sau đó. Không cần database
+migration khi chỉ sửa template config.
 
 ## Progressive disclosure
 
 `work_item_get` chỉ trả thin artifact index: id/type/state/title/summary/revision,
-`based_on_work_item_revision`, section count và size. Không trả artifact body.
+`based_on_work_item_revision`, section count và size. Không trả artifact body hoặc
+template guidance.
 
 ```text
 work_item_artifact_list
@@ -110,6 +210,7 @@ artifact chunk write: <= 32,000 UTF-8 bytes / call
 artifact section read: 4..32,000 UTF-8 bytes / call
 artifacts / Work Item: <= 50
 sections / artifact: <= 100
+artifact template config: <= 64,000 bytes
 ```
 
 Chunk size kiểm theo UTF-8 bytes, không chỉ character count. Nội dung chunk được lưu
