@@ -1,0 +1,142 @@
+{
+  "intake": {
+    "description": "Capture the explicit request and effective initial scope without turning intake into a transcript.",
+    "sections": [
+      {
+        "id": "request",
+        "title": "Request",
+        "purpose": "The explicit user or ticket request being handled."
+      },
+      {
+        "id": "scope",
+        "title": "Scope",
+        "purpose": "Effective in-scope and explicitly out-of-scope boundaries."
+      },
+      {
+        "id": "constraints",
+        "title": "Constraints",
+        "purpose": "Material constraints, assumptions, and required external inputs known at intake time."
+      }
+    ]
+  },
+  "investigation": {
+    "description": "Evidence-backed investigation that separates verified facts from unresolved assumptions.",
+    "sections": [
+      {
+        "id": "scope",
+        "title": "Scope",
+        "purpose": "What is being investigated and what is explicitly out of scope."
+      },
+      {
+        "id": "evidence",
+        "title": "Evidence",
+        "purpose": "Verified source, test, configuration, runtime, or operational evidence."
+      },
+      {
+        "id": "findings",
+        "title": "Findings",
+        "purpose": "Facts established from the evidence, with hypotheses kept separate."
+      },
+      {
+        "id": "open-questions",
+        "title": "Open Questions",
+        "purpose": "Unresolved assumptions or external information still required."
+      }
+    ]
+  },
+  "plan": {
+    "description": "Implementation or delivery plan grounded in the current canonical Work Item state.",
+    "sections": [
+      {
+        "id": "objective",
+        "title": "Objective",
+        "purpose": "The concrete outcome this plan is intended to achieve."
+      },
+      {
+        "id": "approach",
+        "title": "Approach",
+        "purpose": "Proposed technical or operational approach and important tradeoffs."
+      },
+      {
+        "id": "steps",
+        "title": "Steps",
+        "purpose": "Ordered implementation or delivery steps."
+      },
+      {
+        "id": "verification",
+        "title": "Verification",
+        "purpose": "How the result will be verified before completion."
+      },
+      {
+        "id": "risks",
+        "title": "Risks",
+        "purpose": "Material implementation risks and mitigations."
+      }
+    ]
+  },
+  "review": {
+    "description": "Focused review of an implementation, change set, or proposed result against requirements and evidence.",
+    "sections": [
+      {
+        "id": "review-scope",
+        "title": "Review Scope",
+        "purpose": "What was reviewed and the requirement or standard used for comparison."
+      },
+      {
+        "id": "findings",
+        "title": "Findings",
+        "purpose": "Material review findings, defects, gaps, or confirmed strengths."
+      },
+      {
+        "id": "verification",
+        "title": "Verification",
+        "purpose": "Evidence used to validate review findings."
+      },
+      {
+        "id": "assessment",
+        "title": "Assessment",
+        "purpose": "Overall review conclusion, residual risks, and required follow-up."
+      }
+    ]
+  },
+  "report": {
+    "description": "Final task report covering request, effective requirements, implementation, verification, and final assessment.",
+    "sections": [
+      {
+        "id": "original-request",
+        "title": "Original Request",
+        "purpose": "The original user or ticket request."
+      },
+      {
+        "id": "requirement-review",
+        "title": "Requirement Review",
+        "purpose": "Effective requirements and material requirement or scope changes."
+      },
+      {
+        "id": "investigation",
+        "title": "Investigation",
+        "purpose": "Material investigation findings and evidence relevant to the delivered result."
+      },
+      {
+        "id": "implementation",
+        "title": "Implementation",
+        "purpose": "What was changed or delivered."
+      },
+      {
+        "id": "verification",
+        "title": "Verification",
+        "purpose": "Tests, checks, and evidence supporting the result."
+      },
+      {
+        "id": "code-review",
+        "title": "Code Review",
+        "purpose": "Material review findings for the implementation when applicable."
+      },
+      {
+        "id": "final-assessment",
+        "title": "Final Assessment",
+        "purpose": "Final result, caveats, residual risks, and remaining work if any."
+      }
+    ]
+  }
+}
