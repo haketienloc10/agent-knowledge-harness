@@ -20,7 +20,9 @@ done
 
 PYTHONPATH="$project" python3 -m unittest discover -s "$project/tests" -v || \
   fail 'Work Item core/CLI/artifact unit tests failed'
-python3 -m py_compile "$project/core.py" "$project/server.py" "$project/artifacts.py" "$project/cli.py" || \
+PYTHONPATH="$project" uv run --project "$project" python -m unittest discover -s "$project/mcp_tests" -v || \
+  fail 'Work Item typed MCP contract tests failed'
+python3 -m py_compile "$project/core.py" "$project/server.py" "$project/artifacts.py" "$project/cli.py" "$project/models.py" || \
   fail 'Work Item Python syntax check failed'
 bash -n "$home/scripts/work-item-mcp-server.sh" || \
   fail 'work-item-mcp-server.sh: invalid Bash syntax'
@@ -32,6 +34,7 @@ bash -n "$home/scripts/install-user-mcp.sh" || \
 server="$project/server.py"
 core="$project/core.py"
 artifacts="$project/artifacts.py"
+models="$project/models.py"
 cli="$project/cli.py"
 installer="$home/scripts/install-user-mcp.sh"
 cli_launcher="$home/scripts/work-item-cli.sh"
@@ -43,6 +46,10 @@ for pattern in \
   'work_item_list' \
   'work_item_create' \
   'work_item_update' \
+  'WorkItemPatch' \
+  '_work_item_update_error_result' \
+  '"updated": False' \
+  'work_item_validation' \
   'expected_revision' \
   'except NotFoundError as exc' \
   '"found": False' \
@@ -57,6 +64,8 @@ for pattern in \
   'ArtifactReadLimit' \
   'ARTIFACT_LIST_MAX' \
   'ARTIFACT_READ_MIN_BYTES' \
+  'typed WorkItemPatch' \
+  'do not encode' \
   'Do not create artifacts merely as normal progress bookkeeping' \
   'Artifact read cursors are bound to one artifact revision' \
   'Artifact mutations never advance the Work Item revision'; do
@@ -66,6 +75,34 @@ done
 tool_count="$(rg -c '^@mcp\.tool\(\)$' "$server" || true)"
 [[ "$tool_count" == "10" ]] || \
   fail "server.py: expected exactly ten public MCP tools (4 Work Item + 6 artifact), found $tool_count"
+
+# CRITICAL TYPED UPDATE INVARIANT — DO NOT REMOVE OR WEAKEN THIS CHECK.
+# The generic dict[str, Any] update surface caused repeated agent retries with wrong
+# question/blocker/change/next-action shapes. MCP must expose the canonical patch schema.
+if ! SERVER_PATH="$server" python3 - <<'PY'
+import ast
+import os
+from pathlib import Path
+
+path = Path(os.environ["SERVER_PATH"])
+text = path.read_text(encoding="utf-8")
+tree = ast.parse(text)
+funcs = {
+    node.name: node
+    for node in tree.body
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+}
+update = funcs["work_item_update"]
+args = {arg.arg: ast.unparse(arg.annotation) for arg in update.args.args if arg.annotation is not None}
+source = ast.get_source_segment(text, update) or ""
+assert args["changes"] == "WorkItemPatch"
+assert "changes.to_merge_patch()" in source
+assert "_work_item_update_error_result" in source
+assert "except (ValidationError, ConflictError, NotFoundError)" in source
+PY
+then
+  fail 'server.py: work_item_update must expose WorkItemPatch and return structured expected-domain failures'
+fi
 
 # CRITICAL MUTATION RESPONSE INVARIANT — DO NOT REMOVE OR WEAKEN THIS CHECK.
 # A Work Item mutation is committed by core. Its MCP success/failure must not depend
@@ -108,6 +145,41 @@ for pattern in \
   'must not modify derived fields'; do
   rg -q "$pattern" "$core" || fail "core.py: missing contract: $pattern"
 done
+
+for pattern in \
+  'class WorkItemPatch' \
+  'class QuestionPatch' \
+  'class DecisionPatch' \
+  'class RequirementChangePatch' \
+  'class RepoPatch' \
+  'class BlockerPatch' \
+  'class HandoffPatch' \
+  'class NextActionPatch' \
+  'class CheckpointPatch' \
+  'extra="forbid"' \
+  'extra="allow"' \
+  'to_merge_patch' \
+  'exclude_unset=True' \
+  'by_alias=True' \
+  'not free-form notes or strings' \
+  'requirement/scope evolution history only' \
+  'not generic risks or notes' \
+  'do not send plain strings' \
+  'not terminal logs'; do
+  rg -F -q "$pattern" "$models" || fail "models.py: missing typed patch contract: $pattern"
+done
+
+# Explicit null is JSON merge-patch deletion while omitted fields mean no change.
+# This distinction must survive Pydantic serialization.
+if ! PYTHONPATH="$project" uv run --project "$project" python - <<'PY'
+from models import WorkItemPatch
+assert WorkItemPatch.model_validate({}).to_merge_patch() == {}
+assert WorkItemPatch.model_validate({"summary": None}).to_merge_patch() == {"summary": None}
+assert WorkItemPatch.model_validate({"repos": {"old": None}}).to_merge_patch() == {"repos": {"old": None}}
+PY
+then
+  fail 'models.py: WorkItemPatch must preserve explicit null and omit only unset fields'
+fi
 
 for pattern in \
   'ARTIFACT_TYPES = .*intake.*investigation.*plan.*review.*report' \
