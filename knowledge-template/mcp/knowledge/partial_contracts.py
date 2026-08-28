@@ -17,7 +17,7 @@ from contracts import (
     WhenToRead,
 )
 from core import MAX_CONTENT_CHARS
-from sections import MAX_SECTION_ID_CHARS
+from sections import MAX_SECTION_HEADING_CHARS, MAX_SECTION_ID_CHARS
 
 
 ExactReadRevision = Annotated[
@@ -47,13 +47,19 @@ SectionHeading = Annotated[
     str,
     Field(
         min_length=4,
-        max_length=300,
+        max_length=MAX_SECTION_HEADING_CHARS,
         description="Exact stored Markdown H2-H6 heading immediately after the section marker.",
     ),
 ]
 
 
-class KnowledgeSectionSummary(StrictModel):
+class _ExactSectionModel(StrictModel):
+    # Section-facing fields are canonical Markdown material. Do not silently trim
+    # indentation/trailing spaces from body or stored headings during schema validation.
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=False)
+
+
+class KnowledgeSectionSummary(_ExactSectionModel):
     id: SectionId
     heading: SectionHeading
 
@@ -73,11 +79,7 @@ class KnowledgeMetadataReadResult(StrictModel):
     results: list[KnowledgeMetadataReadItem]
 
 
-class KnowledgeSectionReadResult(StrictModel):
-    # Section body is semantic Markdown. Never apply model-wide string trimming to it:
-    # indentation and trailing spaces can carry Markdown meaning.
-    model_config = ConfigDict(extra="forbid", str_strip_whitespace=False)
-
+class KnowledgeSectionReadResult(_ExactSectionModel):
     id: KnowledgeId
     revision: ExactReadRevision
     section_id: SectionId
@@ -119,11 +121,7 @@ class KnowledgeMetadataPatch(StrictModel):
         return self
 
 
-class KnowledgeSectionPatch(StrictModel):
-    # Preserve the replacement body byte-for-byte at the semantic string level. The
-    # section id itself is canonical and therefore does not need whitespace coercion.
-    model_config = ConfigDict(extra="forbid", str_strip_whitespace=False)
-
+class KnowledgeSectionPatch(_ExactSectionModel):
     id: SectionId
     content: Annotated[
         str,
