@@ -76,6 +76,54 @@ Trước `work_item_update`:
 
 Work Item không phải activity transcript.
 
+### Material session reconciliation
+
+Mọi substantive Work Item session phải để lại canonical continuation state **trước khi final**, kể cả session không tạo artifact.
+
+Giữ boundary cố định:
+
+```text
+repos[current_repo].summary
+  = current effective repo truth sau tất cả work đã biết
+
+repos[current_repo].verification
+  = concrete verification evidence hiện đã established
+
+checkpoints[]
+  = accumulated material phase/milestone history
+
+artifact
+  = optional detail; không thay thế Work Item reconciliation
+```
+
+`repos[current_repo].summary` trả lời “repo này hiện đang đúng/đã làm gì/còn gì”, không phải “session mới nhất đã review/investigate những bước nào”. Không thay current implementation outcome bằng narrative như `reviewed code...`, command sequence hoặc investigation diary. Historical phase finding material đi vào checkpoint; detail dài đi vào optional artifact khi workflow yêu cầu.
+
+Khi session established một milestone mới, preserve các checkpoint material hiện hành và append một checkpoint đủ để future reader reconstruct major task progress mà không cần mở artifact. Có thể dùng metadata descriptive `kind` như `investigation`, `implementation`, `verification`, `review`, `decision`, `report`, `completion`; đây không phải enum/FSM. Nếu milestone có detail artifact thì có thể ghi `artifact_id`; phase không có artifact thì omit.
+
+Generic mapping:
+
+| Session | Canonical effect khi material |
+|---|---|
+| Investigation | current repo truth nếu understanding đổi + checkpoint + question/blocker khi cần |
+| Planning | next action/handoff trong authority + checkpoint khi plan trở thành continuation state |
+| Implementation | current repo truth + checkpoint; artifact không bắt buộc |
+| Verification | `repos[current_repo].verification` + checkpoint; update summary/status nếu conclusion đổi |
+| Review | review artifact khi workflow yêu cầu + checkpoint; preserve current implementation truth |
+| Decision | persist technical decision trong authority; product/customer decision handoff QiQi |
+| Report | report artifact khi workflow yêu cầu + checkpoint; không rewrite repo truth thành report narrative |
+
+#### Implementation
+
+Implementation session **MUST reconcile Work Item ngay cả khi không tạo artifact**. Persist current implemented outcome, relevant repo status/verification và một material implementation checkpoint khi implementation tạo milestone mới. Không dùng việc “không có artifact” làm lý do skip Work Item update.
+
+#### Review
+
+Review session đọc current Work Item trước khi kết luận. Khi workflow yêu cầu review artifact, artifact giữ detail review; checkpoint giữ material review finding. Chỉ sửa `repos[current_repo].summary` khi review làm thay đổi current effective repo truth, ví dụ review dẫn tới code/test fix hoặc xác lập boundary mới ảnh hưởng current state. Nếu review chỉ xác nhận implementation hiện hành, giữ implementation-oriented summary thay vì overwrite bằng `Review code...` narrative.
+
+#### Report
+
+Nếu repo-local workflow yêu cầu report artifact, artifact chỉ là presentation/detail. Append material report checkpoint khi report là milestone; preserve implementation/review history và current repo truth. Overall `summary/status/phase/next_actions` vẫn thuộc QiQi authority.
+
 ### Questions/decisions/changes
 
 External/product ambiguity không thể trả lời từ current repo → persist material open question/blocker rồi handoff QiQi; không đoán.
@@ -171,10 +219,11 @@ Agent không chia sẻ hidden conversation/reasoning/workspace control/sibling-r
 
 Trước final substantive Work Item turn:
 
-1. update canonical Work Item với current-repo evidence + material blocker/question/handoff/checkpoint;
-2. conflict thì reread/reconcile/retry;
-3. làm Knowledge review/write riêng nếu reusable conclusion;
-4. finalize native response với evidence/verification/remaining work.
+1. update canonical Work Item theo **Material session reconciliation** với current-repo truth + verification + material checkpoint và blocker/question/handoff khi applicable;
+2. artifact creation không thay thế bước reconciliation này;
+3. conflict thì reread/reconcile/retry;
+4. làm Knowledge review/write riêng nếu reusable conclusion;
+5. finalize native response với evidence/verification/remaining work.
 
 Final response không fixed headings nhưng giữ material implementation/investigation conclusion, paths/evidence, verification result, blocker, Work Item persistence failure, knowledge persistence result/failure và **cross-repo impact: fact, affected boundary/repository, evidence, next action** khi có.
 
