@@ -27,6 +27,7 @@ required=(
   mcp/knowledge/tests/test_core.py
   mcp/knowledge/tests/test_partial_contracts.py
   mcp/knowledge/tests/test_partial_update.py
+  mcp/knowledge/tests/test_review_regressions.py
   mcp/knowledge/tests/test_section_integrity.py
   mcp/knowledge/tests/test_server_contract.py
   scripts/install-user-mcp.sh
@@ -151,6 +152,7 @@ for pattern in \
   'knowledge_read_metadata' \
   'knowledge_read_section' \
   'knowledge_update.expected_revision' \
+  '^class _ExactSectionModel' \
   '^class KnowledgeMetadataReadResult' \
   '^class KnowledgeSectionReadResult' \
   '^class KnowledgeRoutingPatch' \
@@ -159,6 +161,7 @@ for pattern in \
   '^class KnowledgePatch' \
   'str_strip_whitespace=False' \
   'MAX_SECTION_ID_CHARS' \
+  'MAX_SECTION_HEADING_CHARS' \
   'cannot be null; omit it when unchanged' \
   'full content replacement and section replacement are mutually exclusive'; do
   rg -q "$pattern" "$partial_contracts" || fail "partial contracts missing invariant: $pattern"
@@ -178,9 +181,11 @@ done
 for pattern in \
   'MAX_KNOWLEDGE_SECTIONS = 100' \
   'MAX_SECTION_ID_CHARS = 100' \
+  'MAX_SECTION_HEADING_CHARS = 300' \
   'knowledge-section:' \
   'lowercase-kebab-id' \
   'duplicate knowledge section id' \
+  'heading exceeds' \
   'immediately followed.*Markdown H2-H6 heading' \
   '_opening_fence' \
   'fenced Markdown code blocks are ignored' \
