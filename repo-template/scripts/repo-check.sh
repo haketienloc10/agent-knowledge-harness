@@ -39,6 +39,13 @@ for pattern in \
   'work_item_update' \
   'revision conflict' \
   'current Git root' \
+  '^### Material session reconciliation$' \
+  'current effective repo truth' \
+  'accumulated material phase/milestone history' \
+  'artifact creation does not substitute|artifact creation không thay thế' \
+  'Implementation session.*MUST reconcile Work Item' \
+  'Review code\.\.\.' \
+  '^#### Report$' \
   '^## Shared Knowledge MCP$' \
   'knowledge_search' \
   'knowledge_read' \
@@ -53,7 +60,7 @@ for pattern in \
   '^### Output về QiQi$' \
   '^## Cross-repo Impact$' \
   'Native final assistant response là authoritative semantic handoff'; do
-  rg -q "$pattern" "$agents" || fail "AGENTS.md: missing required policy: $pattern"
+  rg -U -q "$pattern" "$agents" || fail "AGENTS.md: missing required policy: $pattern"
 done
 
 rg -U -q 'Work Item MCP và Knowledge MCP.*tool exceptions.*không phải filesystem exceptions' "$agents" || \
@@ -72,6 +79,12 @@ rg -U -q 'cross-repo impact: fact, affected boundary/repository, evidence, next 
   fail 'AGENTS.md: actionable cross-repo handoff shape missing'
 rg -U -q 'Knowledge review.*knowledge_write|Knowledge review/write' "$agents" || \
   fail 'AGENTS.md: Knowledge finalization missing'
+rg -U -q 'repos\[current_repo\]\.summary.*current effective repo truth' "$agents" || \
+  fail 'AGENTS.md: repo summary must remain current snapshot, not latest-session narrative'
+rg -U -q 'checkpoints\[\].*accumulated material phase/milestone history' "$agents" || \
+  fail 'AGENTS.md: checkpoints must preserve material phase history'
+rg -U -q 'Implementation session.*không tạo artifact' "$agents" || \
+  fail 'AGENTS.md: implementation must reconcile even without artifact'
 
 if rg -q 'knowledge_read\(keywords|workspace `knowledge/`|knowledge/INDEX\.md|result_path|fixed result schema' "$agents"; then
   fail 'AGENTS.md: legacy knowledge/result contract found'
