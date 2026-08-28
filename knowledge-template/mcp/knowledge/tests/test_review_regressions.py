@@ -41,19 +41,31 @@ Original contract.
 Original verification."""
 
 
+def _resolve_schema(schema: dict, node: dict) -> dict:
+    ref = node.get("$ref")
+    if not ref:
+        return node
+    name = ref.rsplit("/", 1)[-1]
+    return schema["$defs"][name]
+
+
 class KnowledgeReviewRegressionTest(unittest.IsolatedAsyncioTestCase):
     async def test_generated_update_schema_accepts_revision_from_all_exact_reads(self):
         async with Client(mcp) as client:
             listed = await client.list_tools()
         tools = {tool.name: tool for tool in listed.tools}
         schema = tools["knowledge_update"].input_schema
-        description = schema["properties"]["expected_revision"]["description"]
+        revision_schema = _resolve_schema(
+            schema, schema["properties"]["expected_revision"]
+        )
+        description = revision_schema["description"]
         for tool in (
             "knowledge_read",
             "knowledge_read_metadata",
             "knowledge_read_section",
         ):
             self.assertIn(tool, description)
+        self.assertIn("knowledge_update.expected_revision", description)
 
     async def test_scoped_section_read_update_preserves_markdown_whitespace(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -86,6 +98,30 @@ class KnowledgeReviewRegressionTest(unittest.IsolatedAsyncioTestCase):
                     )
                     self.assertFalse(section.is_error)
                     self.assertEqual(section.structured_content["content"], body)
+
+    async def test_metadata_section_index_preserves_exact_stored_heading(self):
+        content = """<!-- knowledge-section:contract -->
+## Contract  
+
+Live body."""
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            init_store(root)
+            with patch.dict(os.environ, {"KNOWLEDGE_STORE_ROOT": str(root)}):
+                async with Client(mcp) as client:
+                    created = await client.call_tool(
+                        "knowledge_write", {"entries": [entry(content=content)]}
+                    )
+                    self.assertFalse(created.is_error)
+                    item_id = created.structured_content["changes"][0]["id"]
+                    metadata = await client.call_tool(
+                        "knowledge_read_metadata", {"ids": [item_id]}
+                    )
+                    self.assertFalse(metadata.is_error)
+                    self.assertEqual(
+                        metadata.structured_content["results"][0]["sections"],
+                        [{"id": "contract", "heading": "## Contract  "}],
+                    )
 
     async def test_fenced_marker_example_is_not_exposed_as_section(self):
         content = """```markdown
