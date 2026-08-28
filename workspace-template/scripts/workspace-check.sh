@@ -83,6 +83,12 @@ for pattern in \
   'Implementation:.*không có artifact' \
   'Review code\.\.\.' \
   'Report:.*presentation/detail' \
+  'knowledge_search' \
+  'knowledge_read_metadata' \
+  'knowledge_read_section' \
+  'knowledge_update' \
+  'smallest sufficient semantic scope' \
+  'whole-document SHA-256 revision' \
   '`delegate_repo_task`' \
   '`user_request`' \
   '`required_context`' \
@@ -110,6 +116,10 @@ done
 
 rg -U -q 'native response established material repo state.*latest Work Item thiếu.*không silently tiếp tục' "$agents_md" || \
   fail 'AGENTS.md: QiQi must detect missing repo persistence after material delegation'
+
+if rg -q 'existing update target phải full-read|Update existing knowledge phải full-read' "$agents_md"; then
+  fail 'AGENTS.md: legacy full-read-only Knowledge update policy found'
+fi
 
 # CRITICAL INVARIANT — DO NOT REMOVE OR WEAKEN THIS CHECK merely to make a
 # migration/check pass. Delegation silence is part of the synchronous execution
@@ -143,6 +153,21 @@ fi
 if rg -q 'English task title|read `result_path`|đọc `result_path`' "$agents_md"; then
   fail 'AGENTS.md: legacy workspace result artifact convention remains'
 fi
+
+identity="$workspace_root/identity.md"
+for pattern in 'knowledge_read_metadata' 'knowledge_read_section' 'knowledge_update' 'smallest sufficient semantic scope'; do
+  rg -q "$pattern" "$identity" || fail "identity.md: missing scoped Knowledge guidance: $pattern"
+done
+
+workspace_readme="$workspace_root/README.md"
+for pattern in 'knowledge_read_metadata' 'knowledge_read_section' 'knowledge_update' 'one SHA-256 revision'; do
+  rg -q "$pattern" "$workspace_readme" || fail "README.md: missing scoped Knowledge guidance: $pattern"
+done
+
+workspace_setup="$workspace_root/docs/WORKSPACE_SETUP.md"
+for pattern in 'knowledge_read_metadata' 'knowledge_read_section' 'knowledge_update' 'whole-document revision'; do
+  rg -q "$pattern" "$workspace_setup" || fail "docs/WORKSPACE_SETUP.md: missing scoped Knowledge guidance: $pattern"
+done
 
 skill="$workspace_root/.agents/skills/ticket-work-item/SKILL.md"
 if [[ -f "$skill" ]]; then
