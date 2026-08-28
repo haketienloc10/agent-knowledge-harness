@@ -30,9 +30,9 @@ Không nhân bản một loại truth sang nơi khác để tạo source of trut
 - QiQi sở hữu global Work Item orchestration: overall status/phase/summary, repo assignment, product/customer decisions, global next action và completion.
 - Cross-repo remaining work được ghi thành Work Item handoff khi phù hợp rồi trả QiQi để điều phối consumer repo.
 - Work Item update bắt buộc optimistic `expected_revision`; stale writer phải reread/reconcile.
-- Shared reusable knowledge dùng progressive lifecycle `knowledge_search → knowledge_read → knowledge_write`.
+- Shared reusable knowledge dùng progressive lifecycle `knowledge_search → exact scoped read → knowledge_write/knowledge_update`.
 - Search card chỉ là candidate-routing surface; không dùng search card như full durable evidence và không lấy revision từ search.
-- Existing knowledge update target phải full-read để lấy semantic payload + exact revision.
+- Existing knowledge update target phải exact-read ở sufficient semantic scope để lấy canonical evidence/provenance cần thiết + exact whole-document revision.
 - Native final `agent_response` là semantic handoff; không dùng Markdown result artifact, viewport hoặc transcript parser làm transport fallback.
 - `qiqi_delegate` SQLite chỉ giữ runtime/session ownership, không giữ semantic task state.
 - Live owner source/test thắng stale reusable knowledge cho implementation hiện tại.
@@ -83,7 +83,10 @@ Public tools:
 ```text
 knowledge_search(keywords, context?, limit?)
 knowledge_read(ids)
+knowledge_read_metadata(ids)
+knowledge_read_section(id, section_id)
 knowledge_write(entries)
+knowledge_update(id, expected_revision, changes)
 ```
 
 ### Progressive disclosure invariant
@@ -91,19 +94,24 @@ knowledge_write(entries)
 ```text
 knowledge_search(limit <= 10)
 → bounded decision cards
-→ chọn 1–2 exact IDs
-knowledge_read(ids)
-→ full semantic content + sources + routing + revision
+→ chọn exact target
+→ smallest sufficient exact read:
+     knowledge_read | knowledge_read_metadata | knowledge_read_section
+→ whole/partial mutation
 ```
 
-Search card không chứa full content, sources, revision hoặc physical path. `knowledge_search` dùng để chọn candidate; material use/update phải full-read exact target.
+Search card không chứa full content, sources, revision hoặc physical path. `knowledge_search` dùng để chọn candidate; material use/update phải exact-read sufficient scope.
 
 - **MUST search** khi prior reusable knowledge có thể đổi interpretation, orchestration, implementation hoặc verification.
 - **MAY search** khi query ngắn có thể giảm uncertainty/lặp investigation.
 - **SKIP** cho mechanical/exact-local/status-only work nơi durable context không thể đổi action.
-- **MUST review/write** cho substantive work có khả năng tạo/xác nhận reusable conclusion.
+- **MUST review/mutate** cho substantive work có khả năng tạo/xác nhận reusable conclusion.
 - `knowledge_write(entries=[])` chỉ dùng sau required review không có candidate.
-- Trước create/update phải search existing concept; update existing target phải full-read trước.
+- Trước create/update phải search existing concept; update existing target phải exact-read sufficient scope trước.
+
+`knowledge_write` giữ create + intentional whole-document replacement. `knowledge_update` cho metadata-only, whole-content-only hoặc one-existing-section mutation mà caller không resend untouched document state.
+
+Stable semantic section marker là optional address bên trong cùng canonical Markdown document. Section ID lowercase kebab-case, unique, marker đứng ngay trước H2-H6 heading; partial section update chỉ replace existing section body. Không có per-section revision/chunk store/implicit section create. Whole document vẫn có one SHA-256 revision và mọi mutation cạnh tranh trên revision đó.
 
 Knowledge MCP sở hữu ID/path/index/locking/revision/persistence. Agent không truyền filename/path/directory và không tạo field `language`.
 
@@ -158,7 +166,7 @@ Session ownership persist ngay khi native identity known. Capture fail closed: k
 3. QiQi read/reconcile canonical Work Item trước orchestration và sau repo turn khi task thuộc Work Item.
 4. TaskPacket identify Work Item + revision; external fact ngoài Work Item mà QiQi dùng cho semantics vẫn phải inline với provenance.
 5. `SYSTEM_MAP.md` vẫn là live topology artifact; Work Item không thay System Map.
-6. Workspace Knowledge policy phải dùng search-first/exact-read progressive disclosure.
+6. Workspace Knowledge policy phải dùng search-first/exact-scoped-read progressive disclosure; search không cấp revision.
 7. Native result capture giữ exact final response, không fixed schema/viewport/transcript fallback.
 8. Architecture/runtime/public MCP contract change phải cập nhật checker + docs + migration.
 
@@ -167,7 +175,7 @@ Session ownership persist ngay khi native identity known. Capture fail closed: k
 1. Giữ Git-root boundary và cấm đọc/sửa sibling source/runtime state.
 2. Work Item MCP là task-state tool exception; Knowledge MCP là reusable-context tool exception; cả hai không phải filesystem exception.
 3. Nếu TaskPacket identify Work Item, child `work_item_get` trước substantive work và chỉ update evidence/state thuộc current repo.
-4. Search cards chỉ dùng chọn knowledge document; material use/update phải full-read exact target.
+4. Search cards chỉ dùng chọn knowledge document; material use/update phải exact-read sufficient semantic scope.
 5. Live owner source/test thắng stale shared knowledge.
 6. Cross-repo remaining work quay lại QiQi; child không tự sửa/delegate sibling repo.
 7. Không thêm repo-local task store, knowledge store hoặc fixed result headings.
@@ -185,13 +193,16 @@ Session ownership persist ngay khi native identity known. Capture fail closed: k
 
 ## Khi thay đổi Knowledge Template
 
-1. Search và exact read là hai stage riêng; search không trả revision/content.
-2. Full read bounded và đủ semantic fields để safe read→write round trip.
-3. Store independent workspace/repo/CWD; agent-facing schema không expose arbitrary filesystem path.
-4. Retrieval deterministic/index-first; repo/domain context chỉ boost semantic match đã có.
-5. Update dùng optimistic revision; external edit không silent overwrite.
-6. `sources` bắt buộc cho durable fact; hypothesis chưa verified không persist như fact.
-7. Tests cover thin search cards, exact-read bounds/round trip, stale index/revision, concurrency và validation.
+1. Search và exact read là các stage riêng; search không trả revision/content.
+2. Full read bounded; scoped metadata/section reads không hydrate untouched large content vào agent response.
+3. Store vẫn one canonical Markdown document/concept với one SHA-256 revision; partial mutation không tạo persistence/revision model thứ hai.
+4. `knowledge_update` phải reconstruct canonical full semantic payload server-side và reuse existing whole-document write/lock/index/revision path.
+5. Stable section marker phải deterministic, unique và không cho implicit add/delete/reorder qua section replace.
+6. Store independent workspace/repo/CWD; agent-facing schema không expose arbitrary filesystem path.
+7. Retrieval deterministic/index-first; repo/domain context chỉ boost semantic match đã có.
+8. Update dùng optimistic whole-document revision; external edit không silent overwrite.
+9. `sources` bắt buộc cho durable fact; hypothesis chưa verified không persist như fact.
+10. Tests cover thin search cards, scoped/full exact reads, partial/full update preservation, stale index/revision, concurrency và section validation.
 
 ## Migration
 
@@ -208,7 +219,8 @@ Review phải xác nhận:
 - QiQi và child cùng đọc Work Item nhưng child chỉ execute current Git root;
 - Q&A/decision/requirement changes đủ để resume không hỏi lại;
 - stale/concurrent Work Item update không silent overwrite;
-- Knowledge search result thin, exact read bounded và revision chỉ đến từ full read;
+- Knowledge search result thin, exact read bounded và revision chỉ đến từ exact read surface;
+- Knowledge partial update preserve untouched canonical state và vẫn dùng one whole-document revision;
 - native response round-trip không viewport/truncation dependency;
 - docs/checkers/migration phản ánh cùng architecture;
 - static/unit tests không được dùng để tuyên bố native CLI/user-MCP fresh-session smoke đã pass.
