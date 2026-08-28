@@ -13,7 +13,6 @@ from contracts import (
     KnowledgeSearchResult,
     KnowledgeWriteResult,
     ReadIds,
-    Revision,
     SearchKeywords,
     SearchLimit,
     WriteEntries,
@@ -29,6 +28,7 @@ from core import (
     write_knowledge,
 )
 from partial_contracts import (
+    ExactReadRevision,
     KnowledgeMetadataReadResult,
     KnowledgePatch,
     KnowledgeSectionReadResult,
@@ -235,7 +235,7 @@ async def knowledge_write(entries: WriteEntries) -> KnowledgeWriteResult:
 @mcp.tool()
 async def knowledge_update(
     id: KnowledgeId,
-    expected_revision: Revision,
+    expected_revision: ExactReadRevision,
     changes: KnowledgePatch,
 ) -> KnowledgeWriteResult:
     """Patch metadata, whole content, or one existing semantic section without resending the document.
