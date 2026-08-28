@@ -148,7 +148,10 @@ Public tools:
 ```text
 knowledge_search(keywords, context?, limit?)
 knowledge_read(ids)
+knowledge_read_metadata(ids)
+knowledge_read_section(id, section_id)
 knowledge_write(entries)
+knowledge_update(id, expected_revision, changes)
 ```
 
 Work Item task state và reusable Knowledge không thay nhau.
@@ -161,15 +164,17 @@ Work Item task state và reusable Knowledge không thay nhau.
 
 **SKIP** cho mechanical/exact local/status-only work nơi durable context không thể đổi action.
 
-### Search trước, read sau
+### Search trước, exact scoped read sau
 
 1. Hiểu task rồi tạo khoảng **3–8 discriminative concepts**.
-2. `knowledge_search` trả bounded **decision cards**.
-3. Card dùng chọn candidate, không phải full evidence.
-4. Chọn 1–2 exact IDs cần thiết rồi `knowledge_read(ids)`.
-5. Full read mới trả semantic content, provenance và `revision`.
-6. `knowledge_search` **không trả revision**; existing update target phải full-read trước.
-7. Không hydrate top-N chỉ vì search limit lớn.
+2. `knowledge_search` trả bounded **decision cards**; card dùng chọn candidate, không phải full evidence và không có revision.
+3. Chọn 1–2 exact IDs cần thiết rồi đọc smallest sufficient semantic scope:
+   - `knowledge_read(ids)` cho whole semantic content;
+   - `knowledge_read_metadata(ids)` cho metadata/provenance/revision + section index;
+   - `knowledge_read_section(id, section_id)` cho một existing marked section.
+4. Material use/update phải dựa trên exact read đủ scope; nếu metadata/section không đủ context để kết luận an toàn thì full-read target.
+5. Existing update lấy exact `expected_revision` từ exact read surface, không từ search card.
+6. Không hydrate top-N chỉ vì search limit lớn và không invent section ID.
 
 `context.repo/domain` chỉ ranking hint. Search/read failure không chứng minh knowledge không tồn tại.
 
@@ -177,19 +182,22 @@ Shared Knowledge không mạnh hơn live owner source/test; nếu conflict, sour
 
 TaskPacket `required_context` là required premise. Nếu premise ngoài Work Item mâu thuẫn current Work Item hoặc owner evidence, dừng phần phụ thuộc và handoff conflict.
 
-### Ghi
+### Ghi/update
 
-Knowledge review + `knowledge_write` bắt buộc cho substantive work có khả năng tạo/xác nhận reusable conclusion.
+Knowledge review bắt buộc cho substantive work có khả năng tạo/xác nhận reusable conclusion trước durable mutation.
 
 1. Không persist task status/Q&A tạm thời/working log/hypothesis chưa verified.
 2. Search existing concept trước create/update.
-3. Existing target phải `knowledge_read` exact ID trước update.
-4. Create không truyền id/revision/path.
-5. Update dùng exact id + `expected_revision` từ full read.
-6. Không truyền filename/path/directory; không tạo field `language`.
-7. `sources` phải đủ provenance.
-8. Required review không candidate → `knowledge_write(entries=[])`.
-9. Write failure → không claim persisted.
+3. Existing target phải exact-read ở sufficient semantic scope trước update.
+4. Create không truyền id/revision/path và dùng `knowledge_write`.
+5. Intentional whole-document replacement vẫn dùng `knowledge_write` với exact id + revision.
+6. Metadata-only, whole-content-only hoặc one-existing-section mutation dùng `knowledge_update`; caller không resend untouched document state.
+7. Partial update vẫn dùng exact whole-document `expected_revision`; conflict → reread/reconcile/retry.
+8. Stable section marker chỉ là mutation address trong cùng document; không per-section revision/chunk store và missing section không implicit create.
+9. Không truyền filename/path/directory; không tạo field `language`.
+10. `sources` phải đủ provenance.
+11. Required review không candidate → `knowledge_write(entries=[])`.
+12. Mutation failure → không claim persisted.
 
 ## Ranh giới Workspace
 
@@ -222,7 +230,7 @@ Trước final substantive Work Item turn:
 1. update canonical Work Item theo **Material session reconciliation** với current-repo truth + verification + material checkpoint và blocker/question/handoff khi applicable;
 2. artifact creation không thay thế bước reconciliation này;
 3. conflict thì reread/reconcile/retry;
-4. làm Knowledge review/write riêng nếu reusable conclusion;
+4. làm Knowledge review/mutation riêng nếu reusable conclusion;
 5. finalize native response với evidence/verification/remaining work.
 
 Final response không fixed headings nhưng giữ material implementation/investigation conclusion, paths/evidence, verification result, blocker, Work Item persistence failure, knowledge persistence result/failure và **cross-repo impact: fact, affected boundary/repository, evidence, next action** khi có.
@@ -251,4 +259,4 @@ Khi current repo ảnh hưởng sibling boundary:
 
 Chọn verification nhỏ nhất đủ chứng minh thay đổi rồi mở rộng theo risk/`docs/VERIFY.md`.
 
-Task repo-local chỉ hoàn thành khi objective/acceptance đạt, verification liên quan đã chạy hoặc caveat rõ, Work Item material state đã persist khi applicable, và Knowledge review/write đã xử lý theo policy.
+Task repo-local chỉ hoàn thành khi objective/acceptance đạt, verification liên quan đã chạy hoặc caveat rõ, Work Item material state đã persist khi applicable, và Knowledge review/mutation đã xử lý theo policy.
