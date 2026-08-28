@@ -18,10 +18,14 @@ required=(
   README.md
   mcp/knowledge/contracts.py
   mcp/knowledge/core.py
+  mcp/knowledge/partial_contracts.py
+  mcp/knowledge/partial_update.py
+  mcp/knowledge/sections.py
   mcp/knowledge/server.py
   mcp/knowledge/pyproject.toml
   mcp/knowledge/tests/test_contracts.py
   mcp/knowledge/tests/test_core.py
+  mcp/knowledge/tests/test_partial_update.py
   mcp/knowledge/tests/test_server_contract.py
   scripts/install-user-mcp.sh
   scripts/install-user-skill.sh
@@ -50,6 +54,9 @@ fi
 "$python_runtime" - \
   "$home/mcp/knowledge/contracts.py" \
   "$home/mcp/knowledge/core.py" \
+  "$home/mcp/knowledge/partial_contracts.py" \
+  "$home/mcp/knowledge/partial_update.py" \
+  "$home/mcp/knowledge/sections.py" \
   "$home/mcp/knowledge/server.py" \
   "$home/scripts/knowledge.py" <<'PY' || fail 'knowledge Python source: invalid syntax'
 import pathlib
@@ -68,36 +75,49 @@ PY
 
 server="$home/mcp/knowledge/server.py"
 contracts="$home/mcp/knowledge/contracts.py"
+partial_contracts="$home/mcp/knowledge/partial_contracts.py"
+partial_update="$home/mcp/knowledge/partial_update.py"
+sections="$home/mcp/knowledge/sections.py"
 project_file="$home/mcp/knowledge/pyproject.toml"
 skill="$home/skills/knowledge-distill/SKILL.md"
 installer="$home/scripts/install-user-mcp.sh"
 skill_installer="$home/scripts/install-user-skill.sh"
 
-[[ "$(rg -c '^@mcp\.tool\(\)$' "$server" || true)" == "3" ]] || \
-  fail 'knowledge server must expose exactly three MCP tools'
-rg -q '^async def knowledge_search\(' "$server" || fail 'missing knowledge_search tool'
-rg -q '^async def knowledge_read\(' "$server" || fail 'missing knowledge_read tool'
-rg -q '^async def knowledge_write\(' "$server" || fail 'missing knowledge_write tool'
+[[ "$(rg -c '^@mcp\.tool\(\)$' "$server" || true)" == "6" ]] || \
+  fail 'knowledge server must expose exactly six MCP tools'
+for tool in knowledge_search knowledge_read knowledge_read_metadata knowledge_read_section knowledge_write knowledge_update; do
+  rg -q "^async def ${tool}\\(" "$server" || fail "missing ${tool} tool"
+done
 rg -q 'keywords: SearchKeywords' "$server" || \
   fail 'knowledge_search must expose typed keyword constraints'
 rg -q 'context: KnowledgeSearchContext \| None' "$server" || \
   fail 'knowledge_search context must use closed typed schema'
 rg -q 'ids: ReadIds' "$server" || \
-  fail 'knowledge_read must accept exact bounded ids'
+  fail 'knowledge read tools must accept exact bounded ids'
+rg -q 'section_id: SectionId' "$server" || \
+  fail 'knowledge_read_section must expose a stable typed section id'
 rg -q 'entries: WriteEntries' "$server" || \
   fail 'knowledge_write must expose typed nested entry schema'
+rg -q 'changes: KnowledgePatch' "$server" || \
+  fail 'knowledge_update must expose a typed partial patch schema'
 rg -q '\) -> KnowledgeSearchResult:' "$server" || \
   fail 'knowledge_search must expose structured output schema'
 rg -q '\) -> KnowledgeReadResult:' "$server" || \
   fail 'knowledge_read must expose structured output schema'
+rg -q '\) -> KnowledgeMetadataReadResult:' "$server" || \
+  fail 'knowledge_read_metadata must expose structured output schema'
+rg -q '\) -> KnowledgeSectionReadResult:' "$server" || \
+  fail 'knowledge_read_section must expose structured output schema'
 rg -q '\) -> KnowledgeWriteResult:' "$server" || \
-  fail 'knowledge_write must expose structured output schema'
+  fail 'knowledge mutation tools must expose structured output schema'
 rg -q 'routing decision cards' "$server" || \
   fail 'server instructions must state search cards are discovery-only'
-rg -q 'search intentionally does not return revision' "$server" || \
-  fail 'server instructions must preserve read-before-update guardrail'
+rg -q 'intentionally does not return revision' "$server" || \
+  fail 'server instructions must preserve exact-read-before-update guardrail'
+rg -q 'smallest semantic scope required' "$server" || \
+  fail 'server instructions must explain progressive partial reads'
 rg -q 'knowledge-distill' "$server" || \
-  fail 'knowledge_write contract must route semantic distillation through knowledge-distill'
+  fail 'knowledge mutation contract must route semantic distillation through knowledge-distill'
 
 rg -q 'extra="forbid"' "$contracts" || \
   fail 'typed knowledge models must reject unknown fields'
@@ -123,6 +143,39 @@ rg -q '"pydantic>=2,<3"' "$project_file" || \
   fail 'pydantic must be an explicit runtime dependency'
 
 for pattern in \
+  '^class KnowledgeMetadataReadResult' \
+  '^class KnowledgeSectionReadResult' \
+  '^class KnowledgeRoutingPatch' \
+  '^class KnowledgeMetadataPatch' \
+  '^class KnowledgeSectionPatch' \
+  '^class KnowledgePatch' \
+  'cannot be null; omit it when unchanged' \
+  'full content replacement and section replacement are mutually exclusive'; do
+  rg -q "$pattern" "$partial_contracts" || fail "partial contracts missing invariant: $pattern"
+done
+
+for pattern in \
+  'read_knowledge' \
+  'write_knowledge' \
+  'current\["revision"\] != expected_revision' \
+  'knowledge revision conflict' \
+  'replace_section' \
+  'parse_sections' \
+  'metadata.*content.*section'; do
+  rg -U -q "$pattern" "$partial_update" || fail "partial update adapter missing invariant: $pattern"
+done
+
+for pattern in \
+  'MAX_KNOWLEDGE_SECTIONS = 100' \
+  'knowledge-section:' \
+  'lowercase-kebab-id' \
+  'duplicate knowledge section id' \
+  'immediately followed.*Markdown H2-H6 heading' \
+  'section structure is owned by the canonical document'; do
+  rg -U -q "$pattern" "$sections" || fail "semantic section parser missing invariant: $pattern"
+done
+
+for pattern in \
   'Persist what the work established, not what the task assumed' \
   'Compression must not increase certainty' \
   'candidate meaning' \
@@ -130,10 +183,15 @@ for pattern in \
   'immutable commit/revision' \
   'bug premise' \
   'knowledge_write\(entries=\[\]\)' \
-  'Run payload readiness before calling knowledge_write' \
+  'knowledge_update' \
+  'knowledge_read_metadata' \
+  'knowledge_read_section' \
+  'smallest sufficient semantic scope' \
+  'knowledge-section:' \
+  'Run payload readiness before calling knowledge_write|Run payload readiness before mutation' \
   'routing.summary.*retrieval abstract' \
   'non-empty `sources` list' \
-  'Build typed write payload' \
+  'Build typed write payload|Build typed mutation payload' \
   'repair only the fields' \
   'Do not weaken' \
   'Summary and source-note budget gate' \
