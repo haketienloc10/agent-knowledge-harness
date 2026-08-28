@@ -326,8 +326,8 @@ def validate_write_entry(value: Any) -> dict[str, Any]:
     content = value.get("content")
     if not isinstance(content, str):
         raise ValidationError("content must be a string")
+    content = content.strip("\r\n")
     _validate_section_structure(content, label="knowledge write content")
-    content = content.strip()
     if len(content) > MAX_CONTENT_CHARS:
         raise ValidationError(f"content exceeds {MAX_CONTENT_CHARS} characters")
 
@@ -422,7 +422,10 @@ def _document_content(document: Document) -> str:
     heading_index = next((i for i, line in enumerate(lines) if line.strip()), None)
     if heading_index is None:
         return ""
-    return "\n".join(lines[heading_index + 1 :]).strip()
+    content_lines = lines[heading_index + 1 :]
+    if content_lines and content_lines[0] == "":
+        content_lines = content_lines[1:]
+    return "\n".join(content_lines)
 
 
 def _detail_paths(root: Path) -> Iterable[Path]:
@@ -555,7 +558,7 @@ def _render_document(entry: dict[str, Any]) -> bytes:
     body = f"# {entry['title']}"
     if content:
         body += f"\n\n{content}"
-    text = f"---\n{front}\n---\n\n{body.rstrip()}\n"
+    text = f"---\n{front}\n---\n\n{body}\n"
     data = text.encode("utf-8")
     if len(data) > MAX_DOCUMENT_BYTES:
         raise ValidationError(
