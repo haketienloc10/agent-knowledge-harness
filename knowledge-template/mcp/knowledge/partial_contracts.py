@@ -11,7 +11,6 @@ from contracts import (
     KnowledgeRouting,
     KnowledgeScope,
     KnowledgeSource,
-    Revision,
     StrictModel,
     Summary,
     Title,
@@ -21,6 +20,17 @@ from core import MAX_CONTENT_CHARS
 from sections import MAX_SECTION_ID_CHARS
 
 
+ExactReadRevision = Annotated[
+    str,
+    Field(
+        pattern=r"^[0-9a-f]{64}$",
+        description=(
+            "Exact whole-document SHA-256 revision returned by an exact read surface: "
+            "knowledge_read, knowledge_read_metadata, or knowledge_read_section. Use "
+            "that exact revision as knowledge_update.expected_revision."
+        ),
+    ),
+]
 SectionId = Annotated[
     str,
     Field(
@@ -50,7 +60,7 @@ class KnowledgeSectionSummary(StrictModel):
 
 class KnowledgeMetadataReadItem(StrictModel):
     id: KnowledgeId
-    revision: Revision
+    revision: ExactReadRevision
     canonical_name: CanonicalName
     title: Title
     scope: KnowledgeScope
@@ -69,7 +79,7 @@ class KnowledgeSectionReadResult(StrictModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=False)
 
     id: KnowledgeId
-    revision: Revision
+    revision: ExactReadRevision
     section_id: SectionId
     heading: SectionHeading
     content: Annotated[str, Field(max_length=MAX_CONTENT_CHARS)]
