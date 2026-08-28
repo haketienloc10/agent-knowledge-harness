@@ -61,7 +61,60 @@ class SectionParserTest(unittest.TestCase):
         self.assertIn("Run focused tests.", updated)
         self.assertNotIn("Run the original verification command.", updated)
 
-    def test_duplicate_malformed_and_missing_sections_fail(self):
+    def test_fenced_marker_examples_are_not_live_sections(self):
+        content = """Example syntax:
+
+```markdown
+<!-- knowledge-section:Bad_Id -->
+## This is only an example
+```
+
+<!-- knowledge-section:contract -->
+## Contract
+
+Live body."""
+        sections = parse_sections(content)
+        self.assertEqual([section.section_id for section in sections], ["contract"])
+        self.assertEqual(read_section(content, "contract")["content"], "Live body.")
+
+    def test_replacement_allows_fenced_marker_examples_without_changing_structure(self):
+        replacement = """```markdown
+<!-- knowledge-section:illustrative-only -->
+## Illustrative only
+```"""
+        updated = replace_section(sectioned_content(), "contract", replacement)
+        self.assertEqual(
+            [section.section_id for section in parse_sections(updated)],
+            ["contract", "verification"],
+        )
+        self.assertEqual(read_section(updated, "contract")["content"], replacement)
+
+    def test_replacement_cannot_hide_later_sections_with_unclosed_fence(self):
+        with self.assertRaises(SectionError) as raised:
+            replace_section(
+                sectioned_content(),
+                "contract",
+                "```markdown\nexample without closing fence",
+            )
+        self.assertIn("preserve all existing semantic section", str(raised.exception))
+
+    def test_read_and_replace_preserve_markdown_body_whitespace(self):
+        content = """<!-- knowledge-section:contract -->
+## Contract
+
+    indented_code()
+line with hard break  
+
+<!-- knowledge-section:verification -->
+## Verification
+
+verified"""
+        expected = "    indented_code()\nline with hard break  "
+        self.assertEqual(read_section(content, "contract")["content"], expected)
+        updated = replace_section(content, "contract", expected)
+        self.assertEqual(read_section(updated, "contract")["content"], expected)
+
+    def test_duplicate_malformed_overlong_and_missing_sections_fail(self):
         duplicate = sectioned_content() + "\n\n<!-- knowledge-section:contract -->\n## Again\n\nbody"
         with self.assertRaises(SectionError):
             parse_sections(duplicate)
@@ -69,10 +122,16 @@ class SectionParserTest(unittest.TestCase):
             parse_sections("<!-- knowledge-section:Bad_Id -->\n## Bad\n\nbody")
         with self.assertRaises(SectionError):
             parse_sections("<!-- knowledge-section:contract -->\nnot a heading")
+        overlong = "a" * 101
+        with self.assertRaises(SectionError) as raised:
+            parse_sections(
+                f"<!-- knowledge-section:{overlong} -->\n## Too long\n\nbody"
+            )
+        self.assertIn("exceeds 100 characters", str(raised.exception))
         with self.assertRaises(SectionError):
             read_section(sectioned_content(), "not-there")
 
-    def test_section_replacement_cannot_inject_structure(self):
+    def test_section_replacement_cannot_inject_live_structure(self):
         with self.assertRaises(SectionError):
             replace_section(
                 sectioned_content(),
@@ -160,6 +219,18 @@ class PartialUpdateTest(unittest.TestCase):
             verification["content"],
             "Run focused tests first, then the full suite.",
         )
+
+    def test_section_patch_preserves_indented_markdown_body(self):
+        created = self.create()
+        replacement = "    run_exact_command()\nline with hard break  "
+        updated = update_knowledge(
+            self.root,
+            created["id"],
+            created["revision"],
+            {"section": {"id": "contract", "content": replacement}},
+        )["changes"][0]
+        after = self.read(updated["id"])
+        self.assertEqual(read_section(after["content"], "contract")["content"], replacement)
 
     def test_metadata_and_section_can_commit_atomically(self):
         created = self.create()
