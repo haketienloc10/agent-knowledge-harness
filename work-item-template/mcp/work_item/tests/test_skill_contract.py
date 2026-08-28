@@ -9,6 +9,7 @@ from pathlib import Path
 TEMPLATE_ROOT = Path(__file__).resolve().parents[3]
 SKILL = TEMPLATE_ROOT / "skills" / "work-item" / "SKILL.md"
 INSTALLER = TEMPLATE_ROOT / "scripts" / "install-user-skill.sh"
+MCP_INSTALLER = TEMPLATE_ROOT / "scripts" / "install-user-mcp.sh"
 
 
 class WorkItemSkillContractTests(unittest.TestCase):
@@ -41,6 +42,12 @@ class WorkItemSkillContractTests(unittest.TestCase):
 
         self.assertNotIn("ticket-work-item", lowered)
         self.assertIn("role authority still comes from the active `agents.md`", lowered)
+
+    def test_main_mcp_installer_installs_shared_skill(self) -> None:
+        text = MCP_INSTALLER.read_text(encoding="utf-8")
+        self.assertIn("managed user-scope `work-item` Agent Skill", text)
+        self.assertIn('bash "$home/scripts/install-user-skill.sh"', text)
+        self.assertIn("user/global MCP registration and skill", text)
 
     def test_user_skill_installer_installs_exact_managed_copy_for_both_clients(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
