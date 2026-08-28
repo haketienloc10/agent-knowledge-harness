@@ -6,6 +6,7 @@ from dataclasses import dataclass
 
 MAX_KNOWLEDGE_SECTIONS = 100
 MAX_SECTION_ID_CHARS = 100
+MAX_SECTION_HEADING_CHARS = 300
 SECTION_MARKER_PREFIX = "<!-- knowledge-section:"
 SECTION_MARKER_RE = re.compile(
     r"^<!-- knowledge-section:([a-z0-9]+(?:-[a-z0-9]+)*) -->$"
@@ -132,6 +133,12 @@ def parse_sections(content: str) -> list[SectionSpan]:
                 f"knowledge section {section_id!r} marker must be immediately followed "
                 "by a Markdown H2-H6 heading"
             )
+        heading = lines[heading_index]
+        if len(heading) > MAX_SECTION_HEADING_CHARS:
+            raise SectionError(
+                f"knowledge section {section_id!r} heading exceeds "
+                f"{MAX_SECTION_HEADING_CHARS} characters"
+            )
         end_index = (
             raw_markers[position + 1][0]
             if position + 1 < len(raw_markers)
@@ -140,7 +147,7 @@ def parse_sections(content: str) -> list[SectionSpan]:
         spans.append(
             SectionSpan(
                 section_id=section_id,
-                heading=lines[heading_index],
+                heading=heading,
                 marker_index=marker_index,
                 heading_index=heading_index,
                 end_index=end_index,
