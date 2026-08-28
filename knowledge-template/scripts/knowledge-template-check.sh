@@ -25,14 +25,15 @@ required=(
   mcp/knowledge/pyproject.toml
   mcp/knowledge/tests/test_contracts.py
   mcp/knowledge/tests/test_core.py
+  mcp/knowledge/tests/test_partial_contracts.py
   mcp/knowledge/tests/test_partial_update.py
   mcp/knowledge/tests/test_server_contract.py
   scripts/install-user-mcp.sh
   scripts/install-user-skill.sh
   scripts/knowledge-cli.sh
   scripts/knowledge-mcp-server.sh
-  scripts/knowledge.py
   scripts/knowledge-template-check.sh
+  scripts/knowledge.py
   skills/knowledge-distill/SKILL.md
   store/INDEX.md
 )
