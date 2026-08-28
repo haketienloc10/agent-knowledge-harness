@@ -185,13 +185,16 @@ class WorkItemPatchModelTests(unittest.TestCase):
         schema = WorkItemPatch.model_json_schema()
         properties = schema["properties"]
         definitions = schema["$defs"]
+        repo_summary_description = definitions["RepoPatch"]["properties"]["summary"]["description"].lower()
         self.assertIn("not free-form notes", properties["questions"]["description"].lower())
         self.assertIn("requirement/scope", properties["changes"]["description"].lower())
         self.assertIn("not generic risks", properties["blockers"]["description"].lower())
         self.assertIn("do not send plain strings", properties["next_actions"]["description"].lower())
         self.assertIn("accumulated material", properties["checkpoints"]["description"].lower())
         self.assertIn("current effective repo truth", properties["repos"]["description"].lower())
-        self.assertIn("not a narrative", definitions["RepoPatch"]["properties"]["summary"]["description"].lower())
+        self.assertIn("current effective repository", repo_summary_description)
+        self.assertIn("narrative", repo_summary_description)
+        self.assertIn("historical phase", repo_summary_description)
         self.assertIn("not an enum", definitions["CheckpointPatch"]["properties"]["kind"]["description"].lower())
         self.assertIn("omit when the phase has no artifact", definitions["CheckpointPatch"]["properties"]["artifact_id"]["description"].lower())
         self.assertIn("arrays replace atomically", properties["current_requirements"]["description"].lower())
