@@ -1,12 +1,12 @@
 ---
 name: knowledge-distill
-description: Dùng ngay trước mọi Shared Knowledge finalization review hoặc knowledge_write. Chắt lọc kết luận reusable đã được evidence xác nhận; tách fact, inference và uncertainty; không biến premise chưa xác minh của task/bug thành durable knowledge.
+description: Dùng ngay trước mọi Shared Knowledge finalization review, knowledge_write hoặc knowledge_update. Chắt lọc kết luận reusable đã được evidence xác nhận; tách fact, inference và uncertainty; không biến premise chưa xác minh của task/bug thành durable knowledge.
 ---
 
 # Knowledge Distillation
 
-Dùng procedure này khi policy yêu cầu durable knowledge review và trước mọi
-`knowledge_write`, kể cả empty review.
+Dùng procedure này khi policy yêu cầu durable knowledge review và trước mọi mutation qua
+`knowledge_write` hoặc `knowledge_update`, kể cả empty review.
 
 Output của skill là **durable conclusions được evidence hỗ trợ**, không phải bản tóm
 tắt task đã dẫn tới investigation.
@@ -79,7 +79,7 @@ Chọn `scope`, `canonical_name`, title theo conclusion đã biết, không theo
 
 Legacy/project/multilingual terms hữu ích có thể đặt trong aliases.
 
-### 5. Search trước, hydrate sau
+### 5. Search trước, hydrate đúng semantic scope sau
 
 Trước create/update, luôn dedupe theo **candidate meaning** bằng progressive disclosure:
 
@@ -87,17 +87,22 @@ Trước create/update, luôn dedupe theo **candidate meaning** bằng progressi
    English concepts và thêm project/original-language aliases khi hữu ích.
 2. Search result là **decision card** phục vụ chọn document, không phải evidence đủ để
    implementation, verification hay update. Card chỉ chứa bounded routing metadata.
-3. Nếu một hoặc hai candidate có vẻ liên quan, gọi `knowledge_read(ids=[...])` với exact
-   ID đã chọn để hydrate full semantic content.
-4. Không dựa vào search summary/card như durable fact cuối cùng khi conclusion material
-   cần content, provenance hoặc uncertainty của document.
-5. `knowledge_search` cố ý không trả revision. Update chỉ được dùng exact `id` +
-   `expected_revision` từ full `knowledge_read`.
-6. Nếu nhiều card gần nhau, read tối đa one or two candidate mỗi call; không hydrate
-   top-N chỉ vì search `limit` lớn.
+3. Chọn one or two exact IDs cần thiết. Không hydrate top-N chỉ vì search `limit` lớn.
+4. Với existing target, đọc ở **smallest sufficient semantic scope**:
+   - cần hiểu/re-distill toàn concept hoặc whole-content replacement → `knowledge_read`;
+   - chỉ sửa title/routing/sources hoặc cần section index + provenance + exact revision →
+     `knowledge_read_metadata`;
+   - chỉ sửa/verify một existing marked section đã biết → `knowledge_read_section`.
+5. `knowledge_search` cố ý không trả revision. Mutation existing target chỉ dùng exact
+   `id` + `expected_revision` từ một exact read surface ở trên.
+6. Nếu metadata read cho thấy section cần sửa, dùng exact returned section id; không tự
+   invent section id.
+7. Nếu một section không đủ evidence/context để kết luận an toàn, escalate sang full
+   `knowledge_read` thay vì đoán phần còn lại.
 
-Ưu tiên update existing concept thay vì create duplicate. Revision conflict phải
-`knowledge_read` lại rồi re-distill.
+Ưu tiên update existing concept thay vì create duplicate. Revision conflict phải reread
+đúng target, reconcile/re-distill với revision mới rồi retry. Không reuse stale revision
+chỉ vì phần agent muốn sửa khác với phần concurrent writer vừa đổi.
 
 ### 6. Làm provenance đủ mạnh để audit
 
@@ -121,10 +126,46 @@ Không viết chronological investigation diary. Chỉ giữ evidence cần đ�
 durable conclusion.
 
 Full `knowledge_read` trả semantic `content` không chứa canonical H1; title/routing là
-field riêng. Khi update, giữ nguyên metadata không thay đổi thay vì reconstruct từ
-search card.
+field riêng. `knowledge_read_section` trả body của đúng section, không marker/heading.
+Metadata-only read không trả content. Khi mutation chỉ chạm một scope, preserve phần
+không thay đổi thay vì reconstruct nó từ search card hoặc model memory.
 
-### 8. Routing phục vụ future retrieval
+### 8. Stable semantic sections cho knowledge lớn
+
+Section là optional structure bên trong cùng một canonical Markdown document; không phải
+chunk store, file riêng hay revision riêng.
+
+Marker contract:
+
+```markdown
+<!-- knowledge-section:contract -->
+## Contract
+
+...
+
+<!-- knowledge-section:failure-modes -->
+## Failure modes
+
+...
+```
+
+Rules:
+
+- section id lowercase kebab-case và unique trong document;
+- marker phải là standalone exact line, không indent;
+- marker phải ngay trước Markdown H2-H6 heading;
+- heading là presentation; section id mới là stable identity;
+- section boundary chạy marker-to-marker, nên nested headings trong body vẫn hợp lệ;
+- small/legacy knowledge không có marker vẫn hợp lệ;
+- `knowledge_update(... section=...)` chỉ replace body của existing section, giữ marker
+  + heading và không implicit create/delete/reorder section;
+- section replacement không được inject marker mới;
+- nếu cần thay đổi structure lớn, dùng whole-content replacement sau khi full-read và
+  re-distill toàn concept.
+
+Không thêm marker chỉ để chia nhỏ một document vốn đã ngắn và cohesive.
+
+### 9. Routing phục vụ future retrieval
 
 Build một nested `routing` object:
 
@@ -136,18 +177,37 @@ Build một nested `routing` object:
 
 `routing.summary` là retrieval abstract, không phải overflow storage cho investigation.
 
-### 9. Build typed write payload
+### 10. Build typed mutation payload
 
-- Create: omit `id` và `expected_revision`.
-- Update: exact `id` + `expected_revision` từ full `knowledge_read`.
+Chọn mutation nhỏ nhất vẫn biểu đạt đúng semantic change:
+
+- **Create:** `knowledge_write`, omit `id` và `expected_revision`.
+- **Whole-document replacement:** legacy/full `knowledge_write` update với exact `id` +
+  `expected_revision`; dùng khi toàn concept cần re-distill, không phải vì API bắt buộc.
+- **Metadata-only:** `knowledge_update(changes.metadata=...)`; chỉ gửi changed title,
+  routing fields và/hoặc full intended `sources` list.
+- **Whole content only:** `knowledge_update(changes.content=...)`; metadata được server
+  preserve.
+- **One existing section:** `knowledge_update(changes.section={id, content})`; chỉ gửi
+  replacement body, không marker/heading.
+- Metadata có thể combine atomically với whole-content hoặc one-section mutation khi
+  chúng dựa trên cùng evidence/revision.
+- Whole-content và section replacement mutually exclusive trong một call.
+- `canonical_name` và `scope` không nằm trong partial patch; canonical identity/path
+  không đổi âm thầm.
 - Không truyền `path`, `filename`, `directory`, `index_path`, `index` hoặc filesystem
   routing field khác.
 - `content` có thể Vietnamese / English / mixed; không có field `language`.
 - Knowledge MCP sở hữu ID/path/render/index/locking/revision/persistence mechanics.
 
-### 10. Run payload readiness before calling knowledge_write
+Partial mutation vẫn tạo **một SHA-256 revision mới cho whole document**. Không có
+metadata revision hay per-section revision riêng.
 
-Viết `content` trước. Draft `routing.summary` và `sources[].note` sau cùng.
+### 11. Run payload readiness before mutation
+
+Với create/whole rewrite, viết `content` trước. Draft `routing.summary` và
+`sources[].note` sau cùng. Với partial update, chỉ regenerate semantic scope thực sự đổi;
+không copy lại untouched large content vào request.
 
 #### Summary and source-note budget gate
 
@@ -167,17 +227,19 @@ Rewrite source note thành:
 `stable provenance location + exact behavior/boundary`
 
 Detailed evidence, ruled-out hypotheses và uncertainty đi vào `content`. Mọi persisted
-entry phải có non-empty `sources` list.
+entry phải có non-empty `sources` list; metadata patch không cần resend sources nếu
+sources hiện hành vẫn đúng.
 
 Trước call, xác nhận ít nhất:
 
 1. candidate phản ánh evidence đã established, không phải task premise;
-2. `routing` nested và summary nằm trong budget;
-3. `sources` non-empty, notes nằm trong budget, provenance đủ audit;
-4. detailed evidence/uncertainty nằm trong `content`;
-5. update identity/revision đến từ full `knowledge_read`;
-6. không có filesystem-owned/unsupported field;
-7. `scope.id` và `canonical_name` dùng đúng separator.
+2. exact target + revision đến từ sufficient exact read, không từ search card;
+3. mutation scope đủ để preserve untouched canonical content/metadata;
+4. `routing` nested và summary nằm trong budget nếu routing đổi;
+5. `sources` non-empty, notes nằm trong budget, provenance đủ audit nếu sources đổi;
+6. section id đến từ canonical metadata/section read, không invent;
+7. không có filesystem-owned/unsupported field;
+8. `scope.id` và `canonical_name` dùng đúng separator khi create/full write.
 
 Nếu validation fail, inspect typed schema/error, **repair only the fields** được nêu,
 rồi retry một lần. Do not weaken verified claim chỉ để validation pass.
@@ -187,16 +249,20 @@ rồi retry một lần. Do not weaken verified claim chỉ để validation pas
 `input JSON failed to parse` / `could not be parsed as JSON` xảy ra trước MCP body và
 không chứng minh candidate nào đã persisted.
 
-Nếu multi-entry write gặp lỗi serialization:
+Nếu multi-entry `knowledge_write` gặp lỗi serialization:
 
 - không resend cùng multi-entry batch;
 - retry surviving candidates từng entry bằng typed `knowledge_write` call;
-- giữ exact update `id` + `expected_revision` từ `knowledge_read`;
+- giữ exact update `id` + `expected_revision` từ exact read;
 - không manually construct/paste JSON string;
 - nếu single-entry vẫn không serialize, report candidate là **not persisted** và dừng
   probing payload shapes.
 
-### 11. Quyết định có write hay không
+Nếu `knowledge_update` serialization fail, retry một lần với cùng typed scope nhỏ và
+exact revision chỉ khi chưa có evidence tool body đã chạy. Nếu không xác định được write
+đã commit hay chưa, reread canonical target trước retry.
+
+### 12. Quyết định có write hay không
 
 Chỉ write candidate vượt qua quality gates.
 
