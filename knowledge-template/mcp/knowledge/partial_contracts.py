@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Annotated, Any
 
-from pydantic import Field, model_validator
+from pydantic import ConfigDict, Field, model_validator
 
 from contracts import (
     CanonicalName,
@@ -18,13 +18,14 @@ from contracts import (
     WhenToRead,
 )
 from core import MAX_CONTENT_CHARS
+from sections import MAX_SECTION_ID_CHARS
 
 
 SectionId = Annotated[
     str,
     Field(
         min_length=1,
-        max_length=100,
+        max_length=MAX_SECTION_ID_CHARS,
         pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$",
         description=(
             "Stable semantic section id from an exact "
@@ -63,6 +64,10 @@ class KnowledgeMetadataReadResult(StrictModel):
 
 
 class KnowledgeSectionReadResult(StrictModel):
+    # Section body is semantic Markdown. Never apply model-wide string trimming to it:
+    # indentation and trailing spaces can carry Markdown meaning.
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=False)
+
     id: KnowledgeId
     revision: Revision
     section_id: SectionId
@@ -105,6 +110,10 @@ class KnowledgeMetadataPatch(StrictModel):
 
 
 class KnowledgeSectionPatch(StrictModel):
+    # Preserve the replacement body byte-for-byte at the semantic string level. The
+    # section id itself is canonical and therefore does not need whitespace coercion.
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=False)
+
     id: SectionId
     content: Annotated[
         str,
@@ -112,7 +121,8 @@ class KnowledgeSectionPatch(StrictModel):
             max_length=MAX_CONTENT_CHARS,
             description=(
                 "Replacement body for this existing section only. Do not include the "
-                "knowledge-section marker or the stored section heading."
+                "live knowledge-section marker or the stored section heading. Fenced "
+                "Markdown examples of marker syntax are allowed."
             ),
         ),
     ]
