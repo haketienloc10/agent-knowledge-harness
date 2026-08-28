@@ -51,7 +51,7 @@ lo phần canonical get-or-create/reconciliation protocol.
 QiQi
   ↓ apply $work-item khi canonical Work Item được dùng
   ↓ work_item_get/create theo explicit Work Item intent
-  ↓ knowledge_search → exact knowledge_read khi cần durable context
+  ↓ knowledge_search → exact scoped knowledge read khi cần durable context
   ↓ SYSTEM_MAP + Work Item + required external facts
   ↓ structured TaskPacket
 qiqi_delegate
@@ -60,7 +60,7 @@ repo agent
   ↓ apply $work-item khi TaskPacket identify Work Item
   ↓ repo-local work + verification
   ↓ canonical current-repo reconciliation
-  ↓ knowledge review/write nếu reusable
+  ↓ knowledge review/mutation nếu reusable
   ↓ native final response
 qiqi_delegate
   ↓ session/turn runtime state
@@ -81,12 +81,15 @@ QiQi sở hữu global phase/status/completion. Child chỉ current-repo authori
 ```text
 knowledge_search
 → thin decision cards
-→ choose 1–2 IDs
-→ knowledge_read
-→ full semantic content/sources/revision
+→ choose exact target
+→ smallest sufficient exact read:
+     knowledge_read | knowledge_read_metadata | knowledge_read_section
+→ knowledge_write / knowledge_update
 ```
 
-Search card không phải full evidence và không chứa revision. Update existing knowledge phải full-read target trước.
+Search card không phải full evidence và không chứa revision. Existing update target lấy exact whole-document revision từ exact read đủ semantic scope; metadata/section update không buộc caller hydrate/resend untouched whole content.
+
+Stable `<!-- knowledge-section:<lowercase-kebab-id> -->` marker chỉ là optional semantic address trong cùng canonical Markdown document. Knowledge vẫn giữ one semantic concept = one document = one SHA-256 revision; không chunk store/per-section revision.
 
 ## TaskPacket
 
@@ -104,4 +107,4 @@ python3 -m unittest discover -s mcp/qiqi_delegate/tests -v
 bash scripts/workspace-check.sh
 ```
 
-Sau static/unit check, chạy fresh-session smoke cho Work Item/Knowledge và native CLI smoke cho agent family thực sự dùng.
+Sau static/unit check, rerun Knowledge user-scope installer sau public-tool change rồi chạy fresh-session smoke cho đủ 6 Knowledge tools, Work Item/$work-item và native CLI của agent family thực sự dùng.
