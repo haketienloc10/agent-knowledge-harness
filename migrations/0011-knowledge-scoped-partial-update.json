@@ -1,0 +1,30 @@
+{
+  "version": 11,
+  "from_ref": "d62d0efc579fe08c803a6b268cf343b2d248f2b0",
+  "to_ref": "6c1cbbfea728bb65ebc70a2ce20ee77e0c61d4aa",
+  "description": "add scoped Shared Knowledge reads and partial document updates while preserving one-document revision semantics",
+  "workspace": {
+    "merge": [
+      "workspace-template/AGENTS.md",
+      "workspace-template/identity.md"
+    ],
+    "replace": [
+      "workspace-template/README.md",
+      "workspace-template/docs/WORKSPACE_SETUP.md",
+      "workspace-template/scripts/workspace-check.sh"
+    ],
+    "delete": [],
+    "manual_review": []
+  },
+  "repo": {
+    "merge": [
+      "repo-template/AGENTS.md"
+    ],
+    "replace": [
+      "repo-template/docs/REPO_SETUP.md",
+      "repo-template/scripts/repo-check.sh"
+    ],
+    "delete": [],
+    "manual_review": []
+  }
+}
