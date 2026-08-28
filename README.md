@@ -42,7 +42,7 @@ QiQi và repo execution agents cùng đọc một canonical Work Item. Child ch�
 
 - `workspace-template/`: QiQi orchestration/control plane.
 - `repo-template/`: execution-agent policy cho từng Git root.
-- `work-item-template/`: user-scoped Global Work Item MCP.
+- `work-item-template/`: user-scoped Global Work Item MCP + shared `$work-item` operational skill.
 - `knowledge-template/`: user-scoped progressive Shared Knowledge MCP + store.
 - `migrations/`: upgrade definitions cho workspace/repo đã cài harness.
 
@@ -77,6 +77,19 @@ Mục tiêu là giữ continuity cho task product xuyên investigation, planning
 
 `phase` không phải hard workflow engine. Requirement/customer decision evolution được persist cùng task; decision cũ bị thay được supersede thay vì silent rewrite.
 
+### Shared `$work-item` skill
+
+Read/create/revision/reconciliation/artifact mechanics được giữ trong một user-scoped
+`$work-item` skill dùng chung cho QiQi và repo execution agents. Workspace/repo
+`AGENTS.md` chỉ giữ always-on activation, authority và safety boundaries.
+
+Generic ticket/task không tự động trở thành Work Item. `$work-item` được apply khi
+canonical Work Item đã được identify/selected, user explicitly yêu cầu tạo/dùng Work
+Item, hoặc trước `work_item_*` tool call.
+
+Workspace-local `$ticket-work-item` entrypoint đã được bỏ; user có thể paste task và
+explicitly yêu cầu QiQi tạo Work Item từ nội dung đó.
+
 ## Shared Knowledge MCP
 
 Current public API:
@@ -102,7 +115,7 @@ Search card không phải full evidence và không chứa revision. Existing upd
 
 `qiqi_delegate` nhận structured TaskPacket và trả exact native final assistant response qua Stop hook. Không dùng fixed Markdown result schema, terminal viewport hoặc transcript parser làm semantic transport.
 
-Khi delegation thuộc Work Item, QiQi truyền canonical Work Item ID + revision trong `required_context`; child gọi `work_item_get` để lấy state mới nhất. External fact ngoài Work Item mà QiQi đã dùng cho semantics vẫn phải inline với provenance/certainty.
+Khi delegation thuộc Work Item, QiQi truyền canonical Work Item ID + revision trong `required_context`; child apply `$work-item` và lấy state mới nhất từ Work Item MCP. External fact ngoài Work Item mà QiQi đã dùng cho semantics vẫn phải inline với provenance/certainty.
 
 ## Cài Global Work Item MCP
 
@@ -111,6 +124,9 @@ cd work-item-template
 bash scripts/work-item-template-check.sh
 bash scripts/install-user-mcp.sh
 ```
+
+`install-user-mcp.sh` cài/refresh cả MCP/CLI và managed user-scope `$work-item` skill cho
+Codex + Claude.
 
 Default DB:
 
@@ -128,7 +144,7 @@ bash scripts/knowledge-template-check.sh
 bash scripts/install-user-mcp.sh --store-root /path/to/shared-knowledge/store
 ```
 
-Mở fresh agent session sau user-scope MCP registration.
+Mở fresh agent session sau user-scope MCP/skill registration.
 
 ## Workspace mới
 
@@ -141,7 +157,7 @@ uv sync --project mcp/qiqi_delegate
 bash scripts/workspace-check.sh
 ```
 
-Project `.codex/config.toml` chỉ đăng ký `qiqi_delegate`; `work_item` và `knowledge` là user-scope services.
+Project `.codex/config.toml` chỉ đăng ký `qiqi_delegate`; `work_item`, `$work-item` và `knowledge` là user-scope capabilities.
 
 ## Workspace đã cài harness
 
@@ -154,23 +170,33 @@ bash scripts/migrate-workspace.sh --status /path/to/workspace
 bash scripts/migrate-workspace.sh --verify /path/to/workspace
 ```
 
-Work Item migration nằm sau migration `0005-knowledge-progressive-disclosure`; nó update workspace/repo policy, remove template-owned workspace task skeleton và không tự ghi user MCP config.
+Work Item migrations update workspace/repo policy nhưng không tự ghi user MCP/skill
+config. Sau migration `0010-work-item-skill-protocol`, rerun:
+
+```bash
+cd work-item-template
+bash scripts/install-user-mcp.sh
+```
+
+rồi mở fresh QiQi/child session để load `$work-item`.
 
 ## Acceptance smoke
 
 Sau migration/cài đặt, mở fresh QiQi + fresh child session và xác nhận:
 
-1. QiQi thấy `work_item_*` và Knowledge search/read/write tools.
-2. QiQi create/get một test Work Item.
-3. Child đọc cùng Work Item, chỉ update current-repo evidence.
+1. QiQi/child thấy `$work-item`; QiQi thấy `work_item_*` và Knowledge search/read/write tools.
+2. QiQi create/get một test Work Item theo explicit Work Item intent.
+3. Child đọc cùng Work Item qua `$work-item`, chỉ update current-repo evidence.
 4. QiQi reread thấy revision/state mới.
 5. Stale Work Item revision bị reject.
-6. Knowledge search trả thin cards, exact read trả full content/revision.
-7. qiqi_delegate native result/RESUME smoke pass cho agent family thực sự dùng.
+6. Generic ticket/task không tự động tạo Work Item.
+7. Knowledge search trả thin cards, exact read trả full content/revision.
+8. qiqi_delegate native result/RESUME smoke pass cho agent family thực sự dùng.
 
 ## Thiết kế cố ý
 
 - Work Item MCP là task truth duy nhất; không repo-local/workspace-local task copy.
+- `$work-item` là operational protocol, không phải task store hay implicit ticket opt-in.
 - Knowledge MCP chỉ giữ reusable durable truth, không task-specific mutable state.
 - Repo source/test là implementation truth.
 - qiqi_delegate SQLite chỉ giữ runtime/session truth.
