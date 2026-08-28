@@ -54,7 +54,7 @@ Skill này là explicit entry point, không được auto-apply chỉ vì prompt
 ```text
 QiQi
   ↓ work_item_get/create nếu product task
-  ↓ knowledge_search → exact knowledge_read khi cần durable context
+  ↓ knowledge_search → exact scoped Knowledge read khi cần durable context
   ↓ SYSTEM_MAP + Work Item + required external facts
   ↓ structured TaskPacket
 qiqi_delegate
@@ -63,7 +63,7 @@ repo agent
   ↓ work_item_get
   ↓ repo-local work + verification
   ↓ work_item_update current-repo evidence/handoff/checkpoint
-  ↓ knowledge review/write nếu reusable
+  ↓ knowledge review → knowledge_write/knowledge_update nếu reusable
   ↓ native final response
 qiqi_delegate
   ↓ session/turn runtime state
@@ -84,12 +84,13 @@ QiQi sở hữu global phase/status/completion. Child chỉ current-repo authori
 ```text
 knowledge_search
 → thin decision cards
-→ choose 1–2 IDs
-→ knowledge_read
-→ full semantic content/sources/revision
+→ choose exact target
+→ smallest sufficient exact read:
+     knowledge_read | knowledge_read_metadata | knowledge_read_section
+→ knowledge_write | knowledge_update
 ```
 
-Search card không phải full evidence và không chứa revision. Update existing knowledge phải full-read target trước.
+Search card không phải full evidence và không chứa revision. Existing update target lấy exact whole-document revision từ exact read surface. Metadata/section reads giúp large Knowledge không phải hydrate/resend whole content khi semantic change chỉ nằm ở metadata hoặc một marked section; storage vẫn one canonical Markdown document + one SHA-256 revision.
 
 ## TaskPacket
 
