@@ -178,6 +178,30 @@ Phase-specific guardrails chỉ áp dụng nơi failure mode đặc biệt:
 Investigation, planning và verification dùng generic rule trên; không tạo hard workflow
 machine hoặc event log.
 
+## Shared `$work-item` operational skill
+
+Các rule read/write/revision/reconciliation ở trên được ship thành một **single
+user-scoped Agent Skill** tại:
+
+```text
+work-item-template/skills/work-item/SKILL.md
+```
+
+QiQi và repository execution agents dùng cùng `$work-item` protocol. Workspace/repo
+`AGENTS.md` chỉ giữ always-on activation, authority, filesystem/cross-repo và safety
+invariants; không giữ thêm một bản copy của operational mechanics.
+
+Activation vẫn explicit:
+
+- canonical Work Item đã được identify/selected → apply `$work-item`;
+- user explicitly yêu cầu tạo/dùng Work Item → apply `$work-item`;
+- trước bất kỳ `work_item_*` tool call nào → apply `$work-item`;
+- generic ticket/task/incident **không** tự động tạo/chọn Work Item.
+
+Không còn `$ticket-work-item` workflow skill. Muốn tạo task mới từ nội dung paste thì
+user explicitly yêu cầu QiQi tạo Work Item từ nội dung đó; `$work-item` xử lý get-first,
+create-if-missing và reconciliation theo role authority.
+
 ## Optional task artifacts
 
 Một số detail như intake, investigation, plan, review hoặc final report có thể rất dài
@@ -496,17 +520,30 @@ bash scripts/install-user-mcp.sh \
   --db-path /path/to/work-items.sqlite3
 ```
 
-Installer tạo:
+Installer tạo/cập nhật managed user-scope capability:
 
 ```text
-~/.local/bin/agent-work-item-mcp  # MCP runtime
-~/.local/bin/agent-work-item      # read-only human CLI
+~/.agents/skills/work-item/SKILL.md   # Codex user skill
+~/.claude/skills/work-item/SKILL.md   # Claude user skill
+~/.local/bin/agent-work-item-mcp      # MCP runtime
+~/.local/bin/agent-work-item          # read-only human CLI
 ```
 
-và đăng ký MCP tên `work_item` cho Codex/Claude CLI đang có. Nếu registration cùng
-tên trỏ sang runtime khác, installer fail thay vì overwrite âm thầm. Wrapper chỉ set
-`WORK_ITEM_DB_PATH` và giữ inherited environment, nên optional
+Nếu skill cùng tên tồn tại nhưng không do harness quản lý (và không identical), installer
+fail thay vì overwrite âm thầm. Có thể refresh riêng skill bằng:
+
+```bash
+bash scripts/install-user-skill.sh
+```
+
+Installer cũng đăng ký MCP tên `work_item` cho Codex/Claude CLI đang có. Nếu registration
+cùng tên trỏ sang runtime khác, installer fail thay vì overwrite âm thầm. Wrapper chỉ
+set `WORK_ITEM_DB_PATH` và giữ inherited environment, nên optional
 `WORK_ITEM_ARTIFACT_TEMPLATES_PATH` được truyền qua nếu set khi client/MCP được mở.
+
+Sau thay đổi skill/policy, mở fresh QiQi/child session để client discover user-scope skill
+mới. Workspace migration không tự ghi vào user home; sau migration policy sang `$work-item`
+thì rerun `scripts/install-user-mcp.sh` từ `work-item-template` để refresh skill.
 
 ## Verification
 
@@ -522,6 +559,9 @@ Test/check cover ít nhất:
 - stale Work Item revision và concurrent writers;
 - typed `WorkItemPatch` semantic shapes/descriptions;
 - repo-summary current-truth semantics + checkpoint `kind`/`artifact_id` metadata;
+- shared `$work-item` skill operational contract + explicit opt-in boundary;
+- managed user-scope skill install/idempotence/unmanaged-conflict behavior;
+- main MCP installer includes the shared skill installation;
 - reject các payload từng gây retry: question string/`text`, blocker string, invalid change enum,
   next-action string/missing owner;
 - preserve nested provenance, repo partial merge và explicit merge-patch `null`;
@@ -544,5 +584,5 @@ Test/check cover ít nhất:
 - static invariant cho MCP tool count, typed update surface, template/storage boundary,
   post-commit mutation response, bounded payload và read-only boundary.
 
-Khi rollout thực tế, mở fresh Codex/Claude session để MCP client discover tool surface
-mới và smoke test QiQi + repository child trên cùng database.
+Khi rollout thực tế, mở fresh Codex/Claude session để MCP client discover tool surface +
+`$work-item` skill và smoke test QiQi + repository child trên cùng database.
