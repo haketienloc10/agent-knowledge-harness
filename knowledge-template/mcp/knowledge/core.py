@@ -12,6 +12,8 @@ from typing import Any, Iterable
 import yaml
 from filelock import FileLock
 
+from sections import SectionError, parse_sections
+
 INDEX_FILENAME = "INDEX.md"
 LOCK_FILENAME = ".knowledge.lock"
 INDEX_VERSION = 1
@@ -42,6 +44,13 @@ class ValidationError(KnowledgeError):
 
 class ConflictError(KnowledgeError):
     pass
+
+
+def _validate_section_structure(content: str, *, label: str) -> None:
+    try:
+        parse_sections(content)
+    except SectionError as exc:
+        raise ValidationError(f"{label}: {exc}") from exc
 
 
 @dataclass(frozen=True)
@@ -317,6 +326,7 @@ def validate_write_entry(value: Any) -> dict[str, Any]:
     content = value.get("content")
     if not isinstance(content, str):
         raise ValidationError("content must be a string")
+    _validate_section_structure(content, label="knowledge write content")
     content = content.strip()
     if len(content) > MAX_CONTENT_CHARS:
         raise ValidationError(f"content exceeds {MAX_CONTENT_CHARS} characters")
@@ -397,6 +407,7 @@ def _load_document(root: Path, path: Path) -> Document:
         raise ValidationError(
             f"{relative}: first body heading must exactly match title: {expected_heading}"
         )
+    _validate_section_structure(body, label=relative)
     return Document(
         path=resolved,
         relative_path=relative,
