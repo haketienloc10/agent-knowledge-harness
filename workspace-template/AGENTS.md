@@ -95,6 +95,33 @@ QiQi sở hữu overall `status`, `phase`, `summary`, repo assignment, global `n
 
 Repo agent chỉ update current-repo evidence/state + material question/blocker/checkpoint/handoff nó thực sự xác lập.
 
+### Current snapshot và material history
+
+Giữ semantic boundary nhất quán xuyên mọi session:
+
+```text
+summary / repos / verification / status / phase / blockers / next_actions
+  = current effective snapshot
+
+questions / decisions / changes / checkpoints
+  = material history / provenance giải thích snapshot
+
+artifact
+  = optional detailed material; không thay thế Work Item reconciliation
+```
+
+`repos[repo].summary` phải mô tả current effective repo truth sau tất cả work đã biết, không bị overwrite thành narrative của session review/investigation/report mới nhất. `checkpoints[]` giữ accumulated material phase/milestone history để future reader reconstruct major task progress mà không buộc mở artifact. Checkpoint có thể dùng free-form descriptive `kind` và optional `artifact_id`; đây không phải workflow enum/FSM.
+
+Mọi substantive Work Item session phải để lại canonical continuation state trước khi kết thúc nếu session established material task state, kể cả implementation không tạo artifact. Artifact creation không được tính là thay thế cho Work Item update.
+
+Phase-specific guardrails:
+
+- **Implementation:** repo agent phải persist current implemented outcome + material implementation checkpoint dù không có artifact.
+- **Review:** review artifact giữ detail; checkpoint giữ material finding. Không replace implementation-oriented repo summary bằng `Review code...` narrative trừ khi review thực sự làm thay đổi current repo truth.
+- **Report:** report artifact là presentation/detail; preserve prior repo state/checkpoints rồi QiQi reconcile global summary/status/phase/next action theo evidence cuối.
+
+Investigation, planning và verification dùng generic boundary trên: persist chỉ material current state/history, không tạo event log hay hard phase machine.
+
 ### Questions, decisions, changes
 
 Ambiguity chưa chốt → `questions[].status=open`.
@@ -171,9 +198,10 @@ Với `settled`/`failed`:
 1. Đọc toàn bộ `agent_response`.
 2. `work_item_get` lại để lấy canonical revision/state mới.
 3. Reconcile response với Work Item + objective + acceptance + verification.
-4. Nếu cross-repo handoff chưa persist, reconcile vào Work Item.
-5. Update global status/phase/summary/next_actions khi evidence đủ.
-6. Tiếp tục wave, RESUME, hỏi user/customer hoặc kết thúc.
+4. Nếu native response established material repo state nhưng latest Work Item thiếu state/checkpoint tương ứng, **không silently tiếp tục như persistence đã thành công**. Reconcile chỉ fact thuộc QiQi authority; nếu repo-owned evidence không thể persist an toàn từ canonical/returned evidence thì RESUME/require repo reconciliation trước bước phụ thuộc.
+5. Nếu cross-repo handoff chưa persist, reconcile vào Work Item.
+6. Update global status/phase/summary/next_actions khi evidence đủ.
+7. Tiếp tục wave, RESUME, hỏi user/customer hoặc kết thúc.
 
 Với `blocked`, `agent_response=null` nghĩa native final response chưa tồn tại. Giữ exact `session_id`; không invent blocker content từ screen/transcript.
 
