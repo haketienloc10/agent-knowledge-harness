@@ -16,7 +16,7 @@ qiqi_delegate state    = runtime/session truth
                                 ▲
                                 │
                          Knowledge MCP
-                   search → exact read → write
+          search → exact scoped read → whole/partial mutation
                                 ▲
                                 │ reusable truth
                                 │
@@ -97,19 +97,25 @@ Current public API:
 ```text
 knowledge_search(keywords, context?, limit?)
 knowledge_read(ids)
+knowledge_read_metadata(ids)
+knowledge_read_section(id, section_id)
 knowledge_write(entries)
+knowledge_update(id, expected_revision, changes)
 ```
 
 Progressive disclosure:
 
 ```text
 search thin decision cards
-→ chọn 1–2 exact IDs
-→ full read semantic content + sources + revision
-→ write khi cần
+→ chọn exact target
+→ exact-read smallest sufficient scope:
+     full document | metadata/provenance | one marked section
+→ whole/partial mutation khi cần
 ```
 
-Search card không phải full evidence và không chứa revision. Existing update target phải full-read trước.
+Search card không phải full evidence và không chứa revision. Existing update target lấy exact whole-document revision từ một exact read surface, không bắt buộc hydrate full content nếu metadata hoặc một marked section đã đủ.
+
+Knowledge storage vẫn giữ invariant **one semantic concept = one canonical Markdown document = one SHA-256 revision**. `knowledge_update` chỉ là mutation convenience: server reconstruct full canonical payload rồi reuse existing whole-document locking/write/index/revision path. Stable section markers không tạo chunk store hay per-section revision.
 
 ## Structured input, native output
 
@@ -144,7 +150,7 @@ bash scripts/knowledge-template-check.sh
 bash scripts/install-user-mcp.sh --store-root /path/to/shared-knowledge/store
 ```
 
-Mở fresh agent session sau user-scope MCP/skill registration.
+Mở fresh agent session sau user-scope MCP/skill registration. Sau public Knowledge tool change, rerun installer từ checkout mới để fresh session discover đủ 6 tools.
 
 ## Workspace mới
 
@@ -180,24 +186,28 @@ bash scripts/install-user-mcp.sh
 
 rồi mở fresh QiQi/child session để load `$work-item`.
 
+Knowledge public-tool migration cũng chỉ update workspace/repo policy; operator phải rerun `knowledge-template/scripts/install-user-mcp.sh` với existing `--store-root` rồi mở fresh sessions.
+
 ## Acceptance smoke
 
 Sau migration/cài đặt, mở fresh QiQi + fresh child session và xác nhận:
 
-1. QiQi/child thấy `$work-item`; QiQi thấy `work_item_*` và Knowledge search/read/write tools.
+1. QiQi/child thấy `$work-item`; QiQi thấy `work_item_*` và đủ 6 Knowledge tools.
 2. QiQi create/get một test Work Item theo explicit Work Item intent.
 3. Child đọc cùng Work Item qua `$work-item`, chỉ update current-repo evidence.
 4. QiQi reread thấy revision/state mới.
 5. Stale Work Item revision bị reject.
 6. Generic ticket/task không tự động tạo Work Item.
-7. Knowledge search trả thin cards, exact read trả full content/revision.
-8. qiqi_delegate native result/RESUME smoke pass cho agent family thực sự dùng.
+7. Knowledge search trả thin cards; metadata/section/full exact reads trả đúng scope + whole-document revision.
+8. `knowledge_update` preserve untouched canonical state và stale Knowledge revision bị reject.
+9. qiqi_delegate native result/RESUME smoke pass cho agent family thực sự dùng.
 
 ## Thiết kế cố ý
 
 - Work Item MCP là task truth duy nhất; không repo-local/workspace-local task copy.
 - `$work-item` là operational protocol, không phải task store hay implicit ticket opt-in.
 - Knowledge MCP chỉ giữ reusable durable truth, không task-specific mutable state.
+- Knowledge partial update không đổi one-document/one-revision storage model.
 - Repo source/test là implementation truth.
 - qiqi_delegate SQLite chỉ giữ runtime/session truth.
 - QiQi là orchestration/synchronization broker, không memory bus.
