@@ -1,0 +1,27 @@
+{
+  "version": 9,
+  "from_ref": "c377874fcff5cef332e94be2eec0551756baccc3",
+  "to_ref": "a3779d101955713ea4579375ade238eed587a03f",
+  "description": "make material Work Item session reconciliation explicit and preserve current-state versus phase-history boundaries",
+  "workspace": {
+    "merge": [
+      "workspace-template/AGENTS.md"
+    ],
+    "replace": [
+      "workspace-template/.agents/skills/ticket-work-item/SKILL.md",
+      "workspace-template/scripts/workspace-check.sh"
+    ],
+    "delete": [],
+    "manual_review": []
+  },
+  "repo": {
+    "merge": [
+      "repo-template/AGENTS.md"
+    ],
+    "replace": [
+      "repo-template/scripts/repo-check.sh"
+    ],
+    "delete": [],
+    "manual_review": []
+  }
+}
