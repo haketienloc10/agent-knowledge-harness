@@ -18,7 +18,7 @@ Shared Knowledge Store
 = reusable, non-trivial, evidence-backed distilled knowledge
 
 Knowledge MCP
-= search/read/write + storage mechanics
+= progressive search/read + whole/partial mutation + storage mechanics
 
 Agent / knowledge-distill skill
 = semantic query generation + semantic distillation
@@ -43,6 +43,9 @@ knowledge-template/
 ├── mcp/knowledge/
 │   ├── contracts.py
 │   ├── core.py
+│   ├── partial_contracts.py
+│   ├── partial_update.py
+│   ├── sections.py
 │   ├── server.py
 │   ├── pyproject.toml
 │   └── tests/
@@ -62,13 +65,20 @@ current working directory**.
 
 ## Public MCP API
 
-Post-MVP API dùng progressive disclosure với ba tools:
+Progressive API có sáu tools:
 
 ```text
 knowledge_search(keywords, context?, limit?)
 knowledge_read(ids)
+knowledge_read_metadata(ids)
+knowledge_read_section(id, section_id)
 knowledge_write(entries)
+knowledge_update(id, expected_revision, changes)
 ```
+
+Ba API cũ `knowledge_search`, `knowledge_read`, `knowledge_write` giữ nguyên contract.
+`knowledge_write` vẫn hỗ trợ create và full-document replacement để backward-compatible;
+partial mutation là surface bổ sung, không thay storage model.
 
 Không expose list-files, arbitrary read-path, write-path, delete-path hay generic
 filesystem tool.
@@ -78,17 +88,18 @@ filesystem tool.
 ```text
 knowledge_search(top N)
 → bounded routing decision cards
-→ agent chọn 1–2 exact IDs
-→ knowledge_read(ids)
-→ full semantic content + provenance + revision
+→ agent chọn exact target
+→ đọc smallest sufficient semantic scope:
+     full document | metadata + section index | one section
+→ mutate smallest safe semantic scope
 ```
 
-Search card phải đủ để **chọn** document, nhưng không được thay thế full document.
+Search card phải đủ để **chọn** document, nhưng không được thay thế exact read.
 Agent không dùng search summary/card như evidence đầy đủ cho material implementation,
 verification hoặc update khi content/provenance/uncertainty có thể ảnh hưởng quyết định.
 
-`knowledge_search` cố ý **không trả revision**. Vì vậy update bắt buộc full-read
-existing knowledge trước khi có `expected_revision`.
+`knowledge_search` cố ý **không trả revision**. Existing-target mutation phải lấy exact
+SHA-256 revision từ một exact read surface: full read, metadata read hoặc section read.
 
 ## Search contract
 
@@ -159,9 +170,11 @@ Mặc dù search không serialize detail content, selected top hits vẫn đư�
 verify ID + revision với generated index. Human sửa detail nhưng chưa reindex vẫn
 làm search fail rõ thay vì silently dùng stale routing metadata.
 
-## Full read contract
+## Exact read contracts
 
-Sau search, hydrate chỉ exact IDs thực sự cần:
+### Full document
+
+Khi conclusion cần toàn concept, hydrate exact IDs:
 
 ```json
 {
@@ -171,10 +184,7 @@ Sau search, hydrate chỉ exact IDs thực sự cần:
 }
 ```
 
-Mỗi call hydrate tối đa **2 unique IDs**. Nếu hai candidate gần nhau, read cả hai;
-không hydrate toàn bộ top-N chỉ vì search `limit` lớn.
-
-Full read trả semantic payload có thể dùng an toàn cho reasoning/update:
+Mỗi `knowledge_read` call hydrate tối đa **2 unique IDs**. Full read trả:
 
 - stable `id`;
 - SHA-256 `revision`;
@@ -185,12 +195,60 @@ Full read trả semantic payload có thể dùng an toàn cho reasoning/update:
 - semantic `content`.
 
 `content` **không chứa canonical H1** vì title là field riêng và writer tự render H1.
-Điều này cho phép read → modify → write round-trip mà không tạo duplicate heading.
+Physical `path` không thuộc read API.
 
-Physical `path` không thuộc read API. Caller không cần biết filesystem layout.
+### Metadata-only
 
-Nếu exact ID không tồn tại, read fail rõ và caller phải search lại. Nếu detail bị
-human sửa nhưng index revision chưa reindex, read fail stale-index rõ.
+Khi chỉ sửa title/routing/sources hoặc cần biết section nào tồn tại mà không hydrate
+large content:
+
+```json
+{
+  "ids": ["domain:checkout.payment:retry-after-commit"]
+}
+```
+
+qua `knowledge_read_metadata` trả exact identity/revision + title/scope/routing/sources
+và thin section index:
+
+```json
+{
+  "sections": [
+    {"id": "contract", "heading": "## Contract"},
+    {"id": "verification", "heading": "## Verification"}
+  ]
+}
+```
+
+Nó **không trả `content`**. Server có thể đọc canonical file nội bộ để verify/derive
+section index; mục tiêu của API này là không đưa whole content vào agent context/payload.
+
+### One semantic section
+
+Khi chỉ cần một existing marked section:
+
+```text
+knowledge_read_section(
+  id="domain:checkout.payment:retry-after-commit",
+  section_id="verification"
+)
+```
+
+trả:
+
+```text
+id
+revision              # whole-document SHA-256 revision
+section_id
+heading                # exact stored H2-H6 heading
+content                # section body only
+```
+
+Section read không trả whole document. Missing section fail rõ; caller phải dùng exact
+section ID đã quan sát từ canonical document/metadata read, không invent ID.
+
+Nếu exact document ID không tồn tại, read fail rõ và caller phải search lại. Nếu detail
+bị human sửa nhưng index revision chưa reindex, exact read fail stale-index rõ.
 
 ## Write contract
 
@@ -236,10 +294,9 @@ path = domains/checkout/payment/retry-after-commit.md
 MCP tự tạo parent directories, render canonical Markdown, write atomically và
 regenerate `INDEX.md`.
 
-### Update
+### Full-document update compatibility
 
-Update phải search existing concept, full-read exact target, rồi dùng exact identity
-+ optimistic revision từ `knowledge_read`:
+Existing `knowledge_write` update vẫn hợp lệ:
 
 ```yaml
 id: domain:checkout.payment:retry-after-commit
@@ -248,8 +305,95 @@ canonical_name: retry-after-commit
 ...
 ```
 
-Full read trả toàn bộ `routing`/`sources`/`content` để caller không phải reconstruct
-metadata từ search card. Stale revision bị reject; không last-write-wins.
+Đây là whole semantic document replacement. Dùng khi toàn concept cần re-distill hoặc
+caller intentionally muốn replace toàn metadata/content. Stale revision bị reject;
+không last-write-wins.
+
+### Partial update
+
+`knowledge_update` nhận exact `id`, whole-document `expected_revision` và typed `changes`.
+Caller không resend phần không đổi; MCP hydrate current canonical document server-side,
+apply patch rồi delegate persistence lại chính whole-document write path hiện có.
+Do đó lock, atomic replace, rollback, index refresh và revision checks không có
+implementation thứ hai.
+
+Metadata-only:
+
+```yaml
+id: domain:checkout.payment:retry-after-commit
+expected_revision: <sha256 from exact read>
+changes:
+  metadata:
+    routing:
+      summary: Updated durable routing boundary.
+      keywords:
+        - payment
+        - retry
+        - commit
+```
+
+Whole content only:
+
+```yaml
+changes:
+  content: |
+    Replacement durable content body.
+```
+
+One section body:
+
+```yaml
+changes:
+  section:
+    id: verification
+    content: |
+      Run focused verification first, then the full suite.
+```
+
+Rules:
+
+- metadata patch chỉ cho `title`, partial nested `routing`, hoặc full intended `sources`;
+- `canonical_name`/`scope` không patch được nên identity/path không đổi âm thầm;
+- metadata có thể combine atomically với whole-content **hoặc** one-section mutation;
+- whole-content và one-section replacement mutually exclusive trong cùng call;
+- omitted field = unchanged; explicit `null` bị reject, không có merge-patch deletion;
+- partial update vẫn tạo một SHA-256 revision mới cho **whole document**;
+- không có metadata revision hoặc per-section revision riêng;
+- revision conflict → exact reread → reconcile → retry.
+
+## Stable semantic sections
+
+Large structured knowledge có thể opt-in stable sections trong cùng content body:
+
+```markdown
+<!-- knowledge-section:contract -->
+## Contract
+
+Durable contract text.
+
+<!-- knowledge-section:failure-modes -->
+## Failure modes
+
+Durable failure-mode text.
+```
+
+Contract:
+
+- section ID lowercase kebab-case, unique trong document;
+- marker là exact standalone line, không indent;
+- marker phải immediately followed bởi Markdown H2-H6 heading;
+- heading là presentation; marker ID là stable semantic identity;
+- section boundary là marker-to-marker, không dựa vào heading level;
+- tối đa 100 marked sections/document;
+- small/legacy knowledge không có marker vẫn hợp lệ;
+- section replacement chỉ thay body, giữ marker + heading;
+- replacement body không được inject `knowledge-section` marker;
+- missing section không implicit create;
+- API hiện không có section add/delete/reorder/rename primitive.
+
+Nếu cần structural rewrite, full-read rồi whole-content replacement. Section markers
+chỉ là mutation address trong một document; storage vẫn **one Markdown document = one
+semantic concept = one whole-document revision**.
 
 ### Empty review
 
@@ -366,8 +510,15 @@ sources:
 
 # Quy tắc retry thanh toán sau commit
 
+<!-- knowledge-section:contract -->
+## Contract
+
 Content tự do.
 ```
+
+Nếu human dùng reserved `knowledge-section` marker thì phải tuân marker contract ở
+trên. MCP read/write/update surfaces reject malformed reserved marker thay vì đoán
+section structure.
 
 Maintenance dùng đúng Python runtime đã `uv sync` cho Knowledge MCP:
 
@@ -383,8 +534,10 @@ fail; tooling không silently move human file.
 ## Integrity model
 
 - filesystem lock cho cross-process write/reindex;
-- optimistic `expected_revision` cho update;
+- optimistic whole-document `expected_revision` cho full/partial update;
 - revision check lại ngay trước replace;
+- partial adapter reconstruct full semantic payload **server-side** rồi reuse existing
+  `write_knowledge` transaction path;
 - `resolve()` + root containment chống path/symlink escape;
 - temp-file + `fsync` + `os.replace` cho detail/index;
 - batch validate trước mutation;
@@ -392,7 +545,8 @@ fail; tooling không silently move human file.
 - crash giữa detail write và index update có thể để index stale; detail metadata
   vẫn canonical và `knowledge reindex` repair;
 - search verify revision của selected top hits với index mà không serialize body;
-- exact read verify revision trước khi trả full content;
+- exact reads verify revision trước khi trả requested semantic scope;
+- section replacement không implicit create section hoặc inject new markers;
 - document/content/search-result/full-read counts đều bounded.
 
 Human direct edit không bị ép lấy MCP lock; optimistic revision + stale-index check
@@ -403,8 +557,8 @@ edit đồng thời với active MCP write.
 
 ## Context-budget model
 
-`MAX_CONTENT_CHARS` vẫn bảo vệ từng detail document, nhưng search không còn scale
-context theo `limit × full document size`.
+`MAX_CONTENT_CHARS` vẫn bảo vệ từng detail document, nhưng search và scoped read không
+scale context theo `limit × full document size`.
 
 ```text
 knowledge_search(limit=10)
@@ -412,10 +566,19 @@ knowledge_search(limit=10)
 
 knowledge_read(ids)
 → tối đa 2 full documents/call
+
+knowledge_read_metadata(ids)
+→ exact metadata/provenance/revision + thin section index; no content
+
+knowledge_read_section(id, section_id)
+→ one section body + whole-document revision
+
+knowledge_update(...)
+→ request chỉ chứa changed semantic scope
 ```
 
-Do đó context tăng theo số document agent **chủ động chọn để đọc**, không theo số
-candidate cần xem để route.
+Do đó large Knowledge không bắt agent resend whole document khi chỉ đổi metadata,
+whole content riêng, hoặc một marked section.
 
 ## Maintenance CLI
 
@@ -440,9 +603,10 @@ fallback current Python khi environment đã có `filelock` + `PyYAML` + `pydant
 bash scripts/knowledge-template-check.sh
 ```
 
-Checker xác minh ba public tools, thin search schema, bounded exact read, write schema
-và integrity behavior. Nó không khóa implementation vào một tool-description prose
-quá dài.
+Checker xác minh sáu public tools, thin search schema, bounded exact/scoped reads,
+typed full/partial mutation, stable section parser và existing storage integrity
+behavior. Nó khóa partial update vào existing whole-document concurrency/transaction
+path thay vì cho tạo persistence model thứ hai.
 
 ## User/global MCP installation
 
@@ -479,7 +643,10 @@ sự thấy đủ:
 ```text
 knowledge_search
 knowledge_read
+knowledge_read_metadata
+knowledge_read_section
 knowledge_write
+knowledge_update
 ```
 
 Local config edit không làm tool xuất hiện trong session đã chạy sẵn.
