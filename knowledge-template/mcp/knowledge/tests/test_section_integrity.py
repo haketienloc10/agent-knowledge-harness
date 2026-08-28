@@ -50,6 +50,23 @@ class KnowledgeSectionIntegrityTest(unittest.TestCase):
         self.assertIn("malformed knowledge section marker", str(raised.exception))
         self.assertEqual(list((self.root / "domains").rglob("*.md")), [])
 
+    def test_core_write_rejects_heading_beyond_public_schema_bound(self):
+        overlong_heading = "## " + ("x" * 298)
+        with self.assertRaises(ValidationError) as raised:
+            write_knowledge(
+                self.root,
+                [
+                    entry(
+                        content=(
+                            "<!-- knowledge-section:contract -->\n"
+                            f"{overlong_heading}\n\nbody"
+                        )
+                    )
+                ],
+            )
+        self.assertIn("heading exceeds 300 characters", str(raised.exception))
+        self.assertEqual(list((self.root / "domains").rglob("*.md")), [])
+
     def test_check_and_reindex_reject_malformed_human_edited_section_structure(self):
         created = write_knowledge(self.root, [entry(content=VALID_CONTENT)])["changes"][0]
         path = self.root / created["path"]
