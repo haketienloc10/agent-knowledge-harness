@@ -7,6 +7,7 @@ from dataclasses import dataclass
 MAX_KNOWLEDGE_SECTIONS = 100
 MAX_SECTION_ID_CHARS = 100
 MAX_SECTION_HEADING_CHARS = 300
+MAX_SECTION_BODY_CHARS = 24_000
 SECTION_MARKER_PREFIX = "<!-- knowledge-section:"
 SECTION_MARKER_RE = re.compile(
     r"^<!-- knowledge-section:([a-z0-9]+(?:-[a-z0-9]+)*) -->$"
@@ -25,6 +26,16 @@ class SectionSpan:
     marker_index: int
     heading_index: int
     end_index: int
+
+
+def _section_body_lines(lines: list[str], span: SectionSpan) -> list[str]:
+    """Remove only canonical structural blank separators, never content whitespace."""
+    body = list(lines[span.heading_index + 1 : span.end_index])
+    if body and body[0] == "":
+        body = body[1:]
+    if body and body[-1] == "":
+        body = body[:-1]
+    return body
 
 
 def _opening_fence(line: str) -> tuple[str, int] | None:
@@ -153,6 +164,14 @@ def parse_sections(content: str) -> list[SectionSpan]:
                 end_index=end_index,
             )
         )
+
+    for span in spans:
+        body = "\n".join(_section_body_lines(lines, span))
+        if len(body) > MAX_SECTION_BODY_CHARS:
+            raise SectionError(
+                f"knowledge section {span.section_id!r} body exceeds "
+                f"{MAX_SECTION_BODY_CHARS} characters"
+            )
     return spans
 
 
@@ -161,16 +180,6 @@ def section_summaries(content: str) -> list[dict[str, str]]:
         {"id": span.section_id, "heading": span.heading}
         for span in parse_sections(content)
     ]
-
-
-def _section_body_lines(lines: list[str], span: SectionSpan) -> list[str]:
-    """Remove only canonical structural blank separators, never content whitespace."""
-    body = list(lines[span.heading_index + 1 : span.end_index])
-    if body and body[0] == "":
-        body = body[1:]
-    if body and body[-1] == "":
-        body = body[:-1]
-    return body
 
 
 def read_section(content: str, section_id: str) -> dict[str, str]:
