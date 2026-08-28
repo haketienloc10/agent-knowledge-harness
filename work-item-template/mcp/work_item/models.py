@@ -84,11 +84,11 @@ class RepoPatch(_SemanticRecord):
     summary: str | None = Field(
         default=None,
         description=(
-            "Current effective repository contribution/state after all work known so far. Describe "
-            "what is true now, including implemented outcome, verified boundary, and remaining repo "
-            "work when material. Do not replace this snapshot with a narrative of the latest "
-            "investigation, review, report, command sequence, or agent session; historical phase "
-            "findings belong in checkpoints or optional artifacts."
+            "Current effective repository contribution/state after all work known so far. This snapshot "
+            "is not a narrative of the latest session. Describe what is true now, including implemented "
+            "outcome, verified boundary, and remaining repo work when material. Do not replace this "
+            "snapshot with a narrative of the latest investigation, review, report, command sequence, "
+            "or agent session; historical phase findings belong in checkpoints or optional artifacts."
         ),
     )
     verification: list[str] | None = Field(
