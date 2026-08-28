@@ -1,7 +1,7 @@
 {
   "version": 11,
   "from_ref": "d62d0efc579fe08c803a6b268cf343b2d248f2b0",
-  "to_ref": "6c1cbbfea728bb65ebc70a2ce20ee77e0c61d4aa",
+  "to_ref": "ebdda009b8cced791d5f56716653155be49fb828",
   "description": "add scoped Shared Knowledge reads and partial document updates while preserving one-document revision semantics",
   "workspace": {
     "merge": [
