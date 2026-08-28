@@ -1,0 +1,34 @@
+{
+  "version": 6,
+  "from_ref": "e700c409886b0c1ae694ea593a9ba371283fbc87",
+  "to_ref": "f15c843a6ac666e655dabe972b7393aef831b478",
+  "description": "adopt user-scoped Global Work Item task truth on top of progressive Shared Knowledge",
+  "workspace": {
+    "merge": [
+      "workspace-template/identity.md"
+    ],
+    "replace": [
+      "workspace-template/AGENTS.md",
+      "workspace-template/README.md",
+      "workspace-template/docs/WORKSPACE_SETUP.md",
+      "workspace-template/scripts/workspace-check.sh"
+    ],
+    "delete": [
+      "workspace-template/.qiqi/tasks/TEMPLATE.md",
+      "workspace-template/.qiqi/tasks/active/README.md",
+      "workspace-template/.qiqi/tasks/completed/README.md"
+    ],
+    "manual_review": []
+  },
+  "repo": {
+    "merge": [
+      "repo-template/AGENTS.md"
+    ],
+    "replace": [
+      "repo-template/docs/REPO_SETUP.md",
+      "repo-template/scripts/repo-check.sh"
+    ],
+    "delete": [],
+    "manual_review": []
+  }
+}

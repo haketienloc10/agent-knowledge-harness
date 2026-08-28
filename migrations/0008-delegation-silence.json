@@ -1,0 +1,21 @@
+{
+  "version": 8,
+  "from_ref": "4c1f505ecf51b6ddffe10bc75e25501ee6b170a8",
+  "to_ref": "c377874fcff5cef332e94be2eec0551756baccc3",
+  "description": "restore the exact synchronous delegation-silence policy and lock it with a non-weakening workspace check",
+  "workspace": {
+    "merge": [],
+    "replace": [
+      "workspace-template/AGENTS.md",
+      "workspace-template/scripts/workspace-check.sh"
+    ],
+    "delete": [],
+    "manual_review": []
+  },
+  "repo": {
+    "merge": [],
+    "replace": [],
+    "delete": [],
+    "manual_review": []
+  }
+}

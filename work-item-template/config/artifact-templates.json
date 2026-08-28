@@ -1,0 +1,147 @@
+{
+  "intake": {
+    "description": "Capture the explicit request and effective initial scope without turning intake into a transcript.",
+    "sections": [
+      {
+        "id": "request",
+        "title": "Request",
+        "purpose": "The explicit user or ticket request being handled."
+      },
+      {
+        "id": "scope",
+        "title": "Scope",
+        "purpose": "Effective in-scope and explicitly out-of-scope boundaries."
+      },
+      {
+        "id": "constraints",
+        "title": "Constraints",
+        "purpose": "Material constraints, assumptions, and required external inputs known at intake time."
+      }
+    ]
+  },
+  "investigation": {
+    "description": "Evidence-backed investigation that separates verified facts from unresolved assumptions.",
+    "sections": [
+      {
+        "id": "scope",
+        "title": "Scope",
+        "purpose": "What is being investigated and what is explicitly out of scope."
+      },
+      {
+        "id": "evidence",
+        "title": "Evidence",
+        "purpose": "Verified source, test, configuration, runtime, or operational evidence."
+      },
+      {
+        "id": "findings",
+        "title": "Findings",
+        "purpose": "Facts established from the evidence, with hypotheses kept separate."
+      },
+      {
+        "id": "open-questions",
+        "title": "Open Questions",
+        "purpose": "Unresolved assumptions or external information still required."
+      }
+    ]
+  },
+  "plan": {
+    "description": "Implementation or delivery plan grounded in the current canonical Work Item state.",
+    "sections": [
+      {
+        "id": "objective",
+        "title": "Objective",
+        "purpose": "The concrete outcome this plan is intended to achieve."
+      },
+      {
+        "id": "approach",
+        "title": "Approach",
+        "purpose": "Proposed technical or operational approach and important tradeoffs."
+      },
+      {
+        "id": "steps",
+        "title": "Steps",
+        "purpose": "Ordered implementation or delivery steps."
+      },
+      {
+        "id": "verification",
+        "title": "Verification",
+        "purpose": "How the result will be verified before completion."
+      },
+      {
+        "id": "risks",
+        "title": "Risks",
+        "purpose": "Material implementation risks and mitigations."
+      }
+    ]
+  },
+  "review": {
+    "description": "Focused review of an implementation, change set, or proposed result against requirements and evidence.",
+    "sections": [
+      {
+        "id": "review-scope",
+        "title": "Review Scope",
+        "purpose": "What was reviewed and the requirement or standard used for comparison."
+      },
+      {
+        "id": "findings",
+        "title": "Findings",
+        "purpose": "Material review findings, defects, gaps, or confirmed strengths."
+      },
+      {
+        "id": "verification",
+        "title": "Verification",
+        "purpose": "Evidence used to validate review findings."
+      },
+      {
+        "id": "assessment",
+        "title": "Assessment",
+        "purpose": "Overall review conclusion, residual risks, and required follow-up."
+      }
+    ]
+  },
+  "report": {
+    "description": "Redmine-ready final report in Textile style. Follow the configured eight-section order and formatting as advisory guidance; report only verified task facts and preserve explicit user-fill placeholders when values are not known.",
+    "sections": [
+      {
+        "id": "root-cause-requirement",
+        "title": "h3. +1. Root-cause/requirement:+",
+        "purpose": "Explain the effective requirement and verified root cause. Write Redmine Textile content beginning with `p((. *Yêu cầu:* ...` when a concise requirement statement is available. Separate verified facts from assumptions; do not invent a root cause that evidence does not establish."
+      },
+      {
+        "id": "solution",
+        "title": "h3. +2. Solution:+",
+        "purpose": "Describe the implemented solution or agreed handling in enough detail for Redmine review. Use normal Textile paragraphs and `* ` bullets where useful. Explain old behavior/problem, new flow, edge cases, and scope boundaries when supported by evidence; do not claim implementation that was not verified."
+      },
+      {
+        "id": "affected",
+        "title": "h3. +3. Affected:+",
+        "purpose": "Summarize affected Service, Site, Device, and Chức năng using a `p((.` Textile block. Include only values established by the task/evidence; leave unknown items explicit rather than guessing."
+      },
+      {
+        "id": "impact-module-analysis",
+        "title": "h3. +4. Impact Module Analysis+",
+        "purpose": "List directly affected modules/repositories in a `p((.` Textile block, for example `p((. sg_back`. Include only modules supported by source/change evidence."
+      },
+      {
+        "id": "sql-report",
+        "title": "h3. +5. SQL_Report+",
+        "purpose": "State SQL report impact in a `p((.` Textile block. Use `No` only when the task evidence establishes that no SQL report is required; otherwise describe the required SQL/report work without guessing."
+      },
+      {
+        "id": "commits",
+        "title": "h3. +6. Commits:+",
+        "purpose": "Write a `p((.` Textile block containing `DDL/DML: <No/Yes>` only from verified change evidence. Preserve the literal placeholder `<<branch user tự điền>>` when the user has not supplied the branch/commit text; never fabricate branch names, commit hashes, or DDL/DML status."
+      },
+      {
+        "id": "testcase-ut",
+        "title": "h3. +7. Testcase /UT:+",
+        "purpose": "Write verified testcase/unit-test coverage and results in a `p((.` Textile block. Include concrete commands/results or scenario coverage when known. If verification is missing or incomplete, state that explicitly; never invent passing tests."
+      },
+      {
+        "id": "deploy",
+        "title": "h3. +8. Deploy:+",
+        "purpose": "Write deploy notes in a `p((.` Textile block. Preserve the literal placeholder `<<pre4 user tự điền>>` until the user supplies the deployment/pre4 value; do not fabricate deployment targets or procedures."
+      }
+    ]
+  }
+}

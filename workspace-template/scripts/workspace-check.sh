@@ -30,9 +30,9 @@ required_files=(
   repos.yaml
   instructions/agent-routing.yaml
   instructions/model-routing.md
+  .agents/skills/ticket-work-item/SKILL.md
   .codex/config.toml
   .qiqi/.gitignore
-  .qiqi/tasks/TEMPLATE.md
   mcp/qiqi_delegate/pyproject.toml
   mcp/qiqi_delegate/core.py
   mcp/qiqi_delegate/result_hook.py
@@ -63,7 +63,6 @@ policy_files=(
   "$workspace_root/README.md"
   "$workspace_root/docs/WORKSPACE_SETUP.md"
   "$workspace_root/instructions/model-routing.md"
-  "$workspace_root/.qiqi/tasks/TEMPLATE.md"
 )
 if rg -n 'result_path|QiQi MCP result handoff protocol|### Outcome|### Repo-local Knowledge' "${policy_files[@]}"; then
   fail 'legacy Markdown result-handoff contract found in active workspace policy'
@@ -72,6 +71,18 @@ fi
 agents_md="$workspace_root/AGENTS.md"
 for pattern in \
   'Chief of Staff' \
+  'Global Work Item MCP' \
+  'work_item_get' \
+  'work_item_update' \
+  'expected_revision' \
+  'canonical Work Item' \
+  'Current snapshot và material history' \
+  'current effective repo truth' \
+  'accumulated material phase/milestone history' \
+  'Artifact creation không được tính là thay thế' \
+  'Implementation:.*không có artifact' \
+  'Review code\.\.\.' \
+  'Report:.*presentation/detail' \
   '`delegate_repo_task`' \
   '`user_request`' \
   '`required_context`' \
@@ -80,13 +91,78 @@ for pattern in \
   '`agent_response`' \
   'native Stop hook' \
   '`\.qiqi/state/qiqi_delegate\.sqlite3`' \
-  '[Pp]roducer.*`required_context`' \
-  'gần nguyên văn' \
+  'orchestration/synchronization broker' \
   '## Delegation Silence'; do
   rg -U -q "$pattern" "$agents_md" || fail "AGENTS.md: missing required policy: $pattern"
 done
+
+for pattern in \
+  'current_requirements' \
+  'questions' \
+  'decisions' \
+  'changes' \
+  'handoffs' \
+  'next_actions' \
+  'superseded_by' \
+  'revision conflict'; do
+  rg -q "$pattern" "$agents_md" || fail "AGENTS.md: missing Work Item continuity rule: $pattern"
+done
+
+rg -U -q 'native response established material repo state.*latest Work Item thiếu.*không silently tiếp tục' "$agents_md" || \
+  fail 'AGENTS.md: QiQi must detect missing repo persistence after material delegation'
+
+# CRITICAL INVARIANT — DO NOT REMOVE OR WEAKEN THIS CHECK merely to make a
+# migration/check pass. Delegation silence is part of the synchronous execution
+# contract. Change this expected block only when the contract is intentionally
+# changed and reviewed together with qiqi_delegate semantics.
+delegation_silence_expected="$(cat <<'EOF'
+## Delegation Silence
+
+Trong khi `delegate_repo_task` đang chạy đồng bộ, QiQi không poll process/pane/session, không đọc `.qiqi/state/`, không scrape terminal và không phát user-facing progress dựa trên hidden child runtime. Chờ tool terminal return; sau đó reconcile structured state + native response. Nếu tool fail/blocked, xử lý theo exact returned contract, không tự mở runtime internals để đoán tiến độ hoặc kết quả.
+EOF
+)"
+delegation_silence_actual="$(python3 - "$agents_md" <<'PY'
+from pathlib import Path
+import sys
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8")
+heading = "## Delegation Silence\n"
+start = text.find(heading)
+if start < 0:
+    print("")
+    raise SystemExit(0)
+next_heading = text.find("\n## ", start + len(heading))
+section = text[start:] if next_heading < 0 else text[start:next_heading]
+print(section.rstrip("\n"))
+PY
+)"
+if [[ "$delegation_silence_actual" != "$delegation_silence_expected" ]]; then
+  fail 'AGENTS.md: Delegation Silence must match the exact synchronous no-progress contract; do not weaken/remove this invariant check'
+fi
+
 if rg -q 'English task title|read `result_path`|đọc `result_path`' "$agents_md"; then
-  fail 'AGENTS.md: legacy artifact/task-title convention remains'
+  fail 'AGENTS.md: legacy workspace result artifact convention remains'
+fi
+
+skill="$workspace_root/.agents/skills/ticket-work-item/SKILL.md"
+if [[ -f "$skill" ]]; then
+  for pattern in \
+    '^name: ticket-work-item$' \
+    'Use only when the user explicitly invokes' \
+    'Do not auto-apply merely because' \
+    '\$ticket-work-item path/to/ticket\.md' \
+    'Resolve relative paths from the current workspace directory' \
+    'work_item_get' \
+    'expected_revision' \
+    'delegate_repo_task' \
+    '^## Material session reconciliation$' \
+    'Artifact creation never substitutes' \
+    'Implementation:.*no artifact|Implementation:.*không' \
+    'Review code\.\.\.' \
+    'Report:.*presentation/detail' \
+    'knowledge_search → knowledge_read → knowledge_write'; do
+    rg -U -q "$pattern" "$skill" || fail "ticket-work-item skill: missing contract: $pattern"
+  done
 fi
 
 codex_config="$workspace_root/.codex/config.toml"
@@ -98,6 +174,9 @@ rg -q 'tool_timeout_sec = 7200' "$codex_config" || \
   fail '.codex/config.toml: expected long synchronous tool timeout'
 rg -q 'required = true' "$codex_config" || \
   fail '.codex/config.toml: qiqi_delegate must be required'
+if rg -q '^\[mcp_servers\.(work_item|knowledge)\]' "$codex_config"; then
+  fail '.codex/config.toml: work_item and knowledge must remain user-scoped, not project-scoped'
+fi
 
 launcher="$workspace_root/scripts/qiqi-mcp-server.sh"
 bash -n "$launcher" || fail 'qiqi-mcp-server.sh: invalid Bash syntax'
@@ -158,15 +237,8 @@ for pattern in \
   'RESULT_HOOK_PATH' \
   'SessionStore' \
   'def _build_handoff_args' \
-  'def _codex_stop_hook_hash' \
-  'def _codex_session_hook_key' \
-  'features\.hooks=true' \
-  'hooks\.Stop=' \
-  'hooks\.state=' \
-  'trusted_hash' \
   'def _register_active_capture' \
   'expected_session_id' \
-  '"--state-root"' \
   'def _wait_for_result_capture' \
   'refusing to fall back to terminal screen or transcript parsing' \
   'user_request: str' \
