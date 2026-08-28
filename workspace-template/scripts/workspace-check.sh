@@ -76,6 +76,13 @@ for pattern in \
   'work_item_update' \
   'expected_revision' \
   'canonical Work Item' \
+  'Current snapshot và material history' \
+  'current effective repo truth' \
+  'accumulated material phase/milestone history' \
+  'Artifact creation không được tính là thay thế' \
+  'Implementation:.*không tạo artifact' \
+  'Review code\.\.\.' \
+  'Report:.*presentation/detail' \
   '`delegate_repo_task`' \
   '`user_request`' \
   '`required_context`' \
@@ -100,6 +107,9 @@ for pattern in \
   'revision conflict'; do
   rg -q "$pattern" "$agents_md" || fail "AGENTS.md: missing Work Item continuity rule: $pattern"
 done
+
+rg -U -q 'native response established material repo state.*latest Work Item thiếu.*không silently tiếp tục' "$agents_md" || \
+  fail 'AGENTS.md: QiQi must detect missing repo persistence after material delegation'
 
 # CRITICAL INVARIANT — DO NOT REMOVE OR WEAKEN THIS CHECK merely to make a
 # migration/check pass. Delegation silence is part of the synchronous execution
@@ -145,8 +155,13 @@ if [[ -f "$skill" ]]; then
     'work_item_get' \
     'expected_revision' \
     'delegate_repo_task' \
+    '^## Material session reconciliation$' \
+    'Artifact creation never substitutes' \
+    'Implementation:.*no artifact|Implementation:.*không' \
+    'Review code\.\.\.' \
+    'Report:.*presentation/detail' \
     'knowledge_search → knowledge_read → knowledge_write'; do
-    rg -q "$pattern" "$skill" || fail "ticket-work-item skill: missing contract: $pattern"
+    rg -U -q "$pattern" "$skill" || fail "ticket-work-item skill: missing contract: $pattern"
   done
 fi
 
