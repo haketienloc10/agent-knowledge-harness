@@ -76,6 +76,29 @@ class WorkItemPatchModelTests(unittest.TestCase):
         self.assertEqual(patch["checkpoints"][0]["kind"], "investigation")
         self.assertEqual(patch["repos"]["sg_mail"], {"status": "pending"})
 
+    def test_checkpoint_phase_metadata_is_optional_and_free_form(self) -> None:
+        patch = WorkItemPatch.model_validate(
+            {
+                "checkpoints": [
+                    {
+                        "repo": "sg_mail",
+                        "kind": "implementation-rework",
+                        "artifact_id": "review:2",
+                        "summary": "Review finding was fixed and reverified.",
+                    },
+                    {
+                        "repo": "sg_mail",
+                        "summary": "Implementation completed without an artifact.",
+                    },
+                ]
+            }
+        ).to_merge_patch()
+
+        self.assertEqual(patch["checkpoints"][0]["kind"], "implementation-rework")
+        self.assertEqual(patch["checkpoints"][0]["artifact_id"], "review:2")
+        self.assertNotIn("kind", patch["checkpoints"][1])
+        self.assertNotIn("artifact_id", patch["checkpoints"][1])
+
     def test_questions_must_be_canonical_objects_not_strings_or_text_records(self) -> None:
         with self.assertRaises(PydanticValidationError):
             WorkItemPatch.model_validate({"questions": ["[open] unresolved question"]})
@@ -161,11 +184,16 @@ class WorkItemPatchModelTests(unittest.TestCase):
     def test_schema_describes_semantic_meanings_and_array_replacement(self) -> None:
         schema = WorkItemPatch.model_json_schema()
         properties = schema["properties"]
+        definitions = schema["$defs"]
         self.assertIn("not free-form notes", properties["questions"]["description"].lower())
         self.assertIn("requirement/scope", properties["changes"]["description"].lower())
         self.assertIn("not generic risks", properties["blockers"]["description"].lower())
         self.assertIn("do not send plain strings", properties["next_actions"]["description"].lower())
-        self.assertIn("not terminal logs", properties["checkpoints"]["description"].lower())
+        self.assertIn("accumulated material", properties["checkpoints"]["description"].lower())
+        self.assertIn("current effective repo truth", properties["repos"]["description"].lower())
+        self.assertIn("not a narrative", definitions["RepoPatch"]["properties"]["summary"]["description"].lower())
+        self.assertIn("not an enum", definitions["CheckpointPatch"]["properties"]["kind"]["description"].lower())
+        self.assertIn("omit when the phase has no artifact", definitions["CheckpointPatch"]["properties"]["artifact_id"]["description"].lower())
         self.assertIn("arrays replace atomically", properties["current_requirements"]["description"].lower())
 
 
