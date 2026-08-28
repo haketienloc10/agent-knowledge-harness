@@ -17,7 +17,11 @@ from contracts import (
     WhenToRead,
 )
 from core import MAX_CONTENT_CHARS
-from sections import MAX_SECTION_HEADING_CHARS, MAX_SECTION_ID_CHARS
+from sections import (
+    MAX_SECTION_BODY_CHARS,
+    MAX_SECTION_HEADING_CHARS,
+    MAX_SECTION_ID_CHARS,
+)
 
 
 ExactReadRevision = Annotated[
@@ -84,7 +88,7 @@ class KnowledgeSectionReadResult(_ExactSectionModel):
     revision: ExactReadRevision
     section_id: SectionId
     heading: SectionHeading
-    content: Annotated[str, Field(max_length=MAX_CONTENT_CHARS)]
+    content: Annotated[str, Field(max_length=MAX_SECTION_BODY_CHARS)]
 
 
 def _reject_explicit_null(model: StrictModel) -> StrictModel:
@@ -126,7 +130,7 @@ class KnowledgeSectionPatch(_ExactSectionModel):
     content: Annotated[
         str,
         Field(
-            max_length=MAX_CONTENT_CHARS,
+            max_length=MAX_SECTION_BODY_CHARS,
             description=(
                 "Replacement body for this existing section only. Do not include the "
                 "live knowledge-section marker or the stored section heading. Fenced "
