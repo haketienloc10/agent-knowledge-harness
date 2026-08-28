@@ -79,11 +79,15 @@ rg -U -q 'cross-repo impact: fact, affected boundary/repository, evidence, next 
   fail 'AGENTS.md: actionable cross-repo handoff shape missing'
 rg -U -q 'Knowledge review.*knowledge_write|Knowledge review/write' "$agents" || \
   fail 'AGENTS.md: Knowledge finalization missing'
-rg -U -q 'repos\[current_repo\]\.summary.*current effective repo truth' "$agents" || \
+rg -F -q 'repos[current_repo].summary' "$agents" || \
+  fail 'AGENTS.md: repo summary field must be named in session reconciliation'
+rg -F -q '= current effective repo truth sau tất cả work đã biết' "$agents" || \
   fail 'AGENTS.md: repo summary must remain current snapshot, not latest-session narrative'
-rg -U -q 'checkpoints\[\].*accumulated material phase/milestone history' "$agents" || \
+rg -F -q 'checkpoints[]' "$agents" || \
+  fail 'AGENTS.md: checkpoints field must be named in session reconciliation'
+rg -F -q '= accumulated material phase/milestone history' "$agents" || \
   fail 'AGENTS.md: checkpoints must preserve material phase history'
-rg -U -q 'Implementation session.*không tạo artifact' "$agents" || \
+rg -q 'Implementation session.*không tạo artifact' "$agents" || \
   fail 'AGENTS.md: implementation must reconcile even without artifact'
 
 if rg -q 'knowledge_read\(keywords|workspace `knowledge/`|knowledge/INDEX\.md|result_path|fixed result schema' "$agents"; then
