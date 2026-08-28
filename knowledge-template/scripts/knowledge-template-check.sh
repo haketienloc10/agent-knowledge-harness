@@ -162,6 +162,7 @@ for pattern in \
   'str_strip_whitespace=False' \
   'MAX_SECTION_ID_CHARS' \
   'MAX_SECTION_HEADING_CHARS' \
+  'MAX_SECTION_BODY_CHARS' \
   'cannot be null; omit it when unchanged' \
   'full content replacement and section replacement are mutually exclusive'; do
   rg -q "$pattern" "$partial_contracts" || fail "partial contracts missing invariant: $pattern"
@@ -182,11 +183,14 @@ for pattern in \
   'MAX_KNOWLEDGE_SECTIONS = 100' \
   'MAX_SECTION_ID_CHARS = 100' \
   'MAX_SECTION_HEADING_CHARS = 300' \
+  'MAX_SECTION_BODY_CHARS = 24_000' \
   'knowledge-section:' \
   'lowercase-kebab-id' \
   'duplicate knowledge section id' \
   'heading exceeds' \
-  'immediately followed.*Markdown H2-H6 heading' \
+  'body exceeds' \
+  'immediately followed' \
+  'Markdown H2-H6 heading' \
   '_opening_fence' \
   'fenced Markdown code blocks are ignored' \
   '_section_body_lines' \
@@ -216,7 +220,7 @@ for pattern in \
   'repair only the fields' \
   'Do not weaken' \
   'Summary and source-note budget gate' \
-  'Viết `content` trước' \
+  '[Vv]iết `content` trước' \
   'Draft `routing.summary`' \
   '300 characters or less' \
   '600 characters or less' \
