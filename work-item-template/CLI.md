@@ -79,17 +79,59 @@ Full artifact body chỉ được đọc khi gọi explicit:
 agent-work-item artifact redmine:113387 report:1
 ```
 
+Default artifact view là diagnostic human view: nó hiển thị artifact metadata, summary,
+section id/order và chunk/size counters quanh stored body.
+
 Chỉ xem một section:
 
 ```bash
 agent-work-item artifact redmine:113387 report:1 --section code-review
 ```
 
-Raw artifact JSON:
+### Copy/paste-ready raw view
+
+Khi cần copy report trực tiếp sang Redmine hoặc surface khác, dùng:
+
+```bash
+agent-work-item artifact redmine:113387 report:1 --raw
+```
+
+`--raw` chỉ stream theo thứ tự:
+
+```text
+<section title>
+
+<stored section body>
+
+<section title>
+
+<stored section body>
+```
+
+Nó không in artifact metadata, summary, revision, section id, chunk counters hoặc
+separator diagnostic. Stored chunks được stream nối tiếp nguyên văn theo `chunk_index`;
+chunk boundary không tạo newline/ký tự mới nên một từ bị chia giữa hai stored chunks vẫn
+copy ra liền mạch.
+
+Có thể lấy raw của đúng một section; title của section vẫn được giữ để block copy-paste
+hoàn chỉnh:
+
+```bash
+agent-work-item artifact redmine:113387 report:1 \
+  --section solution \
+  --raw
+```
+
+`--raw` không materialize toàn artifact trong RAM. Nó dùng cùng read-only streaming path
+như diagnostic text view. `--raw` và `--json` mutually exclusive.
+
+Raw artifact JSON dùng khi cần structured/debug output:
 
 ```bash
 agent-work-item artifact redmine:113387 report:1 --json
 ```
+
+Chỉ explicit `--json` mới materialize selected artifact trong memory.
 
 Human CLI có thể stream full artifact ra terminal vì đây không phải MCP/LLM context.
 MCP agent-side vẫn đọc artifact body theo bounded section chunks.
@@ -98,7 +140,9 @@ MCP agent-side vẫn đọc artifact body theo bounded section chunks.
 
 CLI mở SQLite bằng URI `mode=ro`. Nó không dùng Work Item/artifact mutation API,
 không tạo schema, không chạy write PRAGMA và không thay Work Item hay artifact revision.
-`work-item-template-check.sh` khóa invariant này và phải fail nếu CLI có mutation path.
+Default diagnostic view, `--raw` và `--json` đều là observer paths;
+`work-item-template-check.sh` khóa invariant read-only này và phải fail nếu CLI có
+mutation path.
 
 ## Installation
 
