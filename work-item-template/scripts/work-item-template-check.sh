@@ -208,20 +208,37 @@ for pattern in \
   'requirement/scope evolution history only' \
   'not generic risks or notes' \
   'do not send plain strings' \
-  'not terminal logs'; do
+  'not terminal' \
+  'Current effective repository contribution/state' \
+  'not a narrative of the latest session' \
+  'kind: str | None' \
+  'artifact_id: str | None' \
+  'not an enum or workflow FSM' \
+  'current effective repo truth' \
+  'accumulated material phase/milestone history'; do
   rg -F -q "$pattern" "$models" || fail "models.py: missing typed patch contract: $pattern"
 done
 
 # Explicit null is JSON merge-patch deletion while omitted fields mean no change.
-# This distinction must survive Pydantic serialization.
+# This distinction and optional checkpoint phase metadata must survive serialization.
 if ! PYTHONPATH="$project" uv run --project "$project" python - <<'PY'
 from models import WorkItemPatch
 assert WorkItemPatch.model_validate({}).to_merge_patch() == {}
 assert WorkItemPatch.model_validate({"summary": None}).to_merge_patch() == {"summary": None}
 assert WorkItemPatch.model_validate({"repos": {"old": None}}).to_merge_patch() == {"repos": {"old": None}}
+checkpoint = WorkItemPatch.model_validate({
+    "checkpoints": [{
+        "repo": "repo-a",
+        "kind": "implementation-rework",
+        "artifact_id": "review:2",
+        "summary": "Fixed review finding and reverified.",
+    }]
+}).to_merge_patch()["checkpoints"][0]
+assert checkpoint["kind"] == "implementation-rework"
+assert checkpoint["artifact_id"] == "review:2"
 PY
 then
-  fail 'models.py: WorkItemPatch must preserve explicit null and omit only unset fields'
+  fail 'models.py: WorkItemPatch must preserve merge-patch null/omission and checkpoint phase metadata'
 fi
 
 for pattern in \
@@ -319,8 +336,6 @@ rg -q "SET state = 'complete', revision = \?, updated_at = \?" "$artifacts" || \
 if rg -q 'UPDATE work_items|SET revision = .*work_items' "$artifacts"; then
   fail 'artifacts.py: artifact mutations must never update Work Item revision/state'
 fi
-# Artifact setup must reuse core connection configuration instead of duplicating
-# WAL/synchronous ownership in a second connector implementation.
 if rg -q 'PRAGMA journal_mode|PRAGMA synchronous' "$artifacts"; then
   fail 'artifacts.py: base SQLite connection policy belongs to core.py and must not be duplicated'
 fi
@@ -352,9 +367,6 @@ for pattern in \
   rg -q -- "$pattern" "$cli" || fail "cli.py: missing human-view contract: $pattern"
 done
 
-# CRITICAL READ-ONLY INVARIANT — DO NOT REMOVE OR WEAKEN THIS CHECK merely to
-# make a change pass. The human CLI is an observer of canonical Work Item state,
-# never a second mutation path. Writes belong only to the MCP/core workflow.
 if rg -i -q '\b(insert|update|delete|replace|alter|drop|create|pragma|vacuum|reindex)\b[^\n]*(work_items|work_item_artifact|table|index|journal|synchronous)' "$cli"; then
   fail 'cli.py: human CLI must remain strictly read-only; SQL mutation/schema/PRAGMA path detected'
 fi
@@ -362,8 +374,6 @@ if rg -q 'from (core|artifacts) import .*update_|from (core|artifacts) import .*
   fail 'cli.py: human CLI must not import/call Work Item or artifact mutation functions'
 fi
 
-# Diagnostic and raw artifact viewing must stream stored chunks directly. Only explicit
-# --json is allowed to materialize selected artifact content in memory.
 if ! CLI_PATH="$cli" python3 - <<'PY'
 import ast
 import os
