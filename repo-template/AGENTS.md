@@ -18,7 +18,7 @@ QiQi sở hữu cross-repo orchestration/TaskPacket. `qiqi_delegate` sở hữu 
 Trước substantive task:
 
 1. Xác nhận current directory là exact Git root.
-2. Nếu TaskPacket identify canonical Work Item như `redmine:116655 @ revision N`, `work_item_get` trước khi reconstruct requirement/history.
+2. Nếu TaskPacket identify canonical Work Item như `redmine:116655 @ revision N`, **MUST apply `$work-item`** trước substantive Work Item-dependent work.
 3. Đọc `ARCHITECTURE.md` khi cần responsibility/module/boundary.
 4. Đọc `docs/VERIFY.md` khi cần implementation/verification.
 5. Sau khi hiểu concern, áp dụng Shared Knowledge decision rule.
@@ -40,11 +40,12 @@ Không scan toàn repo/docs hoặc gọi MCP như ceremony.
 
 Work Item là canonical mutable product-task state xuyên nhiều session/repo. Child được đọc toàn task nhưng execution authority vẫn chỉ current Git root.
 
-### Khi nào đọc
+Always-on boundary:
 
-Nếu TaskPacket identify Work Item, **MUST `work_item_get`** trước substantive work. Dùng current revision/state, không snapshot cũ trong prompt.
-
-Nếu current Work Item làm TaskPacket objective/constraint stale hoặc conflict, handoff conflict cho QiQi; không silently chọn một phía.
+- Repo agent không tự tạo/chọn Work Item chỉ vì prompt chứa ticket, Redmine/Jira/GitHub issue, incident hoặc generic coding task.
+- Nếu TaskPacket/user đã identify/select canonical Work Item, hoặc trước bất kỳ `work_item_*` call nào, **MUST apply `$work-item`**.
+- `$work-item` là canonical operational protocol cho latest read, exact revision, atomic-array reconciliation, snapshot/history semantics, material-session reconciliation, question/decision/change handling và artifact boundary. Không duplicate các mechanics đó trong always-on policy.
+- Nếu latest Work Item làm TaskPacket objective/constraint stale hoặc conflict, handoff conflict cho QiQi; không silently chọn một phía.
 
 ### Execution authority
 
@@ -64,71 +65,7 @@ Agent không được:
 - tự delegate repo khác;
 - rewrite global phase/status chỉ để phản ánh local progress.
 
-### Update
-
-Trước `work_item_update`:
-
-1. dùng exact current `revision`;
-2. reconcile current document;
-3. patch đúng authority;
-4. arrays replace nguyên tử nên giữ entries không định xóa;
-5. **revision conflict → reread → reconcile → retry**, không last-write-wins.
-
-Work Item không phải activity transcript.
-
-### Material session reconciliation
-
-Mọi substantive Work Item session phải để lại canonical continuation state **trước khi final**, kể cả session không tạo artifact.
-
-Giữ boundary cố định:
-
-```text
-repos[current_repo].summary
-  = current effective repo truth sau tất cả work đã biết
-
-repos[current_repo].verification
-  = concrete verification evidence hiện đã established
-
-checkpoints[]
-  = accumulated material phase/milestone history
-
-artifact
-  = optional detail; không thay thế Work Item reconciliation
-```
-
-`repos[current_repo].summary` trả lời “repo này hiện đang đúng/đã làm gì/còn gì”, không phải “session mới nhất đã review/investigate những bước nào”. Không thay current implementation outcome bằng narrative như `reviewed code...`, command sequence hoặc investigation diary. Historical phase finding material đi vào checkpoint; detail dài đi vào optional artifact khi workflow yêu cầu.
-
-Khi session established một milestone mới, preserve các checkpoint material hiện hành và append một checkpoint đủ để future reader reconstruct major task progress mà không cần mở artifact. Có thể dùng metadata descriptive `kind` như `investigation`, `implementation`, `verification`, `review`, `decision`, `report`, `completion`; đây không phải enum/FSM. Nếu milestone có detail artifact thì có thể ghi `artifact_id`; phase không có artifact thì omit.
-
-Generic mapping:
-
-| Session | Canonical effect khi material |
-|---|---|
-| Investigation | current repo truth nếu understanding đổi + checkpoint + question/blocker khi cần |
-| Planning | next action/handoff trong authority + checkpoint khi plan trở thành continuation state |
-| Implementation | current repo truth + checkpoint; artifact không bắt buộc |
-| Verification | `repos[current_repo].verification` + checkpoint; update summary/status nếu conclusion đổi |
-| Review | review artifact khi workflow yêu cầu + checkpoint; preserve current implementation truth |
-| Decision | persist technical decision trong authority; product/customer decision handoff QiQi |
-| Report | report artifact khi workflow yêu cầu + checkpoint; không rewrite repo truth thành report narrative |
-
-#### Implementation
-
-Implementation session **MUST reconcile Work Item ngay cả khi không tạo artifact**. Persist current implemented outcome, relevant repo status/verification và một material implementation checkpoint khi implementation tạo milestone mới. Không dùng việc “không có artifact” làm lý do skip Work Item update.
-
-#### Review
-
-Review session đọc current Work Item trước khi kết luận. Khi workflow yêu cầu review artifact, artifact giữ detail review; checkpoint giữ material review finding. Chỉ sửa `repos[current_repo].summary` khi review làm thay đổi current effective repo truth, ví dụ review dẫn tới code/test fix hoặc xác lập boundary mới ảnh hưởng current state. Nếu review chỉ xác nhận implementation hiện hành, giữ implementation-oriented summary thay vì overwrite bằng `Review code...` narrative.
-
-#### Report
-
-Nếu repo-local workflow yêu cầu report artifact, artifact chỉ là presentation/detail. Append material report checkpoint khi report là milestone; preserve implementation/review history và current repo truth. Overall `summary/status/phase/next_actions` vẫn thuộc QiQi authority.
-
-### Questions/decisions/changes
-
-External/product ambiguity không thể trả lời từ current repo → persist material open question/blocker rồi handoff QiQi; không đoán.
-
-Technical decision thuộc local implementation authority có thể persist khi material. Product/customer Q&A decision do QiQi reconcile. Decision `superseded` không còn hiệu lực chỉ vì xuất hiện trước trong history.
+Trước final substantive Work Item turn, apply `$work-item` và persist material current-repo continuation state trong authority. Artifact creation không thay thế canonical Work Item reconciliation. Nếu `$work-item`/Work Item MCP unavailable, không tạo local task-state fallback hoặc claim state đã persist.
 
 ### Cross-repo handoff
 
@@ -219,11 +156,10 @@ Agent không chia sẻ hidden conversation/reasoning/workspace control/sibling-r
 
 Trước final substantive Work Item turn:
 
-1. update canonical Work Item theo **Material session reconciliation** với current-repo truth + verification + material checkpoint và blocker/question/handoff khi applicable;
-2. artifact creation không thay thế bước reconciliation này;
-3. conflict thì reread/reconcile/retry;
-4. làm Knowledge review/write riêng nếu reusable conclusion;
-5. finalize native response với evidence/verification/remaining work.
+1. apply `$work-item` và hoàn tất canonical current-repo reconciliation trong authority;
+2. artifact creation không thay thế bước Work Item reconciliation;
+3. làm Knowledge review/write riêng nếu reusable conclusion;
+4. finalize native response với evidence/verification/remaining work.
 
 Final response không fixed headings nhưng giữ material implementation/investigation conclusion, paths/evidence, verification result, blocker, Work Item persistence failure, knowledge persistence result/failure và **cross-repo impact: fact, affected boundary/repository, evidence, next action** khi có.
 
@@ -231,9 +167,9 @@ Agent không claim global Work Item complete.
 
 ## Hợp đồng làm việc
 
-- Giữ objective/scope/constraints/acceptance và đối chiếu current Work Item.
+- Giữ objective/scope/constraints/acceptance và đối chiếu current Work Item khi applicable.
 - Tự khám phá local implementation detail.
-- External decision/input cần thiết → persist question/blocker khi phù hợp rồi handoff QiQi.
+- External decision/input cần thiết → persist/handoff theo `$work-item` khi task có Work Item; không đoán.
 - Verification claim phải có actual command/check + result.
 - Không đổi regression mới thành legacy issue để hoàn thành task.
 - Không ghi secret/dữ liệu nhạy cảm vào Work Item, Knowledge hoặc final response.
@@ -251,4 +187,4 @@ Khi current repo ảnh hưởng sibling boundary:
 
 Chọn verification nhỏ nhất đủ chứng minh thay đổi rồi mở rộng theo risk/`docs/VERIFY.md`.
 
-Task repo-local chỉ hoàn thành khi objective/acceptance đạt, verification liên quan đã chạy hoặc caveat rõ, Work Item material state đã persist khi applicable, và Knowledge review/write đã xử lý theo policy.
+Task repo-local chỉ hoàn thành khi objective/acceptance đạt, verification liên quan đã chạy hoặc caveat rõ, Work Item material state đã persist khi applicable theo `$work-item`, và Knowledge review/write đã xử lý theo policy.
