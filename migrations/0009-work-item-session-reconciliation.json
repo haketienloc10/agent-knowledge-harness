@@ -1,7 +1,7 @@
 {
   "version": 9,
   "from_ref": "c377874fcff5cef332e94be2eec0551756baccc3",
-  "to_ref": "a3779d101955713ea4579375ade238eed587a03f",
+  "to_ref": "7100f4ed02f011c99959bbb262971893f970f84e",
   "description": "make material Work Item session reconciliation explicit and preserve current-state versus phase-history boundaries",
   "workspace": {
     "merge": [
