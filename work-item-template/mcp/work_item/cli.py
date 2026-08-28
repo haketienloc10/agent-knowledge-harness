@@ -553,13 +553,42 @@ def render_detail(item: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _stream_artifact_section_chunks(
+    conn: sqlite3.Connection,
+    item_id: str,
+    artifact_id: str,
+    section_id: str,
+) -> tuple[bool, int]:
+    """Stream stored chunks exactly and return whether content was written plus trailing newlines."""
+    rows = conn.execute(
+        "SELECT content FROM work_item_artifact_chunks "
+        "WHERE work_item_id = ? AND artifact_id = ? AND section_id = ? "
+        "ORDER BY chunk_index ASC",
+        (item_id, artifact_id, section_id),
+    )
+    wrote = False
+    trailing_newlines = 0
+    for row in rows:
+        text = str(row["content"])
+        sys.stdout.write(text)
+        if not text:
+            continue
+        wrote = True
+        trailing = len(text) - len(text.rstrip("\n"))
+        if trailing == len(text):
+            trailing_newlines = min(2, trailing_newlines + trailing)
+        else:
+            trailing_newlines = min(2, trailing)
+    return wrote, trailing_newlines
+
+
 def _print_artifact_stream(
     db_path: Path,
     item_id: str,
     artifact_id: str,
     section_id: str | None = None,
 ) -> None:
-    """Stream human text output chunk-by-chunk without materializing the artifact body."""
+    """Stream human diagnostic output chunk-by-chunk without materializing the artifact body."""
     conn = _connect_readonly(db_path)
     try:
         artifact, sections = _artifact_header_and_sections(
@@ -593,22 +622,38 @@ def _print_artifact_stream(
                 f"bytes={section['byte_count']}"
             )
             print(_line("-"))
-            rows = conn.execute(
-                "SELECT content FROM work_item_artifact_chunks "
-                "WHERE work_item_id = ? AND artifact_id = ? AND section_id = ? "
-                "ORDER BY chunk_index ASC",
-                (item_id, artifact_id, section["section_id"]),
+            wrote, trailing_newlines = _stream_artifact_section_chunks(
+                conn, item_id, artifact_id, str(section["section_id"])
             )
-            wrote = False
-            ended_with_newline = True
-            for row in rows:
-                text = str(row["content"])
-                sys.stdout.write(text)
-                wrote = True
-                ended_with_newline = text.endswith("\n")
             if not wrote:
                 sys.stdout.write("-\n")
-            elif not ended_with_newline:
+            elif trailing_newlines == 0:
+                sys.stdout.write("\n")
+    except sqlite3.Error as exc:
+        raise CliError(f"cannot read Work Item artifact: {exc}") from exc
+    finally:
+        conn.close()
+
+
+def _print_artifact_raw_stream(
+    db_path: Path,
+    item_id: str,
+    artifact_id: str,
+    section_id: str | None = None,
+) -> None:
+    """Stream copy/paste-ready section titles and bodies without diagnostic decoration."""
+    conn = _connect_readonly(db_path)
+    try:
+        _, sections = _artifact_header_and_sections(conn, item_id, artifact_id, section_id)
+        for index, section in enumerate(sections):
+            sys.stdout.write(str(section["title"]))
+            sys.stdout.write("\n\n")
+            wrote, trailing_newlines = _stream_artifact_section_chunks(
+                conn, item_id, artifact_id, str(section["section_id"])
+            )
+            if index < len(sections) - 1:
+                sys.stdout.write("\n" * max(0, 2 - trailing_newlines))
+            elif not wrote or trailing_newlines == 0:
                 sys.stdout.write("\n")
     except sqlite3.Error as exc:
         raise CliError(f"cannot read Work Item artifact: {exc}") from exc
@@ -644,8 +689,14 @@ def _build_parser() -> argparse.ArgumentParser:
     artifact_parser.add_argument("id", help="Canonical Work Item id")
     artifact_parser.add_argument("artifact_id")
     artifact_parser.add_argument("--section", dest="section_id", help="Show only one section")
-    artifact_parser.add_argument(
+    artifact_output = artifact_parser.add_mutually_exclusive_group()
+    artifact_output.add_argument(
         "--json", action="store_true", help="Materialize and print selected artifact as JSON."
+    )
+    artifact_output.add_argument(
+        "--raw",
+        action="store_true",
+        help="Stream copy/paste-ready section titles and bodies without diagnostic metadata.",
     )
     return parser
 
@@ -683,6 +734,10 @@ def main(argv: list[str] | None = None) -> int:
                     db, args.id, args.artifact_id, args.section_id
                 )
                 print(json.dumps(artifact, ensure_ascii=False, indent=2, sort_keys=False))
+            elif args.raw:
+                _print_artifact_raw_stream(
+                    db, args.id, args.artifact_id, args.section_id
+                )
             else:
                 _print_artifact_stream(
                     db, args.id, args.artifact_id, args.section_id
