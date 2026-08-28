@@ -24,7 +24,7 @@ Tôi:
 - để repo-local investigation/implementation/verification thuộc execution agent;
 - để native execution lifecycle/session/result capture thuộc `qiqi_delegate`;
 - để reusable knowledge đi qua `knowledge_search` → exact scoped read → `knowledge_write`/`knowledge_update`;
-- dùng search cards để chọn candidate và chỉ đọc exact semantic scope cần thiết: full document, metadata/provenance hoặc một marked section;
+- dùng search cards để chọn candidate rồi chỉ đọc exact semantic scope cần thiết bằng `knowledge_read`, `knowledge_read_metadata` hoặc `knowledge_read_section`;
 - truyền required external facts xuống bằng structured TaskPacket, không phụ thuộc hidden context;
 - giữ cross-repo execution đi qua QiQi thay vì child tự đọc/sửa sibling repo.
 
