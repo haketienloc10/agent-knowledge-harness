@@ -67,7 +67,7 @@ class KnowledgeReviewRegressionTest(unittest.IsolatedAsyncioTestCase):
             self.assertIn(tool, description)
         self.assertIn("knowledge_update.expected_revision", description)
 
-    async def test_scoped_section_read_update_preserves_markdown_whitespace(self):
+    async def test_last_scoped_section_round_trip_preserves_markdown_whitespace(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             init_store(root)
@@ -86,7 +86,7 @@ class KnowledgeReviewRegressionTest(unittest.IsolatedAsyncioTestCase):
                             "id": change["id"],
                             "expected_revision": change["revision"],
                             "changes": {
-                                "section": {"id": "contract", "content": body}
+                                "section": {"id": "verification", "content": body}
                             },
                         },
                     )
@@ -94,10 +94,48 @@ class KnowledgeReviewRegressionTest(unittest.IsolatedAsyncioTestCase):
 
                     section = await client.call_tool(
                         "knowledge_read_section",
-                        {"id": change["id"], "section_id": "contract"},
+                        {"id": change["id"], "section_id": "verification"},
                     )
                     self.assertFalse(section.is_error)
                     self.assertEqual(section.structured_content["content"], body)
+
+                    full = await client.call_tool(
+                        "knowledge_read", {"ids": [change["id"]]}
+                    )
+                    self.assertFalse(full.is_error)
+                    self.assertTrue(
+                        full.structured_content["results"][0]["content"].endswith(body)
+                    )
+
+    async def test_whole_content_partial_update_preserves_boundary_markdown_whitespace(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            init_store(root)
+            with patch.dict(os.environ, {"KNOWLEDGE_STORE_ROOT": str(root)}):
+                async with Client(mcp) as client:
+                    created = await client.call_tool(
+                        "knowledge_write", {"entries": [entry(content="Original body.")]}
+                    )
+                    self.assertFalse(created.is_error)
+                    change = created.structured_content["changes"][0]
+                    replacement = "    indented_code()\nline with hard break  "
+
+                    updated = await client.call_tool(
+                        "knowledge_update",
+                        {
+                            "id": change["id"],
+                            "expected_revision": change["revision"],
+                            "changes": {"content": replacement},
+                        },
+                    )
+                    self.assertFalse(updated.is_error)
+                    full = await client.call_tool(
+                        "knowledge_read", {"ids": [change["id"]]}
+                    )
+                    self.assertFalse(full.is_error)
+                    self.assertEqual(
+                        full.structured_content["results"][0]["content"], replacement
+                    )
 
     async def test_metadata_section_index_preserves_exact_stored_heading(self):
         content = """<!-- knowledge-section:contract -->
