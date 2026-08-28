@@ -4,7 +4,7 @@ import io
 import os
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
@@ -72,6 +72,52 @@ class WorkItemCliTests(unittest.TestCase):
             expected_artifact_revision=artifact["revision"],
             section_id="requirements",
             content="\nSecond stored chunk.",
+        )
+        artifact = finalize_artifact(
+            self.db,
+            created["id"],
+            artifact["artifact_id"],
+            expected_artifact_revision=artifact["revision"],
+        )
+        return created, artifact
+
+    def _create_redmine_raw_report(
+        self, item_id: str = "redmine:112665"
+    ) -> tuple[dict, dict]:
+        created = self._create(item_id, title="Redmine raw report", repo="sgapi")
+        artifact = create_artifact(
+            self.db,
+            created["id"],
+            artifact_type="report",
+            title="Redmine report",
+            summary="Diagnostic summary must not appear in raw output",
+            based_on_work_item_revision=created["revision"],
+        )
+        artifact = append_artifact(
+            self.db,
+            created["id"],
+            artifact["artifact_id"],
+            expected_artifact_revision=artifact["revision"],
+            section_id="root-cause-requirement",
+            section_title="h3. +1. Root-cause/requirement:+",
+            content="p((. *Yêu cầu:* predicate isCo",
+        )
+        artifact = append_artifact(
+            self.db,
+            created["id"],
+            artifact["artifact_id"],
+            expected_artifact_revision=artifact["revision"],
+            section_id="root-cause-requirement",
+            content="mbiCarrier.\n",
+        )
+        artifact = append_artifact(
+            self.db,
+            created["id"],
+            artifact["artifact_id"],
+            expected_artifact_revision=artifact["revision"],
+            section_id="solution",
+            section_title="h3. +2. Solution:+",
+            content="* Apply verified fix.",
         )
         artifact = finalize_artifact(
             self.db,
@@ -169,6 +215,65 @@ class WorkItemCliTests(unittest.TestCase):
         self.assertIn("Detailed requirement evidence", artifact_out.getvalue())
         self.assertIn("Second stored chunk", artifact_out.getvalue())
 
+    def test_raw_artifact_stream_is_copy_paste_ready_and_hides_chunk_boundaries(self) -> None:
+        created, artifact = self._create_redmine_raw_report()
+        raw_out = io.StringIO()
+        with patch(
+            "cli._get_artifact_json_readonly",
+            side_effect=AssertionError("raw mode must not materialize full artifact JSON"),
+        ):
+            with redirect_stdout(raw_out):
+                raw_rc = main(
+                    ["artifact", created["id"], artifact["artifact_id"], "--raw"]
+                )
+
+        self.assertEqual(raw_rc, 0)
+        self.assertEqual(
+            raw_out.getvalue(),
+            "h3. +1. Root-cause/requirement:+\n\n"
+            "p((. *Yêu cầu:* predicate isCombiCarrier.\n\n"
+            "h3. +2. Solution:+\n\n"
+            "* Apply verified fix.\n",
+        )
+        for diagnostic in (
+            "SUMMARY",
+            "revision=",
+            "[root-cause-requirement]",
+            "chunks=",
+            "chars=",
+            "bytes=",
+            "Diagnostic summary",
+        ):
+            self.assertNotIn(diagnostic, raw_out.getvalue())
+
+    def test_raw_artifact_can_stream_one_section_with_its_title(self) -> None:
+        created, artifact = self._create_redmine_raw_report("redmine:112666")
+        raw_out = io.StringIO()
+        with redirect_stdout(raw_out):
+            raw_rc = main(
+                [
+                    "artifact",
+                    created["id"],
+                    artifact["artifact_id"],
+                    "--section",
+                    "solution",
+                    "--raw",
+                ]
+            )
+        self.assertEqual(raw_rc, 0)
+        self.assertEqual(
+            raw_out.getvalue(),
+            "h3. +2. Solution:+\n\n* Apply verified fix.\n",
+        )
+
+    def test_raw_and_json_are_mutually_exclusive(self) -> None:
+        stderr = io.StringIO()
+        with redirect_stderr(stderr):
+            with self.assertRaises(SystemExit) as raised:
+                main(["artifact", "redmine:1", "report:1", "--raw", "--json"])
+        self.assertEqual(raised.exception.code, 2)
+        self.assertIn("not allowed with argument", stderr.getvalue())
+
     def test_list_show_and_artifact_commands_do_not_write_database(self) -> None:
         created, artifact = self._create_report("redmine:9")
         before = get_work_item(self.db, created["id"])
@@ -188,6 +293,11 @@ class WorkItemCliTests(unittest.TestCase):
             json_rc = main(
                 ["artifact", created["id"], artifact["artifact_id"], "--json"]
             )
+        raw_out = io.StringIO()
+        with redirect_stdout(raw_out):
+            raw_rc = main(
+                ["artifact", created["id"], artifact["artifact_id"], "--raw"]
+            )
 
         after_mtime = self.db.stat().st_mtime_ns
         after = get_work_item(self.db, created["id"])
@@ -195,12 +305,19 @@ class WorkItemCliTests(unittest.TestCase):
         self.assertEqual(show_rc, 0)
         self.assertEqual(artifact_rc, 0)
         self.assertEqual(json_rc, 0)
+        self.assertEqual(raw_rc, 0)
         self.assertEqual(before["revision"], after["revision"])
         self.assertEqual(before_mtime, after_mtime)
         self.assertIn("WORK ITEMS", list_out.getvalue())
         self.assertIn("ARTIFACTS (1)", show_out.getvalue())
         self.assertIn("Detailed requirement evidence", artifact_out.getvalue())
         self.assertIn('"content": "Detailed requirement evidence', json_out.getvalue())
+        self.assertEqual(
+            raw_out.getvalue(),
+            "Requirement review\n\n"
+            "Detailed requirement evidence that should not appear in thin show output.\n"
+            "Second stored chunk.\n",
+        )
 
 
 if __name__ == "__main__":
