@@ -54,14 +54,12 @@ questions:
     answer: Có, trả null.
     decision_id: d1
 
-# Decision giữ lý do task hiện tại được hiểu/triển khai như vậy.
 decisions:
   - id: d1
     status: active
     summary: paymentStatus luôn xuất hiện; unknown trả null.
     decided_by: customer
 
-# Change ghi requirement/scope evolution, không ghi transcript.
 changes:
   - id: c1
     type: requirement_added
@@ -71,12 +69,12 @@ changes:
 repos:
   backend-api:
     status: done
-    summary: Implementation hoàn tất.
+    summary: paymentStatus đã được expose theo current requirement; không còn repo-local work.
     verification:
       - Unit tests passed
   frontend-web:
     status: pending
-    summary: ""
+    summary: Chưa consume paymentStatus.
     verification: []
 
 blockers: []
@@ -96,7 +94,15 @@ next_actions:
 
 checkpoints:
   - repo: backend-api
-    summary: Backend implementation + UT hoàn tất.
+    kind: implementation
+    summary: Backend implementation hoàn tất; paymentStatus được expose theo requirement.
+  - repo: backend-api
+    kind: verification
+    summary: Focused unit tests pass.
+  - repo: backend-api
+    kind: review
+    artifact_id: review:1
+    summary: Review xác nhận implementation, không có blocking finding.
 ```
 
 `phase` là descriptive state, không phải finite-state-machine. Task có thể quay từ
@@ -121,7 +127,56 @@ questions/decisions/changes/checkpoints
 = material history giải thích vì sao snapshot hiện tại hình thành
 ```
 
+`repos[repo].summary` là **current effective repo truth** sau tất cả work đã biết. Nó
+không phải narrative của session mới nhất. `checkpoints[]` là accumulated material
+phase/milestone history; future reader phải reconstruct được major progression mà không
+bắt buộc mở artifact.
+
+Checkpoint có thể thêm:
+
+```text
+kind        = optional free-form descriptive milestone label
+artifact_id = optional detail artifact reference
+```
+
+`kind` không phải enum/FSM. Ví dụ hữu ích: `investigation`, `implementation`,
+`verification`, `review`, `decision`, `report`, `completion`.
+
 Không persist terminal transcript, command-by-command activity hoặc agent reasoning.
+
+## Material session reconciliation
+
+Mọi substantive Work Item session established material state phải reconcile canonical
+Work Item trước khi kết thúc. **Artifact creation không thay thế Work Item update.**
+
+Generic rule:
+
+```text
+repos[repo].summary
+  = current effective repository state
+
+repos[repo].verification
+  = concrete verification evidence hiện đã established
+
+checkpoints[]
+  = material phase/milestone history
+
+artifact
+  = optional detailed material
+```
+
+Phase-specific guardrails chỉ áp dụng nơi failure mode đặc biệt:
+
+- **Implementation:** phải persist current implemented outcome + material checkpoint dù
+  không tạo artifact.
+- **Review:** review artifact giữ detail; checkpoint giữ material finding. Không overwrite
+  implementation-oriented repo summary thành `Review code...` narrative nếu review chỉ
+  xác nhận current implementation.
+- **Report:** report artifact là presentation/detail; preserve prior repo state/history,
+  rồi QiQi reconcile global summary/status/phase/next action.
+
+Investigation, planning và verification dùng generic rule trên; không tạo hard workflow
+machine hoặc event log.
 
 ## Optional task artifacts
 
@@ -139,7 +194,7 @@ Artifact
 
 Artifact chỉ được materialize khi người dùng explicitly yêu cầu loại detail đó hoặc
 workflow explicit yêu cầu artifact. Không tạo artifact như progress bookkeeping mặc
-định.
+định và không dùng artifact như replacement cho canonical continuation state.
 
 MVP types vẫn cố định:
 
@@ -255,8 +310,8 @@ changes[]       = requirement/scope evolution; không phải generic code/progre
 blockers[]      = điều thực sự chặn tiến độ; không phải risk/note chung
 handoffs[]      = remaining work chuyển giữa repo/owner
 next_actions[]  = object có action + repo hoặc owner; không phải list[string]
-checkpoints[]   = material milestone/evidence; không phải terminal/activity log
-repos           = map theo repo, nested object merge
+checkpoints[]   = accumulated material milestones; optional kind/artifact_id
+repos           = current repo truth; nested object merge
 ```
 
 Canonical examples:
@@ -275,6 +330,12 @@ blockers:
 next_actions:
   - repo: sg_mail
     action: Xác định classification boundary.
+
+checkpoints:
+  - repo: sg_mail
+    kind: implementation-rework
+    artifact_id: review:2
+    summary: Fixed review finding and reverified.
 ```
 
 Các nested semantic record cho phép provenance/evidence mở rộng như `source`,
@@ -413,11 +474,12 @@ agent-work-item list
 agent-work-item show redmine:113387
 agent-work-item artifact redmine:113387 report:1
 agent-work-item artifact redmine:113387 report:1 --section code-review
+agent-work-item artifact redmine:113387 report:1 --raw
 ```
 
 `show` chỉ hiển thị thin artifact index. Text-mode `artifact` stream stored chunks trực
-tiếp từ read-only SQLite connection; chỉ explicit `--json` mới materialize full selected
-artifact. CLI không có mutation path.
+tiếp từ read-only SQLite connection; `--raw` stream copy/paste-ready titles + bodies;
+chỉ explicit `--json` mới materialize full selected artifact. CLI không có mutation path.
 
 Chi tiết: `CLI.md`.
 
@@ -459,6 +521,7 @@ Test/check cover ít nhất:
 - nested repo state merge;
 - stale Work Item revision và concurrent writers;
 - typed `WorkItemPatch` semantic shapes/descriptions;
+- repo-summary current-truth semantics + checkpoint `kind`/`artifact_id` metadata;
 - reject các payload từng gây retry: question string/`text`, blocker string, invalid change enum,
   next-action string/missing owner;
 - preserve nested provenance, repo partial merge và explicit merge-patch `null`;
@@ -477,7 +540,7 @@ Test/check cover ít nhất:
 - section ngoài template vẫn hợp lệ vì template chỉ advisory;
 - finalize empty bị reject và complete artifact immutable;
 - human CLI thin artifact index/full explicit artifact view;
-- human CLI text stream + explicit JSON materialization đều read-only;
+- human CLI diagnostic/raw streaming + explicit JSON materialization đều read-only;
 - static invariant cho MCP tool count, typed update surface, template/storage boundary,
   post-commit mutation response, bounded payload và read-only boundary.
 
