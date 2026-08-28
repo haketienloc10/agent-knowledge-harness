@@ -83,7 +83,13 @@ class RepoPatch(_SemanticRecord):
     )
     summary: str | None = Field(
         default=None,
-        description="Current concise repo-specific state/evidence summary.",
+        description=(
+            "Current effective repository contribution/state after all work known so far. Describe "
+            "what is true now, including implemented outcome, verified boundary, and remaining repo "
+            "work when material. Do not replace this snapshot with a narrative of the latest "
+            "investigation, review, report, command sequence, or agent session; historical phase "
+            "findings belong in checkpoints or optional artifacts."
+        ),
     )
     verification: list[str] | None = Field(
         default=None,
@@ -133,13 +139,28 @@ class NextActionPatch(_SemanticRecord):
 class CheckpointPatch(_SemanticRecord):
     summary: str = Field(
         description=(
-            "Material milestone/evidence summary; not terminal logs, commands, or routine progress "
-            "bookkeeping."
+            "Material milestone/evidence summary established by a substantive phase; not terminal "
+            "logs, commands, or routine progress bookkeeping. Keep enough material history for a "
+            "future reader to reconstruct major task progress without opening optional artifacts."
         )
     )
     repo: str | None = Field(
         default=None,
-        description="Repository this checkpoint belongs to when repo-specific.",
+        description="Repository this checkpoint belongs to when repo-specific; use global when appropriate.",
+    )
+    kind: str | None = Field(
+        default=None,
+        description=(
+            "Optional free-form descriptive phase/milestone label such as investigation, implementation, "
+            "verification, review, decision, report, or completion. This is not an enum or workflow FSM."
+        ),
+    )
+    artifact_id: str | None = Field(
+        default=None,
+        description=(
+            "Optional artifact id containing detailed material for this milestone, for example review:1 "
+            "or report:1. Omit when the phase has no artifact."
+        ),
     )
     at: str | None = Field(
         default=None,
@@ -205,8 +226,9 @@ class WorkItemPatch(BaseModel):
     repos: dict[str, RepoPatch | None] | None = Field(
         default=None,
         description=(
-            "Repository map keyed by repo name. Nested repo objects merge; only supplied repo fields are "
-            "patched. A repo value of null requests deletion through JSON merge-patch semantics."
+            "Repository map keyed by repo name. Each repo summary is the current effective repo truth, "
+            "not a narrative of the latest session. Nested repo objects merge; only supplied repo "
+            "fields are patched. A repo value of null requests deletion through JSON merge-patch semantics."
         ),
     )
     blockers: list[BlockerPatch] | None = Field(
@@ -233,8 +255,10 @@ class WorkItemPatch(BaseModel):
     checkpoints: list[CheckpointPatch] | None = Field(
         default=None,
         description=(
-            "Full replacement of material milestone/evidence summaries; not terminal logs or routine "
-            "activity history. Arrays replace atomically."
+            "Full replacement of accumulated material phase/milestone history. Preserve existing material "
+            "checkpoints and append one when the current substantive session establishes a new milestone. "
+            "Use optional kind/artifact_id to make major progress reconstructable; do not record terminal "
+            "logs or routine activity. Arrays replace atomically."
         ),
     )
 
