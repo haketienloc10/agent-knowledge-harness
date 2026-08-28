@@ -7,11 +7,13 @@ from pathlib import Path
 from mcp.server import MCPServer
 
 from contracts import (
+    KnowledgeId,
     KnowledgeReadResult,
     KnowledgeSearchContext,
     KnowledgeSearchResult,
     KnowledgeWriteResult,
     ReadIds,
+    Revision,
     SearchKeywords,
     SearchLimit,
     WriteEntries,
@@ -26,6 +28,14 @@ from core import (
     search_knowledge,
     write_knowledge,
 )
+from partial_contracts import (
+    KnowledgeMetadataReadResult,
+    KnowledgePatch,
+    KnowledgeSectionReadResult,
+    SectionId,
+)
+from partial_update import update_knowledge
+from sections import SectionError, parse_sections, read_section, section_summaries
 
 
 def _store_root() -> Path:
@@ -38,20 +48,29 @@ def _store_root() -> Path:
 def _raise_actionable_error(exc: KnowledgeError) -> None:
     message = str(exc)
     lowered = message.lower()
+    if "knowledge section does not exist" in lowered:
+        raise ValueError(
+            "code=missing_section; "
+            f"{message}; action=call knowledge_read_metadata for the exact id, choose an "
+            "existing returned section id, then retry without inventing or implicitly "
+            "creating a section"
+        ) from exc
     if isinstance(exc, ConflictError):
         if "revision conflict" in lowered or "changed during update" in lowered:
             raise ValueError(
                 "code=revision_conflict; "
-                f"{message}; action=call knowledge_read again for the exact knowledge id, "
-                "re-distill against the returned content/revision, then retry update with "
-                "that exact expected_revision"
+                f"{message}; action=read the exact knowledge target again, reconcile "
+                "against the returned revision, then retry with that exact "
+                "expected_revision. Use knowledge_read_metadata for metadata-only work, "
+                "knowledge_read_section for one marked section, or knowledge_read when "
+                "the full semantic content is required"
             ) from exc
         if "already exists or collides" in lowered:
             raise ValueError(
                 "code=create_conflict; "
-                f"{message}; action=call knowledge_search for the concept, hydrate the "
-                "existing item with knowledge_read, then update with exact id + "
-                "expected_revision instead of retrying create"
+                f"{message}; action=call knowledge_search for the concept, read the "
+                "existing item, then update with exact id + expected_revision instead "
+                "of retrying create"
             ) from exc
         if "does not exist for update" in lowered:
             raise ValueError(
@@ -70,7 +89,8 @@ def _raise_actionable_error(exc: KnowledgeError) -> None:
         raise ValueError(
             "code=knowledge_validation; "
             f"{message}; action=inspect the typed tool schema and correct the payload "
-            "instead of guessing filesystem fields or flattening nested routing metadata"
+            "instead of guessing filesystem fields, flattening routing metadata, or "
+            "editing semantic section markers manually"
         ) from exc
     if "knowledge id does not exist" in lowered:
         raise ValueError(
@@ -80,18 +100,25 @@ def _raise_actionable_error(exc: KnowledgeError) -> None:
     raise RuntimeError(f"code=knowledge_store_error; {message}") from exc
 
 
+def _section_validation_error(exc: SectionError) -> ValidationError:
+    return ValidationError(str(exc))
+
+
 mcp = MCPServer(
     "Shared Knowledge",
     instructions=(
         "Repository-independent durable knowledge service with progressive disclosure. "
         "Use knowledge_search after understanding the current work; search returns bounded "
-        "routing decision cards, not evidence sufficient for implementation or update. "
-        "Hydrate only the one or two selected exact ids with knowledge_read before relying "
-        "on durable content. knowledge_read returns the exact revision and full semantic "
-        "payload required for safe updates; search intentionally does not return revision. "
-        "Before knowledge_write, apply the installed knowledge-distill skill. Create omits "
-        "id/revision; update uses exact id + expected_revision from knowledge_read. Callers "
-        "never choose knowledge filesystem paths or add a language field."
+        "routing decision cards, not evidence sufficient for implementation or update, and "
+        "intentionally does not return revision. Read only the exact selected target at the "
+        "smallest semantic scope required: knowledge_read for the full document, "
+        "knowledge_read_metadata for metadata/provenance/revision without content, or "
+        "knowledge_read_section for one existing stable marked section. Before "
+        "knowledge_write or knowledge_update, apply the installed knowledge-distill skill. "
+        "Create uses knowledge_write and omits id/revision. Full-document update remains "
+        "supported by knowledge_write; scoped mutations use knowledge_update with exact id "
+        "+ expected_revision. Callers never choose filesystem paths, add a language field, "
+        "or invent section ids."
     ),
 )
 
@@ -120,23 +147,109 @@ async def knowledge_read(ids: ReadIds) -> KnowledgeReadResult:
     """Hydrate one or two exact knowledge ids with full semantic content and revision."""
     try:
         result = read_knowledge(_store_root(), ids)
+        for item in result["results"]:
+            parse_sections(item["content"])
+    except SectionError as exc:
+        _raise_actionable_error(_section_validation_error(exc))
     except KnowledgeError as exc:
         _raise_actionable_error(exc)
     return KnowledgeReadResult.model_validate(result)
 
 
 @mcp.tool()
-async def knowledge_write(entries: WriteEntries) -> KnowledgeWriteResult:
-    """Persist verified durable knowledge after applying the installed knowledge-distill skill.
+async def knowledge_read_metadata(ids: ReadIds) -> KnowledgeMetadataReadResult:
+    """Read exact knowledge metadata, provenance, section index, and revision without content."""
+    try:
+        hydrated = read_knowledge(_store_root(), ids)
+        results = []
+        for item in hydrated["results"]:
+            results.append(
+                {
+                    "id": item["id"],
+                    "revision": item["revision"],
+                    "canonical_name": item["canonical_name"],
+                    "title": item["title"],
+                    "scope": item["scope"],
+                    "routing": item["routing"],
+                    "sources": item["sources"],
+                    "sections": section_summaries(item["content"]),
+                }
+            )
+    except SectionError as exc:
+        _raise_actionable_error(_section_validation_error(exc))
+    except KnowledgeError as exc:
+        _raise_actionable_error(exc)
+    return KnowledgeMetadataReadResult.model_validate({"results": results})
 
-    Search the candidate concept before create/update. Create omits id/revision. Update
-    requires the exact id + expected_revision from a full knowledge_read. Keep routing
-    nested, provenance non-empty, and filesystem-owned/language fields out of the payload.
+
+@mcp.tool()
+async def knowledge_read_section(
+    id: KnowledgeId,
+    section_id: SectionId,
+) -> KnowledgeSectionReadResult:
+    """Read one existing stable marked semantic section plus its whole-document revision."""
+    try:
+        item = read_knowledge(_store_root(), [id])["results"][0]
+        section = read_section(item["content"], section_id)
+        result = {
+            "id": item["id"],
+            "revision": item["revision"],
+            **section,
+        }
+    except SectionError as exc:
+        message = str(exc)
+        error: KnowledgeError
+        if "does not exist" in message:
+            error = ValidationError(message)
+        else:
+            error = _section_validation_error(exc)
+        _raise_actionable_error(error)
+    except KnowledgeError as exc:
+        _raise_actionable_error(exc)
+    return KnowledgeSectionReadResult.model_validate(result)
+
+
+@mcp.tool()
+async def knowledge_write(entries: WriteEntries) -> KnowledgeWriteResult:
+    """Create or fully replace verified durable knowledge after knowledge-distill review.
+
+    Search the candidate concept before create/update. Create omits id/revision. A legacy
+    full-document update requires exact id + expected_revision from knowledge_read. Keep
+    routing nested, provenance non-empty, and filesystem-owned/language fields out of the
+    payload. Stable semantic section markers are optional but, when present, must be unique
+    standalone lowercase-kebab markers immediately followed by Markdown H2-H6 headings.
     Pass entries=[] only when policy required a final review and no durable candidate remains.
     """
     payload = [entry.model_dump(exclude_none=True) for entry in entries]
     try:
+        for entry in payload:
+            parse_sections(entry["content"])
         result = write_knowledge(_store_root(), payload)
+    except SectionError as exc:
+        _raise_actionable_error(_section_validation_error(exc))
+    except KnowledgeError as exc:
+        _raise_actionable_error(exc)
+    return KnowledgeWriteResult.model_validate(result)
+
+
+@mcp.tool()
+async def knowledge_update(
+    id: KnowledgeId,
+    expected_revision: Revision,
+    changes: KnowledgePatch,
+) -> KnowledgeWriteResult:
+    """Patch metadata, whole content, or one existing semantic section without resending the document.
+
+    Read the exact target first at the smallest sufficient scope. Metadata patches preserve
+    content. Whole-content replacement preserves metadata. Section replacement preserves
+    the stable marker and stored heading and changes only that section body. Metadata may be
+    combined atomically with either content mode. Full-content and section replacement are
+    mutually exclusive. The whole knowledge document still has one SHA-256 revision.
+    """
+    try:
+        result = update_knowledge(
+            _store_root(), id, expected_revision, changes.to_patch()
+        )
     except KnowledgeError as exc:
         _raise_actionable_error(exc)
     return KnowledgeWriteResult.model_validate(result)
