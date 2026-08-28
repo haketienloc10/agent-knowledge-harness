@@ -1,0 +1,29 @@
+{
+  "version": 10,
+  "from_ref": "7100f4ed02f011c99959bbb262971893f970f84e",
+  "to_ref": "d62d0efc579fe08c803a6b268cf343b2d248f2b0",
+  "description": "move Work Item operational read/write/reconciliation rules into one shared user-scoped skill and remove the workspace-local ticket-work-item entrypoint",
+  "workspace": {
+    "merge": [
+      "workspace-template/AGENTS.md"
+    ],
+    "replace": [
+      "workspace-template/README.md",
+      "workspace-template/scripts/workspace-check.sh"
+    ],
+    "delete": [
+      "workspace-template/.agents/skills/ticket-work-item/SKILL.md"
+    ],
+    "manual_review": []
+  },
+  "repo": {
+    "merge": [
+      "repo-template/AGENTS.md"
+    ],
+    "replace": [
+      "repo-template/scripts/repo-check.sh"
+    ],
+    "delete": [],
+    "manual_review": []
+  }
+}

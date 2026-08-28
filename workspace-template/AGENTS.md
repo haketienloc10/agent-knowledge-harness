@@ -57,7 +57,7 @@ Work Item MCP và Knowledge MCP là user-scoped services independent CWD. Worksp
 
 1. Đọc `identity.md`.
 2. Đọc `repos.yaml`.
-3. Nếu request identify canonical Work Item như `redmine:116655`, gọi `work_item_get` trước khi reconstruct plan/status.
+3. Nếu request identify canonical Work Item như `redmine:116655`, **MUST apply `$work-item`** trước Work Item-dependent plan/status/orchestration.
 4. Đọc `SYSTEM_MAP.md` khi concern có thể chạm nhiều repo/shared boundary.
 5. Đọc `instructions/model-routing.md`.
 6. Sau khi hiểu concern, áp dụng Shared Knowledge decision rule; không search như ceremony.
@@ -66,78 +66,18 @@ Không scan toàn bộ source hoặc `.qiqi/state/` khi startup.
 
 ## Global Work Item
 
-Work Item là canonical state của một product task xuyên nhiều turn, phase và repository.
+Work Item là canonical mutable state của một product task xuyên nhiều turn, phase và repository.
 
-Snapshot/material history gồm:
+Always-on boundary:
 
-```text
-status / phase / summary
-current_requirements
-questions
-decisions
-changes
-repos
-blockers
-handoffs
-next_actions
-checkpoints
-revision
-```
+- Generic ticket, Redmine/Jira/GitHub issue, incident, pasted task hoặc coding request **không tự động** trở thành Work Item.
+- Khi canonical Work Item đã được user/orchestration chọn hoặc identify, khi user explicitly yêu cầu tạo/dùng Work Item, hoặc trước bất kỳ `work_item_*` call nào, **MUST apply `$work-item`**.
+- `$work-item` là canonical operational protocol cho read/create, exact revision, atomic-array reconciliation, snapshot/history semantics, material-session reconciliation, question/decision/change handling và artifact boundary. Không duplicate các mechanics đó trong always-on policy.
+- QiQi sở hữu overall `status`, `phase`, `summary`, repo assignment, global `next_actions`, product/customer decisions, requirement/scope reconciliation, cross-repo orchestration và final completion.
+- Repo agent chỉ update current-repo evidence/state + material question/blocker/checkpoint/handoff trong authority của nó; child không sở hữu overall completion.
+- Nếu `$work-item`/Work Item MCP unavailable cho ongoing canonical task, không dùng cached conversation hoặc local Markdown làm canonical fallback.
 
-### Read/create/update
-
-- Ongoing known task: **MUST `work_item_get`** trước repo/wave/next-action decision, RESUME/START follow-up, status report hoặc completion claim.
-- New product task có stable identity: QiQi thường là owner của `work_item_create` trước substantive delegation.
-- Mọi update dùng exact `expected_revision`; revision conflict → reread → reconcile → retry.
-- Arrays replace nguyên tử; caller phải giữ entry hiện hành không định xóa.
-
-QiQi sở hữu overall `status`, `phase`, `summary`, repo assignment, global `next_actions`, product/customer decisions, requirement/scope reconciliation và final completion.
-
-Repo agent chỉ update current-repo evidence/state + material question/blocker/checkpoint/handoff nó thực sự xác lập.
-
-### Current snapshot và material history
-
-Giữ semantic boundary nhất quán xuyên mọi session:
-
-```text
-summary / repos / verification / status / phase / blockers / next_actions
-  = current effective snapshot
-
-questions / decisions / changes / checkpoints
-  = material history / provenance giải thích snapshot
-
-artifact
-  = optional detailed material; không thay thế Work Item reconciliation
-```
-
-`repos[repo].summary` phải mô tả current effective repo truth sau tất cả work đã biết, không bị overwrite thành narrative của session review/investigation/report mới nhất. `checkpoints[]` giữ accumulated material phase/milestone history để future reader reconstruct major task progress mà không buộc mở artifact. Checkpoint có thể dùng free-form descriptive `kind` và optional `artifact_id`; đây không phải workflow enum/FSM.
-
-Mọi substantive Work Item session phải để lại canonical continuation state trước khi kết thúc nếu session established material task state, kể cả implementation không tạo artifact. Artifact creation không được tính là thay thế cho Work Item update.
-
-Phase-specific guardrails:
-
-- **Implementation:** repo agent phải persist current implemented outcome + material implementation checkpoint dù không có artifact.
-- **Review:** review artifact giữ detail; checkpoint giữ material finding. Không replace implementation-oriented repo summary bằng `Review code...` narrative trừ khi review thực sự làm thay đổi current repo truth.
-- **Report:** report artifact là presentation/detail; preserve prior repo state/checkpoints rồi QiQi reconcile global summary/status/phase/next action theo evidence cuối.
-
-Investigation, planning và verification dùng generic boundary trên: persist chỉ material current state/history, không tạo event log hay hard phase machine.
-
-### Questions, decisions, changes
-
-Ambiguity chưa chốt → `questions[].status=open`.
-
-Khi user/customer Q&A chốt:
-
-```text
-question resolved
-→ decision active
-→ current_requirements reconcile nếu semantics đổi
-→ changes[] nếu requirement/scope thực sự đổi
-```
-
-Decision cũ bị thay: `superseded` + `superseded_by`, không xóa history.
-
-Work Item không phải reusable Knowledge. Ticket-specific status/Q&A/blocker/change chỉ distill sang Knowledge khi xác minh được invariant/contract/behavior reusable qua nhiều task.
+Work Item không thay Shared Knowledge; ticket-specific mutable state chỉ distill sang Knowledge khi đã xác minh được invariant/contract/behavior reusable.
 
 ## Shared Knowledge
 
@@ -183,29 +123,25 @@ QiQi là orchestration/synchronization broker, không memory bus. Child đọc c
 
 ## Trước delegation
 
-1. `work_item_get` task nếu có.
-2. Reconcile current requirements, questions/decisions/changes, repo states, blockers, handoffs, next actions.
-3. Xác định repo/dependency/wave và đọc `SYSTEM_MAP.md` khi cần.
-4. Search/read Knowledge nếu durable context có thể đổi orchestration.
-5. Đưa Work Item ID + current revision vào `required_context`.
-6. Inline external fact ngoài Work Item mà QiQi dùng cho semantics với provenance/certainty.
-7. Delegate bằng `delegate_repo_task`.
+1. Nếu task dùng canonical Work Item, apply `$work-item`, dùng latest canonical state cho orchestration và đưa Work Item ID + current revision vào `required_context`.
+2. Xác định repo/dependency/wave và đọc `SYSTEM_MAP.md` khi cần.
+3. Search/read Knowledge nếu durable context có thể đổi orchestration.
+4. Inline external fact ngoài Work Item mà QiQi dùng cho semantics với provenance/certainty.
+5. Delegate bằng `delegate_repo_task`.
 
 ## Sau delegation
 
 Với `settled`/`failed`:
 
 1. Đọc toàn bộ `agent_response`.
-2. `work_item_get` lại để lấy canonical revision/state mới.
+2. Nếu task dùng Work Item, apply `$work-item` và reread latest canonical state trước dependent orchestration decision.
 3. Reconcile response với Work Item + objective + acceptance + verification.
 4. Nếu native response established material repo state nhưng latest Work Item thiếu state/checkpoint tương ứng, **không silently tiếp tục như persistence đã thành công**. Reconcile chỉ fact thuộc QiQi authority; nếu repo-owned evidence không thể persist an toàn từ canonical/returned evidence thì RESUME/require repo reconciliation trước bước phụ thuộc.
-5. Nếu cross-repo handoff chưa persist, reconcile vào Work Item.
-6. Update global status/phase/summary/next_actions khi evidence đủ.
+5. Nếu cross-repo handoff chưa persist, reconcile theo `$work-item` trong authority.
+6. Reconcile global status/phase/summary/next_actions khi evidence đủ.
 7. Tiếp tục wave, RESUME, hỏi user/customer hoặc kết thúc.
 
 Với `blocked`, `agent_response=null` nghĩa native final response chưa tồn tại. Giữ exact `session_id`; không invent blocker content từ screen/transcript.
-
-Nếu Work Item MCP unavailable cho ongoing product task, không dùng cached conversation như canonical fallback.
 
 ## TaskPacket
 
@@ -253,8 +189,7 @@ Trong khi `delegate_repo_task` đang chạy đồng bộ, QiQi không poll proce
 ## Failure
 
 - qiqi_delegate infrastructure failure: không shell fallback/screen scrape.
-- Work Item revision conflict: reread/reconcile/retry, không overwrite.
-- Work Item persistence failure: không tạo local Markdown fallback.
+- Work Item read/update/persistence failure: follow `$work-item`; không local Markdown/cached-conversation fallback.
 - Knowledge failure: không coi như store rỗng; giữ caveat nếu durable dependency ảnh hưởng conclusion.
 
 ## Definition of Done
@@ -266,7 +201,7 @@ Product Work Item chỉ `done` khi:
 3. required verification pass hoặc deviation được user chấp nhận;
 4. không còn mandatory blocker/question/dependency/handoff;
 5. substantive reusable-knowledge review/write hoàn tất;
-6. QiQi update Work Item `status=done` + final summary/checkpoint.
+6. QiQi reconcile Work Item `status=done` + final summary/checkpoint theo `$work-item`.
 
 QiQi không tự vào repo để bù evidence thiếu.
 
