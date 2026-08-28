@@ -35,17 +35,13 @@ for pattern in \
   '`ARCHITECTURE\.md`' \
   '`docs/VERIFY\.md`' \
   'Global Work Item MCP' \
-  'work_item_get' \
-  'work_item_update' \
-  'revision conflict' \
+  '\$work-item' \
+  'MUST apply `\$work-item`' \
+  'không tự tạo/chọn Work Item' \
+  'work_item_\*' \
+  'canonical operational protocol' \
   'current Git root' \
-  '^### Material session reconciliation$' \
-  'current effective repo truth' \
-  'accumulated material phase/milestone history' \
-  'artifact creation does not substitute|artifact creation không thay thế' \
-  'Implementation session.*MUST reconcile Work Item' \
-  'Review code\.\.\.' \
-  '^#### Report$' \
+  'Artifact creation không thay thế canonical Work Item reconciliation' \
   '^## Shared Knowledge MCP$' \
   'knowledge_search' \
   'knowledge_read' \
@@ -67,10 +63,10 @@ rg -U -q 'Work Item MCP và Knowledge MCP.*tool exceptions.*không phải filesy
   fail 'AGENTS.md: MCP access must not widen filesystem boundary'
 rg -q 'Không đọc/sửa repository anh em' "$agents" || \
   fail 'AGENTS.md: sibling repository boundary missing'
-rg -U -q 'overall Work Item done|global Work Item complete' "$agents" || \
+rg -U -q 'mark overall Work Item done|global Work Item complete' "$agents" || \
   fail 'AGENTS.md: child must not own overall task completion'
-rg -U -q 'revision conflict.*reread.*reconcile' "$agents" || \
-  fail 'AGENTS.md: stale Work Item update policy missing'
+rg -U -q 'latest Work Item.*TaskPacket.*stale|latest Work Item.*conflict' "$agents" || \
+  fail 'AGENTS.md: current Work Item must be allowed to invalidate stale TaskPacket premises'
 rg -U -q 'live owner source/test.*thắng|source/test thắng' "$agents" || \
   fail 'AGENTS.md: live implementation truth precedence missing'
 rg -U -q 'required_context.*required premise' "$agents" || \
@@ -79,16 +75,14 @@ rg -U -q 'cross-repo impact: fact, affected boundary/repository, evidence, next 
   fail 'AGENTS.md: actionable cross-repo handoff shape missing'
 rg -U -q 'Knowledge review.*knowledge_write|Knowledge review/write' "$agents" || \
   fail 'AGENTS.md: Knowledge finalization missing'
-rg -F -q 'repos[current_repo].summary' "$agents" || \
-  fail 'AGENTS.md: repo summary field must be named in session reconciliation'
-rg -F -q '= current effective repo truth sau tất cả work đã biết' "$agents" || \
-  fail 'AGENTS.md: repo summary must remain current snapshot, not latest-session narrative'
-rg -F -q 'checkpoints[]' "$agents" || \
-  fail 'AGENTS.md: checkpoints field must be named in session reconciliation'
-rg -F -q '= accumulated material phase/milestone history' "$agents" || \
-  fail 'AGENTS.md: checkpoints must preserve material phase history'
-rg -q 'Implementation session.*không tạo artifact' "$agents" || \
-  fail 'AGENTS.md: implementation must reconcile even without artifact'
+rg -U -q 'Work Item MCP unavailable|\$work-item.*unavailable' "$agents" || \
+  fail 'AGENTS.md: missing Work Item failure/no-fallback boundary'
+
+# Work Item mechanics belong to the shared user-scoped $work-item skill, not this
+# always-on repo policy. Reject the previous duplicated protocol sections if they return.
+if rg -q '^### Material session reconciliation$|^#### Implementation$|^#### Review$|^#### Report$' "$agents"; then
+  fail 'AGENTS.md: detailed Work Item operational protocol must live in $work-item, not repo always-on policy'
+fi
 
 if rg -q 'knowledge_read\(keywords|workspace `knowledge/`|knowledge/INDEX\.md|result_path|fixed result schema' "$agents"; then
   fail 'AGENTS.md: legacy knowledge/result contract found'
