@@ -27,6 +27,7 @@ required=(
   mcp/knowledge/tests/test_core.py
   mcp/knowledge/tests/test_partial_contracts.py
   mcp/knowledge/tests/test_partial_update.py
+  mcp/knowledge/tests/test_section_integrity.py
   mcp/knowledge/tests/test_server_contract.py
   scripts/install-user-mcp.sh
   scripts/install-user-skill.sh
@@ -99,6 +100,8 @@ rg -q 'section_id: SectionId' "$server" || \
   fail 'knowledge_read_section must expose a stable typed section id'
 rg -q 'entries: WriteEntries' "$server" || \
   fail 'knowledge_write must expose typed nested entry schema'
+rg -q 'expected_revision: ExactReadRevision' "$server" || \
+  fail 'knowledge_update must accept exact revision from any scoped exact read surface'
 rg -q 'changes: KnowledgePatch' "$server" || \
   fail 'knowledge_update must expose a typed partial patch schema'
 rg -q '\) -> KnowledgeSearchResult:' "$server" || \
@@ -144,12 +147,18 @@ rg -q '"pydantic>=2,<3"' "$project_file" || \
   fail 'pydantic must be an explicit runtime dependency'
 
 for pattern in \
+  '^ExactReadRevision = Annotated' \
+  'knowledge_read_metadata' \
+  'knowledge_read_section' \
+  'knowledge_update.expected_revision' \
   '^class KnowledgeMetadataReadResult' \
   '^class KnowledgeSectionReadResult' \
   '^class KnowledgeRoutingPatch' \
   '^class KnowledgeMetadataPatch' \
   '^class KnowledgeSectionPatch' \
   '^class KnowledgePatch' \
+  'str_strip_whitespace=False' \
+  'MAX_SECTION_ID_CHARS' \
   'cannot be null; omit it when unchanged' \
   'full content replacement and section replacement are mutually exclusive'; do
   rg -q "$pattern" "$partial_contracts" || fail "partial contracts missing invariant: $pattern"
@@ -168,10 +177,16 @@ done
 
 for pattern in \
   'MAX_KNOWLEDGE_SECTIONS = 100' \
+  'MAX_SECTION_ID_CHARS = 100' \
   'knowledge-section:' \
   'lowercase-kebab-id' \
   'duplicate knowledge section id' \
   'immediately followed.*Markdown H2-H6 heading' \
+  '_opening_fence' \
+  'fenced Markdown code blocks are ignored' \
+  '_section_body_lines' \
+  'never content whitespace' \
+  'preserve all existing semantic section markers' \
   'section structure is owned by the canonical document'; do
   rg -U -q "$pattern" "$sections" || fail "semantic section parser missing invariant: $pattern"
 done
@@ -246,7 +261,11 @@ for contract in \
   'MAX_SEARCH_RESULTS' \
   'MAX_READ_RESULTS' \
   'search_knowledge' \
-  'read_knowledge'; do
+  'read_knowledge' \
+  'parse_sections' \
+  '_validate_section_structure' \
+  '_validate_section_structure\(content, label="knowledge write content"\)' \
+  '_validate_section_structure\(body, label=relative\)'; do
   rg -q "$contract" "$core" || fail "knowledge core missing contract: $contract"
 done
 
