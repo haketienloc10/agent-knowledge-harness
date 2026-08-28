@@ -137,6 +137,10 @@ class KnowledgeSectionPatch(_ExactSectionModel):
 
 
 class KnowledgePatch(StrictModel):
+    # Whole-content replacement is also semantic Markdown. Preserve boundary indentation
+    # and trailing spaces; nested metadata models retain their own canonical trimming.
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=False)
+
     metadata: KnowledgeMetadataPatch | None = None
     content: Annotated[
         str,
