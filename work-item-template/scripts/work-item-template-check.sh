@@ -335,9 +335,12 @@ for pattern in \
   'ARTIFACTS' \
   'artifact_parser' \
   '_list_artifacts_readonly' \
+  '_stream_artifact_section_chunks' \
   '_print_artifact_stream' \
+  '_print_artifact_raw_stream' \
   '_get_artifact_json_readonly' \
   'SELECT content FROM work_item_artifact_chunks' \
+  '--raw' \
   'QUESTIONS' \
   'DECISIONS' \
   'CHANGES' \
@@ -346,7 +349,7 @@ for pattern in \
   'NEXT ACTIONS' \
   'CHECKPOINTS' \
   'revision='; do
-  rg -q "$pattern" "$cli" || fail "cli.py: missing human-view contract: $pattern"
+  rg -q -- "$pattern" "$cli" || fail "cli.py: missing human-view contract: $pattern"
 done
 
 # CRITICAL READ-ONLY INVARIANT — DO NOT REMOVE OR WEAKEN THIS CHECK merely to
@@ -359,8 +362,8 @@ if rg -q 'from (core|artifacts) import .*update_|from (core|artifacts) import .*
   fail 'cli.py: human CLI must not import/call Work Item or artifact mutation functions'
 fi
 
-# Text artifact viewing must stream stored chunks directly. Only explicit --json
-# is allowed to materialize full artifact content in memory.
+# Diagnostic and raw artifact viewing must stream stored chunks directly. Only explicit
+# --json is allowed to materialize selected artifact content in memory.
 if ! CLI_PATH="$cli" python3 - <<'PY'
 import ast
 import os
@@ -374,13 +377,26 @@ funcs = {
     for node in tree.body
     if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
 }
-assert "SELECT content FROM work_item_artifact_chunks" in funcs["_print_artifact_stream"]
-assert "_get_artifact_json_readonly" not in funcs["_print_artifact_stream"]
-assert "_get_artifact_json_readonly" in funcs["main"]
-assert "_print_artifact_stream" in funcs["main"]
+stream = funcs["_stream_artifact_section_chunks"]
+diagnostic = funcs["_print_artifact_stream"]
+raw = funcs["_print_artifact_raw_stream"]
+build_parser = funcs["_build_parser"]
+main = funcs["main"]
+assert "SELECT content FROM work_item_artifact_chunks" in stream
+assert "sys.stdout.write(text)" in stream
+assert "_get_artifact_json_readonly" not in stream
+assert "_stream_artifact_section_chunks" in diagnostic
+assert "_get_artifact_json_readonly" not in diagnostic
+assert "_stream_artifact_section_chunks" in raw
+assert "_get_artifact_json_readonly" not in raw
+assert "add_mutually_exclusive_group" in build_parser
+assert '"--raw"' in build_parser
+assert "_get_artifact_json_readonly" in main
+assert "_print_artifact_stream" in main
+assert "_print_artifact_raw_stream" in main
 PY
 then
-  fail 'cli.py: text artifact view must stream chunks; full materialization is reserved for explicit --json'
+  fail 'cli.py: diagnostic/raw artifact views must stream chunks; full materialization is reserved for explicit --json'
 fi
 
 rg -q 'command = f"exec bash ' "$installer" || \
