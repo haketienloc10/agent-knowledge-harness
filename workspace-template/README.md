@@ -22,7 +22,6 @@ repos.yaml
 SYSTEM_MAP.md
 instructions/agent-routing.yaml
 instructions/model-routing.md
-.agents/skills/ticket-work-item/SKILL.md
 .codex/config.toml
 mcp/qiqi_delegate/
 .qiqi/.gitignore
@@ -30,47 +29,45 @@ scripts/workspace-check.sh
 docs/WORKSPACE_SETUP.md
 ```
 
-Workspace không sở hữu task DB hoặc Knowledge Store.
+Workspace không sở hữu task DB, Knowledge Store hoặc bản copy Work Item protocol.
 
-## Ticket Work Item skill
+## Work Item operational skill
 
-Khi người dùng chủ động muốn biến một ticket thật thành canonical Work Item, gọi explicit:
+`$work-item` là user-scoped skill được cài cùng Global Work Item MCP và dùng chung bởi
+QiQi + repository execution agents. `AGENTS.md` chỉ giữ activation/authority/safety
+invariants; read/write/revision/reconciliation/artifact mechanics nằm trong `$work-item`.
 
-```text
-$ticket-work-item
-<paste ticket>
-```
+Generic ticket/task không tự động trở thành Work Item. Khi user explicitly yêu cầu tạo/
+dùng Work Item hoặc canonical Work Item đã được identify, QiQi/child apply `$work-item`
+theo role authority.
 
-hoặc truyền file ticket local:
-
-```text
-$ticket-work-item path/to/ticket.md
-```
-
-Skill này là explicit entry point, không được auto-apply chỉ vì prompt có Redmine/Jira/GitHub issue, bug report hoặc incident. File path được truyền là user-provided ticket source; QiQi đọc đúng file đó, giữ path làm provenance và không scan sibling files nếu người dùng không yêu cầu.
+Không còn workspace-local `$ticket-work-item` entrypoint. Nếu muốn tạo task mới từ nội
+dung paste, user chỉ cần explicitly yêu cầu QiQi tạo Work Item từ nội dung đó; `$work-item`
+lo phần canonical get-or-create/reconciliation protocol.
 
 ## Execution model
 
 ```text
 QiQi
-  ↓ work_item_get/create nếu product task
+  ↓ apply $work-item khi canonical Work Item được dùng
+  ↓ work_item_get/create theo explicit Work Item intent
   ↓ knowledge_search → exact knowledge_read khi cần durable context
   ↓ SYSTEM_MAP + Work Item + required external facts
   ↓ structured TaskPacket
 qiqi_delegate
   ↓ Herdr START/RESUME exact Git root
 repo agent
-  ↓ work_item_get
+  ↓ apply $work-item khi TaskPacket identify Work Item
   ↓ repo-local work + verification
-  ↓ work_item_update current-repo evidence/handoff/checkpoint
+  ↓ canonical current-repo reconciliation
   ↓ knowledge review/write nếu reusable
   ↓ native final response
 qiqi_delegate
   ↓ session/turn runtime state
 QiQi
   ↓ read agent_response
-  ↓ work_item_get latest
-  ↓ reconcile next orchestration step
+  ↓ reread/reconcile Work Item theo $work-item
+  ↓ decide next orchestration step
 ```
 
 ## Work Item lifecycle
@@ -93,7 +90,7 @@ Search card không phải full evidence và không chứa revision. Update exist
 
 ## TaskPacket
 
-Khi task thuộc Work Item, `required_context` identify Work Item + revision. Child lấy current canonical state từ Work Item MCP. External fact ngoài Work Item mà QiQi dùng cho semantics vẫn phải inline với provenance/certainty.
+Khi task thuộc Work Item, `required_context` identify Work Item + revision. Child lấy current canonical state từ Work Item MCP theo `$work-item`. External fact ngoài Work Item mà QiQi dùng cho semantics vẫn phải inline với provenance/certainty.
 
 ## Runtime/session
 
