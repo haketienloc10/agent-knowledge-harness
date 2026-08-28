@@ -196,11 +196,10 @@ Never silently overwrite newer canonical task state.
 Task-specific mutable state stays in the Work Item. Reusable, verified conclusions that
 matter beyond the ticket may use Shared Knowledge according to workspace policy.
 
-When Shared Knowledge is relevant, follow the current progressive-disclosure flow:
-
-```text
-knowledge_search → knowledge_read → knowledge_write
-```
+When Shared Knowledge is relevant, follow the current workspace progressive-disclosure
+policy: search first, exact-read the smallest sufficient semantic scope, then use
+`knowledge_write` or `knowledge_update` as appropriate. Do not invent section IDs or
+use search cards as revision-bearing evidence.
 
 Do not store ticket progress, temporary blockers, ticket Q&A, or next actions as Shared
 Knowledge.
