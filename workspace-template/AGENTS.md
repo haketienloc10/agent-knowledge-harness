@@ -48,7 +48,10 @@ Reusable knowledge đi qua:
 ```text
 knowledge_search(keywords, context?, limit?)
 knowledge_read(ids)
+knowledge_read_metadata(ids)
+knowledge_read_section(id, section_id)
 knowledge_write(entries)
+knowledge_update(id, expected_revision, changes)
 ```
 
 Work Item MCP và Knowledge MCP là user-scoped services independent CWD. Workspace không đọc physical DB/store path.
@@ -85,15 +88,18 @@ Work Item không thay Shared Knowledge; ticket-specific mutable state chỉ dist
 
 **MUST search** khi prior reusable knowledge có thể đổi orchestration/answer; **MAY search** khi query ngắn giảm uncertainty; **SKIP** khi durable context không thể đổi action.
 
-### Search trước, read sau
+### Search trước, exact scoped read sau
 
 1. Tạo **3–8 discriminative concepts**.
 2. `knowledge_search(keywords, context?, limit?)` trả bounded **decision cards**.
-3. Card chỉ dùng chọn document; không phải full material evidence.
-4. Chọn 1–2 exact IDs cần thiết rồi `knowledge_read(ids)`.
-5. Full read mới có semantic content, provenance và revision.
-6. `knowledge_search` không trả revision; existing update target phải full-read trước.
-7. Không hydrate top-N chỉ vì search limit lớn.
+3. Card chỉ dùng chọn document; không phải full material evidence và không có revision.
+4. Chọn 1–2 exact IDs cần thiết rồi đọc smallest sufficient semantic scope:
+   - `knowledge_read(ids)` khi cần whole semantic content;
+   - `knowledge_read_metadata(ids)` khi chỉ cần metadata/provenance/revision + section index;
+   - `knowledge_read_section(id, section_id)` khi chỉ cần một existing marked section.
+5. Material use/update phải dựa trên exact read đủ scope; nếu section/metadata không đủ context để kết luận an toàn thì escalate sang full read.
+6. Existing update target lấy exact `expected_revision` từ exact read surface, không từ search card.
+7. Không hydrate top-N chỉ vì search limit lớn và không invent section ID.
 
 `context.repo/domain` chỉ ranking hint. Search/read failure không chứng minh knowledge không tồn tại.
 
@@ -103,9 +109,15 @@ Nếu Knowledge mâu thuẫn Work Item decision mới hơn, `SYSTEM_MAP.md`, nat
 
 Fact live/durable **ngoài canonical Work Item** mà QiQi đã dùng để quyết định repository, dependency, scope, constraint, acceptance hoặc semantics phải inline trong `required_context` với provenance/certainty. Không bắt child tự tìm lại đúng knowledge item.
 
-### Write
+### Write/update
 
-Substantive reusable conclusion phải knowledge review/write. Trước create/update search existing concept; existing target phải exact-read trước để lấy revision. Required review không candidate dùng `knowledge_write(entries=[])`.
+Substantive reusable conclusion phải knowledge review trước mutation. Trước create/update search existing concept; existing target phải exact-read ở sufficient semantic scope trước để lấy revision.
+
+- `knowledge_write` dùng cho create, empty required review hoặc intentional whole-document replacement.
+- `knowledge_update` dùng khi chỉ đổi metadata, whole content riêng, hoặc một existing marked section; caller không resend untouched document state.
+- Partial update vẫn dùng one whole-document SHA-256 revision; revision conflict → reread → reconcile → retry.
+- Stable section marker chỉ là mutation address trong cùng canonical document, không phải chunk store/per-section revision.
+- Required review không candidate dùng `knowledge_write(entries=[])`.
 
 ## Orchestration
 
@@ -190,6 +202,7 @@ Trong khi `delegate_repo_task` đang chạy đồng bộ, QiQi không poll proce
 
 - qiqi_delegate infrastructure failure: không shell fallback/screen scrape.
 - Work Item read/update/persistence failure: follow `$work-item`; không local Markdown/cached-conversation fallback.
+- Knowledge revision conflict: exact reread sufficient scope → reconcile/retry, không overwrite.
 - Knowledge failure: không coi như store rỗng; giữ caveat nếu durable dependency ảnh hưởng conclusion.
 
 ## Definition of Done
@@ -200,7 +213,7 @@ Product Work Item chỉ `done` khi:
 2. effective requirements/acceptance đạt;
 3. required verification pass hoặc deviation được user chấp nhận;
 4. không còn mandatory blocker/question/dependency/handoff;
-5. substantive reusable-knowledge review/write hoàn tất;
+5. substantive reusable-knowledge review/mutation hoàn tất;
 6. QiQi reconcile Work Item `status=done` + final summary/checkpoint theo `$work-item`.
 
 QiQi không tự vào repo để bù evidence thiếu.
