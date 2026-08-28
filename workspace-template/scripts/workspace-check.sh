@@ -30,7 +30,6 @@ required_files=(
   repos.yaml
   instructions/agent-routing.yaml
   instructions/model-routing.md
-  .agents/skills/ticket-work-item/SKILL.md
   .codex/config.toml
   .qiqi/.gitignore
   mcp/qiqi_delegate/pyproject.toml
@@ -74,15 +73,13 @@ for pattern in \
   'Global Work Item MCP' \
   'work_item_get' \
   'work_item_update' \
-  'expected_revision' \
   'canonical Work Item' \
-  'Current snapshot và material history' \
-  'current effective repo truth' \
-  'accumulated material phase/milestone history' \
-  'Artifact creation không được tính là thay thế' \
-  'Implementation:.*không có artifact' \
-  'Review code\.\.\.' \
-  'Report:.*presentation/detail' \
+  '\$work-item' \
+  'MUST apply `\$work-item`' \
+  'không tự động.*Work Item' \
+  'work_item_\*' \
+  'canonical operational protocol' \
+  'QiQi sở hữu overall' \
   '`delegate_repo_task`' \
   '`user_request`' \
   '`required_context`' \
@@ -96,20 +93,16 @@ for pattern in \
   rg -U -q "$pattern" "$agents_md" || fail "AGENTS.md: missing required policy: $pattern"
 done
 
-for pattern in \
-  'current_requirements' \
-  'questions' \
-  'decisions' \
-  'changes' \
-  'handoffs' \
-  'next_actions' \
-  'superseded_by' \
-  'revision conflict'; do
-  rg -q "$pattern" "$agents_md" || fail "AGENTS.md: missing Work Item continuity rule: $pattern"
-done
-
 rg -U -q 'native response established material repo state.*latest Work Item thiếu.*không silently tiếp tục' "$agents_md" || \
   fail 'AGENTS.md: QiQi must detect missing repo persistence after material delegation'
+rg -U -q 'Work Item read/update/persistence failure.*\$work-item.*không local Markdown/cached-conversation fallback' "$agents_md" || \
+  fail 'AGENTS.md: Work Item failure must not fall back to local/cached task truth'
+
+# Work Item read/write mechanics belong to the shared user-scoped $work-item skill.
+# Keep only activation/authority/safety invariants in workspace always-on policy.
+if rg -q '^### Current snapshot và material history$|^### Material session reconciliation$|Phase-specific guardrails:' "$agents_md"; then
+  fail 'AGENTS.md: detailed Work Item operational protocol must live in $work-item, not workspace always-on policy'
+fi
 
 # CRITICAL INVARIANT — DO NOT REMOVE OR WEAKEN THIS CHECK merely to make a
 # migration/check pass. Delegation silence is part of the synchronous execution
@@ -144,26 +137,18 @@ if rg -q 'English task title|read `result_path`|đọc `result_path`' "$agents_m
   fail 'AGENTS.md: legacy workspace result artifact convention remains'
 fi
 
-skill="$workspace_root/.agents/skills/ticket-work-item/SKILL.md"
-if [[ -f "$skill" ]]; then
-  for pattern in \
-    '^name: ticket-work-item$' \
-    'Use only when the user explicitly invokes' \
-    'Do not auto-apply merely because' \
-    '\$ticket-work-item path/to/ticket\.md' \
-    'Resolve relative paths from the current workspace directory' \
-    'work_item_get' \
-    'expected_revision' \
-    'delegate_repo_task' \
-    '^## Material session reconciliation$' \
-    'Artifact creation never substitutes' \
-    'Implementation:.*no artifact|Implementation:.*không' \
-    'Review code\.\.\.' \
-    'Report:.*presentation/detail' \
-    'knowledge_search → knowledge_read → knowledge_write'; do
-    rg -U -q "$pattern" "$skill" || fail "ticket-work-item skill: missing contract: $pattern"
-  done
+if [[ -f "$workspace_root/.agents/skills/ticket-work-item/SKILL.md" ]]; then
+  fail 'workspace: legacy ticket-work-item skill must be removed; Work Item operations use user-scoped $work-item'
 fi
+
+workspace_readme="$workspace_root/README.md"
+for pattern in \
+  'Work Item operational skill' \
+  '\$work-item' \
+  'user-scoped skill' \
+  'Không còn workspace-local `\$ticket-work-item`'; do
+  rg -q "$pattern" "$workspace_readme" || fail "README.md: missing Work Item skill layering guidance: $pattern"
+done
 
 codex_config="$workspace_root/.codex/config.toml"
 rg -q '^\[mcp_servers\.qiqi_delegate\]$' "$codex_config" || \
