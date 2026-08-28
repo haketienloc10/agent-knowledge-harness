@@ -133,6 +133,38 @@ only in conversation:
 
 Supersede historical decisions instead of silently rewriting their provenance.
 
+## Material session reconciliation
+
+Every material phase must leave canonical continuation state before ending. Artifact creation never substitutes for this update.
+
+Keep the roles distinct:
+
+```text
+repos[repo].summary
+  = current effective repository truth after all work known so far
+
+repos[repo].verification
+  = concrete verification evidence currently established
+
+checkpoints[]
+  = accumulated material phase/milestone history
+
+artifact
+  = optional detailed material
+```
+
+A future agent should understand both the current task and its major progression from the Work Item alone; artifacts are opened only for detail. Do not turn checkpoints into command/session logs.
+
+Use optional free-form checkpoint `kind` when it improves chronology, for example `investigation`, `implementation`, `verification`, `review`, `decision`, `report`, `completion`. This is descriptive only, not a workflow enum. Add optional `artifact_id` when a checkpoint has a detailed artifact.
+
+Special cases:
+
+- **Implementation:** must reconcile current repo state and append a material implementation checkpoint even when no artifact is created.
+- **Review:** review artifact holds detail; append material review checkpoint. Do not overwrite implementation-oriented repo summary with a `Review code...` narrative unless review actually changes current effective repo truth.
+- **Report:** report artifact is presentation/detail; append a material report checkpoint and preserve prior repo/checkpoint history. QiQi reconciles global summary/status/phase/next action.
+
+Investigation, planning and verification follow the same generic snapshot/history boundary without separate workflow machinery.
+
 ## Persist material continuation state
 
 Use exact `expected_revision` and update only material task continuity such as:
@@ -141,10 +173,10 @@ Use exact `expected_revision` and update only material task continuity such as:
 - `questions`;
 - `decisions`;
 - `changes`;
-- repository progress and verification evidence;
+- repository current state and verification evidence;
 - `blockers`;
 - `handoffs`;
-- `checkpoints`;
+- accumulated material `checkpoints`;
 - `next_actions`;
 - overall summary/status/phase when QiQi owns the change.
 
