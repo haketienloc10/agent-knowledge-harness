@@ -185,7 +185,8 @@ if [[ -f "$skill" ]]; then
     'Implementation:.*no artifact|Implementation:.*không' \
     'Review code\.\.\.' \
     'Report:.*presentation/detail' \
-    'knowledge_search → knowledge_read → knowledge_write'; do
+    'exact-read the smallest sufficient semantic scope' \
+    'knowledge_write.*knowledge_update'; do
     rg -U -q "$pattern" "$skill" || fail "ticket-work-item skill: missing contract: $pattern"
   done
 fi
