@@ -14,7 +14,7 @@ qiqi_delegate state    = runtime/session truth
 - `AGENTS.md` bảo vệ Git-root/sibling boundaries;
 - fresh repo agent thấy user-scoped `work_item` và `knowledge` MCP;
 - Work Item delegation đọc same canonical task nhưng chỉ execute current repo;
-- Knowledge dùng `knowledge_search → knowledge_read → knowledge_write` progressive disclosure;
+- Knowledge dùng search → exact scoped read → whole/partial mutation progressive disclosure;
 - native final assistant response là semantic handoff về QiQi;
 - `bash scripts/repo-check.sh` PASS.
 
@@ -59,10 +59,15 @@ Sau khi hiểu concern:
 1. nếu reusable knowledge có thể đổi action, tạo 3–8 discriminative concepts;
 2. `knowledge_search` để nhận thin decision cards;
 3. chọn tối đa 1–2 exact candidates thực sự cần;
-4. `knowledge_read(ids)` để lấy full content/provenance/revision;
+4. exact-read ở smallest sufficient semantic scope:
+   - `knowledge_read(ids)` khi cần full content;
+   - `knowledge_read_metadata(ids)` khi chỉ cần metadata/provenance/revision + section index;
+   - `knowledge_read_section(id, section_id)` khi chỉ cần một existing marked section;
 5. không dùng search card như full evidence và không lấy revision từ search;
-6. before create/update search dedupe; existing update target full-read trước;
-7. substantive reusable conclusion review/write bằng `knowledge_write`.
+6. before create/update search dedupe; existing update target exact-read sufficient scope trước;
+7. create/full replacement dùng `knowledge_write`; metadata/content/one-section partial mutation dùng `knowledge_update`;
+8. partial update vẫn dùng whole-document exact revision và không tạo per-section revision/chunk store;
+9. substantive reusable conclusion phải qua knowledge-distill review trước mutation.
 
 Live owner source/test thắng stale Knowledge.
 
@@ -93,6 +98,8 @@ Checker xác nhận Work Item authority, progressive Knowledge contract, current
 3. Child update only current repo evidence; QiQi reread thấy revision mới.
 4. Stale writer bị reject.
 5. `knowledge_search` trả thin cards và không revision.
-6. `knowledge_read` exact ID trả full semantic content/sources/revision.
-7. Child không mở sibling repo/physical DB/store.
-8. Native final response quay lại QiQi bình thường.
+6. `knowledge_read_metadata` trả revision/provenance/section index nhưng không whole content.
+7. `knowledge_read_section` trả đúng one section + whole-document revision.
+8. `knowledge_update` metadata/section không yêu cầu caller resend untouched whole document và stale revision bị reject.
+9. Child không mở sibling repo/physical DB/store.
+10. Native final response quay lại QiQi bình thường.
