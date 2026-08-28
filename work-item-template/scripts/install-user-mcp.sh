@@ -11,13 +11,14 @@ usage() {
 Usage: install-user-mcp.sh [--db-path PATH] [--bin-dir PATH]
 
 Installs the user-level Global Work Item tools:
+- managed user-scope `work-item` Agent Skill for QiQi/repository agents;
 - stable `agent-work-item-mcp` wrapper for QiQi/repository agents;
 - read-only `agent-work-item` CLI for human list/detail inspection;
 - MCP registration named `work_item` for available Codex/Claude CLIs;
 - one global SQLite database shared by QiQi and repository execution agents.
 
-The installer refuses to replace an existing `work_item` MCP registration that
-points somewhere else.
+The installer refuses to replace an existing `work_item` MCP registration or
+`work-item` skill that points to/contains unrelated unmanaged content.
 EOF
 }
 
@@ -59,6 +60,7 @@ bin_dir="$(python3 -c 'import os,sys; print(os.path.abspath(os.path.expanduser(s
 mkdir -p "$(dirname "$db_path")" "$bin_dir"
 
 uv sync --project "$project"
+bash "$home/scripts/install-user-skill.sh"
 
 mcp_wrapper="$bin_dir/agent-work-item-mcp"
 cli_wrapper="$bin_dir/agent-work-item"
@@ -141,5 +143,6 @@ fi
 printf 'Work Item MCP wrapper: %s\n' "$mcp_wrapper"
 printf 'Work Item human CLI: %s\n' "$cli_wrapper"
 printf 'Work Item database: %s\n' "$db_path"
+printf 'Work Item skill source: %s/skills/work-item/SKILL.md\n' "$home"
 printf 'Try: %s list\n' "$cli_wrapper"
-printf 'Open a fresh agent session to load the user/global MCP registration.\n'
+printf 'Open a fresh agent session to load the user/global MCP registration and skill.\n'
