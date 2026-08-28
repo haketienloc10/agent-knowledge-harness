@@ -80,7 +80,7 @@ for pattern in \
   'current effective repo truth' \
   'accumulated material phase/milestone history' \
   'Artifact creation không được tính là thay thế' \
-  'Implementation:.*không tạo artifact' \
+  'Implementation:.*không có artifact' \
   'Review code\.\.\.' \
   'Report:.*presentation/detail' \
   '`delegate_repo_task`' \
