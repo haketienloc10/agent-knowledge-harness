@@ -45,12 +45,18 @@ for pattern in \
   '^## Shared Knowledge MCP$' \
   'knowledge_search' \
   'knowledge_read' \
+  'knowledge_read_metadata' \
+  'knowledge_read_section' \
   'knowledge_write' \
-  '^### Search trước, read sau$' \
+  'knowledge_update' \
+  '^### Search trước, exact scoped read sau$' \
+  'smallest sufficient semantic scope' \
   'decision cards' \
   '3–8 discriminative concepts' \
-  'không trả revision' \
+  'không có revision|không trả revision' \
   'expected_revision' \
+  'whole-document.*revision' \
+  'missing section không implicit create' \
   '^## Handoff với QiQi$' \
   '^### Closed-world context rule$' \
   '^### Output về QiQi$' \
@@ -73,7 +79,7 @@ rg -U -q 'required_context.*required premise' "$agents" || \
   fail 'AGENTS.md: TaskPacket required premise rule missing'
 rg -U -q 'cross-repo impact: fact, affected boundary/repository, evidence, next action' "$agents" || \
   fail 'AGENTS.md: actionable cross-repo handoff shape missing'
-rg -U -q 'Knowledge review.*knowledge_write|Knowledge review/write' "$agents" || \
+rg -U -q 'Knowledge review.*mutation|Knowledge review.*knowledge_write|Knowledge review/write' "$agents" || \
   fail 'AGENTS.md: Knowledge finalization missing'
 rg -U -q 'Work Item MCP unavailable|\$work-item.*unavailable' "$agents" || \
   fail 'AGENTS.md: missing Work Item failure/no-fallback boundary'
@@ -84,14 +90,16 @@ if rg -q '^### Material session reconciliation$|^#### Implementation$|^#### Revi
   fail 'AGENTS.md: detailed Work Item operational protocol must live in $work-item, not repo always-on policy'
 fi
 
-if rg -q 'knowledge_read\(keywords|workspace `knowledge/`|knowledge/INDEX\.md|result_path|fixed result schema' "$agents"; then
-  fail 'AGENTS.md: legacy knowledge/result contract found'
+if rg -q 'existing update target phải full-read|Update dùng exact id.*full read|knowledge_read\(keywords|workspace `knowledge/`|knowledge/INDEX\.md|result_path|fixed result schema' "$agents"; then
+  fail 'AGENTS.md: legacy full-read-only knowledge/result contract found'
 fi
 
 setup="$repo_root/docs/REPO_SETUP.md"
-for pattern in 'Global Work Item MCP' 'work_item_get' 'work_item_update' 'knowledge_search' 'knowledge_read' 'TaskPacket' 'native final assistant response'; do
+for pattern in 'Global Work Item MCP' 'work_item_get' 'work_item_update' 'knowledge_search' 'knowledge_read' 'knowledge_read_metadata' 'knowledge_read_section' 'knowledge_update' 'TaskPacket' 'native final assistant response'; do
   rg -q "$pattern" "$setup" || fail "docs/REPO_SETUP.md: missing guidance: $pattern"
 done
+rg -U -q 'partial update.*whole-document.*revision|whole-document exact revision' "$setup" || \
+  fail 'docs/REPO_SETUP.md: partial Knowledge concurrency boundary missing'
 
 for file in "$repo_root/AGENTS.md" "$repo_root/ARCHITECTURE.md" "$repo_root/docs/VERIFY.md"; do
   [[ -f "$file" ]] || continue
