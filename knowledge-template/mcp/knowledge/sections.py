@@ -72,6 +72,16 @@ def _column_width(value: str) -> int:
     return columns
 
 
+def _list_item_layout(line: str) -> tuple[int, int, str] | None:
+    """Return bullet indent, content indent, and content for one supported list item."""
+    match = LIST_ITEM_RE.fullmatch(line)
+    if match is None or _column_width(match.group("gap")) > 4:
+        return None
+    _, bullet_indent = _leading_indent(line)
+    content_indent = _column_width(line[: match.start("content")])
+    return bullet_indent, content_indent, match.group("content")
+
+
 def _fence_run(value: str) -> tuple[str, int] | None:
     if len(value) < 3:
         return None
@@ -89,38 +99,36 @@ def _fence_run(value: str) -> tuple[str, int] | None:
     return fence_char, run
 
 
-def _opening_fence(line: str) -> FenceState | None:
+def _opening_fence(line: str, container_indent: int = 0) -> FenceState | None:
     """Return lightweight fence state used only for reserved-marker recognition.
 
     This scanner is deliberately smaller than a full Markdown parser. It recognizes
-    ordinary CommonMark fences with up to three leading columns and fences that begin
-    directly as list-item content (for example ``- ```markdown``). Marker-like lines
-    indented four or more columns are handled separately as non-live Markdown
-    code/container content, so list-continuation fences do not need a full container stack.
+    ordinary CommonMark fences, fences that begin directly as list-item content, and
+    continuation fences relative to the currently active list container. That container
+    context is required before classifying a two/three-space continuation fence; raw
+    indentation alone cannot distinguish it from a top-level fence.
     """
-    stripped, indent_columns = _leading_indent(line)
-    if indent_columns <= 3:
-        fence = _fence_run(stripped)
+    layout = _list_item_layout(line)
+    if layout is not None:
+        _, item_content_indent, item_content = layout
+        fence = _fence_run(item_content)
         if fence is not None:
             return FenceState(
                 char=fence[0],
                 minimum_length=fence[1],
-                container_indent=0,
-                max_closing_indent=3,
+                container_indent=item_content_indent,
+                max_closing_indent=item_content_indent + 3,
             )
 
-    list_match = LIST_ITEM_RE.fullmatch(line)
-    if list_match is None:
+    stripped, indent_columns = _leading_indent(line)
+    if indent_columns < container_indent:
         return None
-    gap = list_match.group("gap")
-    if _column_width(gap) > 4:
+    relative_indent = indent_columns - container_indent
+    if relative_indent > 3:
         return None
-    content = list_match.group("content")
-    fence = _fence_run(content)
+    fence = _fence_run(stripped)
     if fence is None:
         return None
-    content_prefix = line[: list_match.start("content")]
-    container_indent = _column_width(content_prefix)
     return FenceState(
         char=fence[0],
         minimum_length=fence[1],
@@ -131,7 +139,7 @@ def _opening_fence(line: str) -> FenceState | None:
 
 def _is_closing_fence(line: str, fence: FenceState) -> bool:
     stripped, indent_columns = _leading_indent(line)
-    if indent_columns > fence.max_closing_indent:
+    if indent_columns < fence.container_indent or indent_columns > fence.max_closing_indent:
         return False
     run = 0
     while run < len(stripped) and stripped[run] == fence.char:
@@ -139,10 +147,28 @@ def _is_closing_fence(line: str, fence: FenceState) -> bool:
     return run >= fence.minimum_length and not stripped[run:].strip()
 
 
+def _update_list_containers(line: str, list_indents: list[int]) -> None:
+    """Track enough list-container indentation to classify continuation fences safely."""
+    if not line.strip():
+        return
+    layout = _list_item_layout(line)
+    if layout is not None:
+        bullet_indent, content_indent, _ = layout
+        while list_indents and bullet_indent < list_indents[-1]:
+            list_indents.pop()
+        list_indents.append(content_indent)
+        return
+
+    _, indent_columns = _leading_indent(line)
+    while list_indents and indent_columns < list_indents[-1]:
+        list_indents.pop()
+
+
 def _reserved_marker_lines(content: str) -> list[tuple[int, str]]:
     """Return reserved marker-like lines that are live Markdown, not code/examples."""
     lines = content.splitlines()
     fence: FenceState | None = None
+    list_indents: list[int] = []
     found: list[tuple[int, str]] = []
     for index, line in enumerate(lines):
         if fence is not None:
@@ -157,7 +183,9 @@ def _reserved_marker_lines(content: str) -> list[tuple[int, str]]:
                     fence = None
                 continue
 
-        opening = _opening_fence(line)
+        _update_list_containers(line, list_indents)
+        active_container_indent = list_indents[-1] if list_indents else 0
+        opening = _opening_fence(line, active_container_indent)
         if opening is not None:
             fence = opening
             continue
