@@ -14,6 +14,7 @@ from core import (  # noqa: E402
     reindex_store,
     write_knowledge,
 )
+from partial_update import update_knowledge  # noqa: E402
 from sections import parse_sections, read_section, replace_section  # noqa: E402
 
 
@@ -134,6 +135,38 @@ class Review5058234594Test(unittest.TestCase):
                     self.assertTrue(checked["ok"], checked["errors"])
                     reindexed = reindex_store(root)
                     self.assertEqual(reindexed["documents"], 1)
+
+    def test_scoped_update_preserves_unicode_separator_inline_material(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            init_store(root)
+            separator = "\u2028"
+            inline_example = (
+                f"prefix{separator}<!-- knowledge-section:inline -->"
+                f"{separator}## Inline"
+            )
+            content = (
+                inline_example
+                + "\n\n<!-- knowledge-section:real -->\n## Real\nreal body"
+            )
+            created = write_knowledge(root, [create_entry(content)])["changes"][0]
+
+            updated = update_knowledge(
+                root,
+                created["id"],
+                created["revision"],
+                {"section": {"id": "real", "content": "updated body"}},
+            )["changes"][0]
+            reread = read_knowledge(root, [updated["id"]])["results"][0]
+
+            self.assertTrue(reread["content"].startswith(inline_example))
+            self.assertEqual(
+                [span.section_id for span in parse_sections(reread["content"])],
+                ["real"],
+            )
+            self.assertEqual(
+                read_section(reread["content"], "real")["content"], "updated body"
+            )
 
     def test_cr_lf_and_crlf_remain_markdown_line_boundaries(self):
         for line_ending in ("\n", "\r", "\r\n"):
