@@ -230,21 +230,29 @@ def _html_block_ends(line: str, block: HtmlBlockState) -> bool:
     raise AssertionError(f"unsupported HTML block kind: {block.kind}")
 
 
-def _update_list_containers(line: str, list_indents: list[int]) -> None:
-    """Track enough list-container indentation to classify continuation leaf blocks."""
+def _update_list_containers(line: str, list_indents: list[int]) -> bool:
+    """Update list indentation and report whether this line exits a container."""
+    previous_indent = list_indents[-1] if list_indents else None
     if not line.strip():
-        return
+        return False
     layout = _list_item_layout(line)
     if layout is not None:
         bullet_indent, content_indent, _ = layout
         while list_indents and bullet_indent < list_indents[-1]:
             list_indents.pop()
         list_indents.append(content_indent)
-        return
+        current_indent = list_indents[-1] if list_indents else None
+        return previous_indent is not None and (
+            current_indent is None or current_indent < previous_indent
+        )
 
     _, indent_columns = _leading_indent(line)
     while list_indents and indent_columns < list_indents[-1]:
         list_indents.pop()
+    current_indent = list_indents[-1] if list_indents else None
+    return previous_indent is not None and (
+        current_indent is None or current_indent < previous_indent
+    )
 
 
 def _reserved_marker_lines(content: str) -> list[tuple[int, str]]:
@@ -287,7 +295,9 @@ def _reserved_marker_lines(content: str) -> list[tuple[int, str]]:
             allow_type7 = True
             continue
 
-        _update_list_containers(line, list_indents)
+        left_list_container = _update_list_containers(line, list_indents)
+        if left_list_container:
+            allow_type7 = True
         active_container_indent = list_indents[-1] if list_indents else 0
 
         marker_text, indent_columns = _leading_indent(line)
