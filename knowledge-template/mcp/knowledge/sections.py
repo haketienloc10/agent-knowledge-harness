@@ -336,9 +336,9 @@ def parse_sections(content: str) -> list[SectionSpan]:
 
     Section identity comes from an exact standalone marker immediately followed by a
     Markdown H2-H6 heading. Section boundaries are marker-to-marker, not heading-level
-    based, so nested Markdown headings remain ordinary section content. Marker examples
-    inside fenced Markdown code blocks, raw HTML blocks, or indented/container code are
-    ignored and never become live section state.
+    based, so nested Markdown headings remain ordinary section content. Marker examples inside fenced Markdown code blocks or indented/container code are ignored;
+    marker examples inside raw HTML blocks are ignored as well. None of these examples
+    become live section state.
     """
     if not isinstance(content, str):
         raise SectionError("knowledge content must be a string")
