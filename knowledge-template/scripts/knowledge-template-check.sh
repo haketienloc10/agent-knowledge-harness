@@ -184,6 +184,7 @@ for pattern in \
   'MAX_SECTION_ID_CHARS = 100' \
   'MAX_SECTION_HEADING_CHARS = 300' \
   'MAX_SECTION_BODY_CHARS = 24_000' \
+  'LIST_ITEM_RE' \
   'knowledge-section:' \
   'lowercase-kebab-id' \
   'duplicate knowledge section id' \
@@ -191,8 +192,10 @@ for pattern in \
   'body exceeds' \
   'immediately followed' \
   'Markdown H2-H6 heading' \
+  '_leading_indent' \
   '_opening_fence' \
-  'fenced Markdown code blocks are ignored' \
+  'indent_columns >= 4' \
+  'fenced Markdown code blocks or indented/container code are ignored' \
   '_section_body_lines' \
   'never content whitespace' \
   'preserve all existing semantic section markers' \
