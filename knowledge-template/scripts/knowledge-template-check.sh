@@ -29,6 +29,7 @@ required=(
   mcp/knowledge/tests/test_partial_contracts.py
   mcp/knowledge/tests/test_partial_update.py
   mcp/knowledge/tests/test_review_5058125369.py
+  mcp/knowledge/tests/test_review_5058234594.py
   mcp/knowledge/tests/test_review_regressions.py
   mcp/knowledge/tests/test_section_integrity.py
   mcp/knowledge/tests/test_server_contract.py
@@ -195,6 +196,11 @@ for pattern in \
   'SECTION_HEADING_RE' \
   'three leading spaces' \
   'spaces or tabs after the opening hash sequence' \
+  'SETEXT_UNDERLINE_RE' \
+  'MARKDOWN_LINE_ENDING_RE' \
+  'split_markdown_lines' \
+  'standalone `===`' \
+  'Unicode text separators remain ordinary content characters' \
   'LIST_ITEM_RE' \
   '_list_item_layout' \
   '_update_list_containers' \
@@ -295,8 +301,10 @@ for contract in \
   'search_knowledge' \
   'read_knowledge' \
   'parse_sections' \
+  'split_markdown_lines' \
   '_validate_section_structure' \
   '_semantic_content_from_body' \
+  'CR/LF Markdown line boundaries' \
   'content exceeds.*MAX_CONTENT_CHARS' \
   '_validate_section_structure\(content, label="knowledge write content"\)' \
   '_validate_section_structure\(content, label=relative\)'; do
