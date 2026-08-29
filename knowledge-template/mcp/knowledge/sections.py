@@ -31,6 +31,14 @@ class SectionSpan:
     end_index: int
 
 
+@dataclass(frozen=True)
+class FenceState:
+    char: str
+    minimum_length: int
+    container_indent: int
+    max_closing_indent: int
+
+
 def _section_body_lines(lines: list[str], span: SectionSpan) -> list[str]:
     """Remove only canonical structural blank separators, never content whitespace."""
     body = list(lines[span.heading_index + 1 : span.end_index])
@@ -81,8 +89,8 @@ def _fence_run(value: str) -> tuple[str, int] | None:
     return fence_char, run
 
 
-def _opening_fence(line: str) -> tuple[str, int, int] | None:
-    """Return the fence char, run length, and allowed raw closing indentation.
+def _opening_fence(line: str) -> FenceState | None:
+    """Return lightweight fence state used only for reserved-marker recognition.
 
     This scanner is deliberately smaller than a full Markdown parser. It recognizes
     ordinary CommonMark fences with up to three leading columns and fences that begin
@@ -94,7 +102,12 @@ def _opening_fence(line: str) -> tuple[str, int, int] | None:
     if indent_columns <= 3:
         fence = _fence_run(stripped)
         if fence is not None:
-            return fence[0], fence[1], 3
+            return FenceState(
+                char=fence[0],
+                minimum_length=fence[1],
+                container_indent=0,
+                max_closing_indent=3,
+            )
 
     list_match = LIST_ITEM_RE.fullmatch(line)
     if list_match is None:
@@ -107,30 +120,43 @@ def _opening_fence(line: str) -> tuple[str, int, int] | None:
     if fence is None:
         return None
     content_prefix = line[: list_match.start("content")]
-    return fence[0], fence[1], _column_width(content_prefix) + 3
+    container_indent = _column_width(content_prefix)
+    return FenceState(
+        char=fence[0],
+        minimum_length=fence[1],
+        container_indent=container_indent,
+        max_closing_indent=container_indent + 3,
+    )
 
 
-def _is_closing_fence(line: str, fence: tuple[str, int, int]) -> bool:
-    fence_char, minimum_length, max_indent_columns = fence
+def _is_closing_fence(line: str, fence: FenceState) -> bool:
     stripped, indent_columns = _leading_indent(line)
-    if indent_columns > max_indent_columns:
+    if indent_columns > fence.max_closing_indent:
         return False
     run = 0
-    while run < len(stripped) and stripped[run] == fence_char:
+    while run < len(stripped) and stripped[run] == fence.char:
         run += 1
-    return run >= minimum_length and not stripped[run:].strip()
+    return run >= fence.minimum_length and not stripped[run:].strip()
 
 
 def _reserved_marker_lines(content: str) -> list[tuple[int, str]]:
     """Return reserved marker-like lines that are live Markdown, not code/examples."""
     lines = content.splitlines()
-    fence: tuple[str, int, int] | None = None
+    fence: FenceState | None = None
     found: list[tuple[int, str]] = []
     for index, line in enumerate(lines):
         if fence is not None:
-            if _is_closing_fence(line, fence):
+            _, indent_columns = _leading_indent(line)
+            if line.strip() and indent_columns < fence.container_indent:
+                # An outdented nonblank line leaves a list container. An unclosed fenced
+                # block inside that list ends with its parent container, so process this
+                # line again as ordinary outer Markdown instead of hiding live markers.
                 fence = None
-            continue
+            else:
+                if _is_closing_fence(line, fence):
+                    fence = None
+                continue
+
         opening = _opening_fence(line)
         if opening is not None:
             fence = opening
