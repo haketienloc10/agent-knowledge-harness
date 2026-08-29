@@ -385,6 +385,18 @@ def _revision(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def _semantic_content_from_body(body: str) -> str:
+    """Return the exact semantic content exposed by full/scoped Knowledge reads."""
+    lines = body.splitlines()
+    heading_index = next((i for i, line in enumerate(lines) if line.strip()), None)
+    if heading_index is None:
+        return ""
+    content_lines = lines[heading_index + 1 :]
+    if content_lines and content_lines[0] == "":
+        content_lines = content_lines[1:]
+    return "\n".join(content_lines)
+
+
 def _load_document(root: Path, path: Path) -> Document:
     resolved = _ensure_within(root, path)
     if not resolved.is_file():
@@ -407,7 +419,12 @@ def _load_document(root: Path, path: Path) -> Document:
         raise ValidationError(
             f"{relative}: first body heading must exactly match title: {expected_heading}"
         )
-    _validate_section_structure(body, label=relative)
+    content = _semantic_content_from_body(body)
+    if len(content) > MAX_CONTENT_CHARS:
+        raise ValidationError(
+            f"{relative}: content exceeds {MAX_CONTENT_CHARS} characters"
+        )
+    _validate_section_structure(content, label=relative)
     return Document(
         path=resolved,
         relative_path=relative,
@@ -418,14 +435,7 @@ def _load_document(root: Path, path: Path) -> Document:
 
 
 def _document_content(document: Document) -> str:
-    lines = document.body.splitlines()
-    heading_index = next((i for i, line in enumerate(lines) if line.strip()), None)
-    if heading_index is None:
-        return ""
-    content_lines = lines[heading_index + 1 :]
-    if content_lines and content_lines[0] == "":
-        content_lines = content_lines[1:]
-    return "\n".join(content_lines)
+    return _semantic_content_from_body(document.body)
 
 
 def _detail_paths(root: Path) -> Iterable[Path]:
@@ -670,7 +680,7 @@ def init_store(root: Path) -> dict[str, Any]:
     root = Path(root).expanduser().resolve()
     root.mkdir(parents=True, exist_ok=True)
     for namespace in sorted(NAMESPACE_DIRS):
-        (root / namespace).mkdir(parents=True, exist_ok=True)
+        (root / namespace).mkdir()
     index_path = root / INDEX_FILENAME
     if not index_path.exists():
         _atomic_write(index_path, render_index({}).encode("utf-8"))
