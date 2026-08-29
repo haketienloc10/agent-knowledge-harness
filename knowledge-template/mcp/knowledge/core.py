@@ -680,7 +680,7 @@ def init_store(root: Path) -> dict[str, Any]:
     root = Path(root).expanduser().resolve()
     root.mkdir(parents=True, exist_ok=True)
     for namespace in sorted(NAMESPACE_DIRS):
-        (root / namespace).mkdir()
+        (root / namespace).mkdir(parents=True, exist_ok=True)
     index_path = root / INDEX_FILENAME
     if not index_path.exists():
         _atomic_write(index_path, render_index({}).encode("utf-8"))
