@@ -73,8 +73,17 @@ class HtmlBlockState:
 
 
 def split_markdown_lines(value: str) -> list[str]:
-    """Split only on CR/LF Markdown line endings, never Unicode text separators."""
-    return MARKDOWN_LINE_ENDING_RE.split(value)
+    """Split only on CR/LF Markdown line endings, never Unicode text separators.
+
+    Match `str.splitlines()` terminal behavior for Markdown line endings so a canonical
+    file's final newline does not become semantic content. Interior empty lines remain.
+    """
+    if value == "":
+        return []
+    lines = MARKDOWN_LINE_ENDING_RE.split(value)
+    if lines and lines[-1] == "" and value.endswith(("\r", "\n")):
+        lines.pop()
+    return lines
 
 
 def _section_body_lines(lines: list[str], span: SectionSpan) -> list[str]:
@@ -481,7 +490,9 @@ def replace_section(content: str, section_id: str, replacement: str) -> str:
     lines = split_markdown_lines(content)
     before = lines[: target.heading_index + 1]
     after = lines[target.end_index :]
-    body_lines = split_markdown_lines(replacement) if replacement else []
+    # Preserve the replacement's historical terminal-empty behavior while splitting only
+    # on Markdown CR/LF line endings; Unicode separators remain content characters.
+    body_lines = MARKDOWN_LINE_ENDING_RE.split(replacement) if replacement else []
 
     rebuilt = list(before)
     if body_lines:
