@@ -16,6 +16,8 @@ SECTION_MARKER_RE = re.compile(
 # three leading spaces and either spaces or tabs after the opening hash sequence.
 SECTION_HEADING_RE = re.compile(r"^ {0,3}#{2,6}[ \t]+\S.*$")
 ATX_HEADING_RE = re.compile(r"^#{1,6}(?:[ \t]+|$)")
+SETEXT_UNDERLINE_RE = re.compile(r"^(?:=+|-+)[ \t]*$")
+MARKDOWN_LINE_ENDING_RE = re.compile(r"\r\n|\r|\n")
 LIST_ITEM_RE = re.compile(
     r"^ {0,3}(?:[-+*]|\d{1,9}[.)])(?P<gap>[ \t]+)(?P<content>.*)$"
 )
@@ -68,6 +70,11 @@ class FenceState:
 class HtmlBlockState:
     kind: int
     container_indent: int
+
+
+def split_markdown_lines(value: str) -> list[str]:
+    """Split only on CR/LF Markdown line endings, never Unicode text separators."""
+    return MARKDOWN_LINE_ENDING_RE.split(value)
 
 
 def _section_body_lines(lines: list[str], span: SectionSpan) -> list[str]:
@@ -259,7 +266,7 @@ def _update_list_containers(line: str, list_indents: list[int]) -> bool:
 
 def _reserved_marker_lines(content: str) -> list[tuple[int, str]]:
     """Return reserved marker-like lines that are live Markdown, not code/examples."""
-    lines = content.splitlines()
+    lines = split_markdown_lines(content)
     fence: FenceState | None = None
     html_block: HtmlBlockState | None = None
     list_indents: list[int] = []
@@ -336,6 +343,14 @@ def _reserved_marker_lines(content: str) -> list[tuple[int, str]]:
             allow_type7 = True
             continue
 
+        # A Setext underline converts the immediately preceding paragraph into a heading,
+        # so the next line is a block boundary where CommonMark type-7 HTML may start. Do
+        # this only when a paragraph is actually open; a standalone `===` remains ordinary
+        # paragraph text and must not accidentally enable a following type-7 block.
+        if not allow_type7 and SETEXT_UNDERLINE_RE.fullmatch(marker_text):
+            allow_type7 = True
+            continue
+
         # We do not implement a complete CommonMark paragraph parser here; this flag is
         # intentionally conservative and exists only to avoid treating standalone type-7
         # HTML tags as block starts when the immediately preceding line is ordinary text.
@@ -350,12 +365,13 @@ def parse_sections(content: str) -> list[SectionSpan]:
     Markdown H2-H6 heading. Section boundaries are marker-to-marker, not heading-level
     based, so nested Markdown headings remain ordinary section content. Marker examples inside fenced Markdown code blocks or indented/container code are ignored;
     marker examples inside raw HTML blocks are ignored as well. None of these examples
-    become live section state.
+    become live section state. Only CR/LF Markdown line endings delimit section syntax;
+    Unicode text separators remain ordinary content characters.
     """
     if not isinstance(content, str):
         raise SectionError("knowledge content must be a string")
 
-    lines = content.splitlines()
+    lines = split_markdown_lines(content)
     raw_markers: list[tuple[int, str]] = []
     seen: set[str] = set()
 
@@ -437,7 +453,7 @@ def read_section(content: str, section_id: str) -> dict[str, str]:
     for span in parse_sections(content):
         if span.section_id != section_id:
             continue
-        lines = content.splitlines()
+        lines = split_markdown_lines(content)
         body = "\n".join(_section_body_lines(lines, span))
         return {
             "section_id": span.section_id,
@@ -462,10 +478,10 @@ def replace_section(content: str, section_id: str, replacement: str) -> str:
     if target is None:
         raise SectionError(f"knowledge section does not exist: {section_id}")
 
-    lines = content.splitlines()
+    lines = split_markdown_lines(content)
     before = lines[: target.heading_index + 1]
     after = lines[target.end_index :]
-    body_lines = replacement.split("\n") if replacement else []
+    body_lines = split_markdown_lines(replacement) if replacement else []
 
     rebuilt = list(before)
     if body_lines:
