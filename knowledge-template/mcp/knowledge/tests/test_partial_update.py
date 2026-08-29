@@ -77,6 +77,44 @@ Live body."""
         self.assertEqual([section.section_id for section in sections], ["contract"])
         self.assertEqual(read_section(content, "contract")["content"], "Live body.")
 
+    def test_list_nested_fenced_marker_examples_are_not_live_sections(self):
+        content = """Examples:
+
+- Continuation fence:
+
+    ```markdown
+    <!-- knowledge-section:Bad_Id -->
+    ## This is only an example
+    ```
+- ```markdown
+  <!-- knowledge-section:also-not-live -->
+  ## This is also only an example
+  ```
+
+<!-- knowledge-section:contract -->
+## Contract
+
+Live body."""
+        sections = parse_sections(content)
+        self.assertEqual([section.section_id for section in sections], ["contract"])
+        self.assertEqual(read_section(content, "contract")["content"], "Live body.")
+
+    def test_indented_code_marker_is_not_live_but_shallow_indented_marker_fails(self):
+        content = """    <!-- knowledge-section:not-live -->
+    ## Indented code example
+
+<!-- knowledge-section:contract -->
+## Contract
+
+Live body."""
+        self.assertEqual(
+            [section.section_id for section in parse_sections(content)],
+            ["contract"],
+        )
+        with self.assertRaises(SectionError) as raised:
+            parse_sections("  <!-- knowledge-section:contract -->\n## Contract\n\nbody")
+        self.assertIn("must not be indented", str(raised.exception))
+
     def test_replacement_allows_fenced_marker_examples_without_changing_structure(self):
         replacement = """```markdown
 <!-- knowledge-section:illustrative-only -->
