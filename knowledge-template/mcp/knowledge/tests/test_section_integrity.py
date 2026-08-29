@@ -8,6 +8,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from core import (  # noqa: E402
+    MAX_CONTENT_CHARS,
     MAX_DOCUMENT_BYTES,
     ValidationError,
     check_store,
@@ -112,12 +113,40 @@ class KnowledgeSectionIntegrityTest(unittest.TestCase):
         checked = check_store(self.root)
         self.assertFalse(checked["ok"])
         self.assertTrue(
-            any("body exceeds 24000 characters" in error for error in checked["errors"]),
+            any("content exceeds 24000 characters" in error for error in checked["errors"]),
             checked["errors"],
         )
         with self.assertRaises(ValidationError) as raised:
             reindex_store(self.root)
-        self.assertIn("body exceeds 24000 characters", str(raised.exception))
+        self.assertIn("content exceeds 24000 characters", str(raised.exception))
+
+    def test_check_and_reindex_reject_total_content_beyond_write_bound(self):
+        created = write_knowledge(self.root, [entry(content=VALID_CONTENT)])["changes"][0]
+        path = self.root / created["path"]
+        text = path.read_text(encoding="utf-8")
+        body_size = MAX_CONTENT_CHARS // 2
+        oversized = (
+            "<!-- knowledge-section:first -->\n"
+            "## First\n\n"
+            + ("a" * body_size)
+            + "\n\n<!-- knowledge-section:second -->\n"
+            "## Second\n\n"
+            + ("b" * body_size)
+        )
+        self.assertLess(body_size, MAX_SECTION_BODY_CHARS)
+        self.assertGreater(len(oversized), MAX_CONTENT_CHARS)
+        path.write_text(text.replace(VALID_CONTENT, oversized), encoding="utf-8")
+        self.assertLess(path.stat().st_size, MAX_DOCUMENT_BYTES)
+
+        checked = check_store(self.root)
+        self.assertFalse(checked["ok"])
+        self.assertTrue(
+            any("content exceeds 24000 characters" in error for error in checked["errors"]),
+            checked["errors"],
+        )
+        with self.assertRaises(ValidationError) as raised:
+            reindex_store(self.root)
+        self.assertIn("content exceeds 24000 characters", str(raised.exception))
 
     def test_fenced_marker_example_is_valid_through_core_integrity_paths(self):
         content = """```markdown
@@ -138,11 +167,10 @@ Stable body."""
 
     def test_list_nested_fenced_marker_example_is_valid_through_integrity_paths(self):
         content = """- Example marker syntax:
-
-    ```markdown
-    <!-- knowledge-section:Bad_Id -->
-    ## Illustrative marker only
-    ```
+  ```markdown
+  <!-- knowledge-section:Bad_Id -->
+  ## Illustrative marker only
+  ```
 
 <!-- knowledge-section:contract -->
 ## Contract
