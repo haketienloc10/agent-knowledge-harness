@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
 from core import (
     MAX_CONTENT_CHARS,
@@ -62,6 +62,7 @@ SearchTerm = Annotated[str, Field(min_length=1, max_length=200)]
 Locator = Annotated[str, Field(min_length=1, max_length=1000)]
 SourceRef = Annotated[str, Field(min_length=1, max_length=200)]
 SourceNote = Annotated[str, Field(min_length=1, max_length=1000)]
+ExactMarkdownText = Annotated[str, StringConstraints(strip_whitespace=False)]
 
 
 class StrictModel(BaseModel):
@@ -191,12 +192,13 @@ class KnowledgeWriteEntry(StrictModel):
         )
     )
     content: Annotated[
-        str,
+        ExactMarkdownText,
         Field(
             max_length=MAX_CONTENT_CHARS,
             description=(
-                "Free-form durable content. Vietnamese, English, or mixed language is "
-                "allowed; do not add a language field."
+                "Free-form durable content. Preserve Markdown-significant indentation "
+                "and trailing spaces. Vietnamese, English, or mixed language is allowed; "
+                "do not add a language field."
             ),
         ),
     ]
@@ -361,7 +363,16 @@ class KnowledgeReadItem(StrictModel):
     scope: KnowledgeScope
     routing: KnowledgeRouting
     sources: list[KnowledgeSource]
-    content: str
+    content: Annotated[
+        ExactMarkdownText,
+        Field(
+            max_length=MAX_CONTENT_CHARS,
+            description=(
+                "Exact stored semantic Markdown content. Preserve indentation and "
+                "trailing spaces because they may carry Markdown meaning."
+            ),
+        ),
+    ]
 
 
 class KnowledgeReadResult(StrictModel):
