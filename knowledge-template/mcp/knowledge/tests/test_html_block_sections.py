@@ -95,6 +95,21 @@ Durable body."""
             ["live"],
         )
 
+    def test_list_outdent_restores_block_boundary_for_type7_html(self):
+        content = """- List paragraph.
+<custom>
+<!-- knowledge-section:not-live -->
+## Example only
+
+<!-- knowledge-section:live -->
+## Live
+
+Durable body."""
+        self.assertEqual(
+            [section.section_id for section in parse_sections(content)],
+            ["live"],
+        )
+
     def test_top_level_reserved_marker_keeps_precedence_over_html_comment_syntax(self):
         self.assertEqual(
             [section.section_id for section in parse_sections(live_tail())],
