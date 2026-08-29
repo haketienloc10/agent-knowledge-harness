@@ -25,8 +25,10 @@ required=(
   mcp/knowledge/pyproject.toml
   mcp/knowledge/tests/test_contracts.py
   mcp/knowledge/tests/test_core.py
+  mcp/knowledge/tests/test_html_block_sections.py
   mcp/knowledge/tests/test_partial_contracts.py
   mcp/knowledge/tests/test_partial_update.py
+  mcp/knowledge/tests/test_review_5058125369.py
   mcp/knowledge/tests/test_review_regressions.py
   mcp/knowledge/tests/test_section_integrity.py
   mcp/knowledge/tests/test_server_contract.py
@@ -190,11 +192,17 @@ for pattern in \
   'MAX_SECTION_ID_CHARS = 100' \
   'MAX_SECTION_HEADING_CHARS = 300' \
   'MAX_SECTION_BODY_CHARS = 24_000' \
+  'SECTION_HEADING_RE' \
+  'three leading spaces' \
+  'spaces or tabs after the opening hash sequence' \
   'LIST_ITEM_RE' \
   '_list_item_layout' \
   '_update_list_containers' \
   'active_container_indent' \
   'relative_indent' \
+  'HtmlBlockState' \
+  '_opening_html_block' \
+  'raw HTML blocks are ignored' \
   'knowledge-section:' \
   'lowercase-kebab-id' \
   'duplicate knowledge section id' \
@@ -283,6 +291,7 @@ for contract in \
   'MAX_DOCUMENT_BYTES' \
   'MAX_SEARCH_RESULTS' \
   'MAX_READ_RESULTS' \
+  'init_store' \
   'search_knowledge' \
   'read_knowledge' \
   'parse_sections' \
