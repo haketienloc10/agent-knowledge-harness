@@ -12,7 +12,9 @@ SECTION_MARKER_PREFIX = "<!-- knowledge-section:"
 SECTION_MARKER_RE = re.compile(
     r"^<!-- knowledge-section:([a-z0-9]+(?:-[a-z0-9]+)*) -->$"
 )
-SECTION_HEADING_RE = re.compile(r"^#{2,6} +\S.*$")
+# Semantic sections require non-empty ATX heading content. CommonMark permits up to
+# three leading spaces and either spaces or tabs after the opening hash sequence.
+SECTION_HEADING_RE = re.compile(r"^ {0,3}#{2,6}[ \t]+\S.*$")
 ATX_HEADING_RE = re.compile(r"^#{1,6}(?:[ \t]+|$)")
 LIST_ITEM_RE = re.compile(
     r"^ {0,3}(?:[-+*]|\d{1,9}[.)])(?P<gap>[ \t]+)(?P<content>.*)$"
