@@ -126,6 +126,12 @@ rg -q 'knowledge-distill' "$server" || \
 
 rg -q 'extra="forbid"' "$contracts" || \
   fail 'typed knowledge models must reject unknown fields'
+rg -q 'StringConstraints' "$contracts" || \
+  fail 'typed full-content fields must support field-level whitespace preservation'
+rg -q '^ExactMarkdownText = Annotated' "$contracts" || \
+  fail 'full write/read content must share one exact Markdown text constraint'
+rg -q 'strip_whitespace=False' "$contracts" || \
+  fail 'full write/read content must preserve Markdown-significant whitespace'
 rg -q "routing fields must be nested under the 'routing' object" "$contracts" || \
   fail 'typed write schema must explain flat routing mistakes'
 rg -q 'filesystem fields are owned by Knowledge MCP' "$contracts" || \
@@ -185,6 +191,10 @@ for pattern in \
   'MAX_SECTION_HEADING_CHARS = 300' \
   'MAX_SECTION_BODY_CHARS = 24_000' \
   'LIST_ITEM_RE' \
+  '_list_item_layout' \
+  '_update_list_containers' \
+  'active_container_indent' \
+  'relative_indent' \
   'knowledge-section:' \
   'lowercase-kebab-id' \
   'duplicate knowledge section id' \
@@ -269,6 +279,7 @@ for contract in \
   'os\.replace' \
   'canonical_relative_path' \
   'INDEX_FILENAME' \
+  'MAX_CONTENT_CHARS' \
   'MAX_DOCUMENT_BYTES' \
   'MAX_SEARCH_RESULTS' \
   'MAX_READ_RESULTS' \
@@ -276,8 +287,10 @@ for contract in \
   'read_knowledge' \
   'parse_sections' \
   '_validate_section_structure' \
+  '_semantic_content_from_body' \
+  'content exceeds.*MAX_CONTENT_CHARS' \
   '_validate_section_structure\(content, label="knowledge write content"\)' \
-  '_validate_section_structure\(body, label=relative\)'; do
+  '_validate_section_structure\(content, label=relative\)'; do
   rg -q "$contract" "$core" || fail "knowledge core missing contract: $contract"
 done
 
