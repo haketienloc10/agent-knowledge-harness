@@ -67,6 +67,24 @@ class KnowledgeReviewRegressionTest(unittest.IsolatedAsyncioTestCase):
             self.assertIn(tool, description)
         self.assertIn("knowledge_update.expected_revision", description)
 
+    async def test_full_write_and_exact_read_preserve_markdown_boundary_whitespace(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            init_store(root)
+            exact = "    indented_code()\nline with hard break  "
+            with patch.dict(os.environ, {"KNOWLEDGE_STORE_ROOT": str(root)}):
+                async with Client(mcp) as client:
+                    created = await client.call_tool(
+                        "knowledge_write", {"entries": [entry(content=exact)]}
+                    )
+                    self.assertFalse(created.is_error)
+                    item_id = created.structured_content["changes"][0]["id"]
+                    full = await client.call_tool("knowledge_read", {"ids": [item_id]})
+                    self.assertFalse(full.is_error)
+                    self.assertEqual(
+                        full.structured_content["results"][0]["content"], exact
+                    )
+
     async def test_last_scoped_section_round_trip_preserves_markdown_whitespace(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
