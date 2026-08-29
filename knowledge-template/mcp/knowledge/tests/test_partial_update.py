@@ -80,7 +80,17 @@ Live body."""
     def test_list_nested_fenced_marker_examples_are_not_live_sections(self):
         content = """Examples:
 
-- Continuation fence:
+- Two-space continuation fence:
+  ```markdown
+  <!-- knowledge-section:two-space-example -->
+  ## This is only an example
+  ```
+- Three-space continuation fence:
+   ```markdown
+   <!-- knowledge-section:three-space-example -->
+   ## This is only an example
+   ```
+- Four-space continuation fence:
 
     ```markdown
     <!-- knowledge-section:Bad_Id -->
@@ -99,7 +109,26 @@ Live body."""
         self.assertEqual([section.section_id for section in sections], ["contract"])
         self.assertEqual(read_section(content, "contract")["content"], "Live body.")
 
-    def test_outdent_ends_unclosed_list_fence_before_live_marker(self):
+    def test_outdent_ends_unclosed_list_continuation_fence_before_live_marker(self):
+        for indent in ("  ", "   ", "    "):
+            with self.subTest(indent=len(indent)):
+                content = (
+                    "- Example fence:\n"
+                    f"{indent}```markdown\n"
+                    f"{indent}example without a closing fence\n"
+                    "<!-- knowledge-section:contract -->\n"
+                    "## Contract\n\n"
+                    "Live body."
+                )
+                sections = parse_sections(content)
+                self.assertEqual(
+                    [section.section_id for section in sections], ["contract"]
+                )
+                self.assertEqual(
+                    read_section(content, "contract")["content"], "Live body."
+                )
+
+    def test_outdent_ends_unclosed_list_item_fence_before_live_marker(self):
         content = """- ```markdown
   example without a closing fence
 <!-- knowledge-section:contract -->
