@@ -99,6 +99,17 @@ Live body."""
         self.assertEqual([section.section_id for section in sections], ["contract"])
         self.assertEqual(read_section(content, "contract")["content"], "Live body.")
 
+    def test_outdent_ends_unclosed_list_fence_before_live_marker(self):
+        content = """- ```markdown
+  example without a closing fence
+<!-- knowledge-section:contract -->
+## Contract
+
+Live body."""
+        sections = parse_sections(content)
+        self.assertEqual([section.section_id for section in sections], ["contract"])
+        self.assertEqual(read_section(content, "contract")["content"], "Live body.")
+
     def test_indented_code_marker_is_not_live_but_shallow_indented_marker_fails(self):
         content = """    <!-- knowledge-section:not-live -->
     ## Indented code example
