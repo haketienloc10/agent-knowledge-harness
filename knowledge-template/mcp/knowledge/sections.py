@@ -13,6 +13,9 @@ SECTION_MARKER_RE = re.compile(
     r"^<!-- knowledge-section:([a-z0-9]+(?:-[a-z0-9]+)*) -->$"
 )
 SECTION_HEADING_RE = re.compile(r"^#{2,6} +\S.*$")
+LIST_ITEM_RE = re.compile(
+    r"^ {0,3}(?:[-+*]|\d{1,9}[.)])(?P<gap>[ \t]+)(?P<content>.*)$"
+)
 
 
 class SectionError(ValueError):
@@ -38,35 +41,79 @@ def _section_body_lines(lines: list[str], span: SectionSpan) -> list[str]:
     return body
 
 
-def _opening_fence(line: str) -> tuple[str, int] | None:
-    """Return a CommonMark-style fenced-code opener, if this line is one.
+def _leading_indent(line: str) -> tuple[str, int]:
+    """Return content after leading spaces/tabs plus its CommonMark-style column width."""
+    index = 0
+    columns = 0
+    while index < len(line) and line[index] in {" ", "\t"}:
+        if line[index] == " ":
+            columns += 1
+        else:
+            columns += 4 - (columns % 4)
+        index += 1
+    return line[index:], columns
 
-    We only need fence state for reserved-marker recognition, so keep this intentionally
-    small: up to three leading spaces, at least three backticks/tildes, and the CommonMark
-    backtick-info restriction. Indented code blocks remain ordinary content for the
-    section-marker contract; fenced examples are the supported way to show marker syntax.
-    """
-    stripped = line.lstrip(" ")
-    if len(line) - len(stripped) > 3 or len(stripped) < 3:
+
+def _column_width(value: str) -> int:
+    columns = 0
+    for char in value:
+        if char == "\t":
+            columns += 4 - (columns % 4)
+        else:
+            columns += 1
+    return columns
+
+
+def _fence_run(value: str) -> tuple[str, int] | None:
+    if len(value) < 3:
         return None
-    fence_char = stripped[0]
+    fence_char = value[0]
     if fence_char not in {"`", "~"}:
         return None
     run = 0
-    while run < len(stripped) and stripped[run] == fence_char:
+    while run < len(value) and value[run] == fence_char:
         run += 1
     if run < 3:
         return None
-    rest = stripped[run:]
+    rest = value[run:]
     if fence_char == "`" and "`" in rest:
         return None
     return fence_char, run
 
 
-def _is_closing_fence(line: str, fence: tuple[str, int]) -> bool:
-    fence_char, minimum_length = fence
-    stripped = line.lstrip(" ")
-    if len(line) - len(stripped) > 3:
+def _opening_fence(line: str) -> tuple[str, int, int] | None:
+    """Return the fence char, run length, and allowed raw closing indentation.
+
+    This scanner is deliberately smaller than a full Markdown parser. It recognizes
+    ordinary CommonMark fences with up to three leading columns and fences that begin
+    directly as list-item content (for example ``- ```markdown``). Marker-like lines
+    indented four or more columns are handled separately as non-live Markdown
+    code/container content, so list-continuation fences do not need a full container stack.
+    """
+    stripped, indent_columns = _leading_indent(line)
+    if indent_columns <= 3:
+        fence = _fence_run(stripped)
+        if fence is not None:
+            return fence[0], fence[1], 3
+
+    list_match = LIST_ITEM_RE.fullmatch(line)
+    if list_match is None:
+        return None
+    gap = list_match.group("gap")
+    if _column_width(gap) > 4:
+        return None
+    content = list_match.group("content")
+    fence = _fence_run(content)
+    if fence is None:
+        return None
+    content_prefix = line[: list_match.start("content")]
+    return fence[0], fence[1], _column_width(content_prefix) + 3
+
+
+def _is_closing_fence(line: str, fence: tuple[str, int, int]) -> bool:
+    fence_char, minimum_length, max_indent_columns = fence
+    stripped, indent_columns = _leading_indent(line)
+    if indent_columns > max_indent_columns:
         return False
     run = 0
     while run < len(stripped) and stripped[run] == fence_char:
@@ -75,9 +122,9 @@ def _is_closing_fence(line: str, fence: tuple[str, int]) -> bool:
 
 
 def _reserved_marker_lines(content: str) -> list[tuple[int, str]]:
-    """Return reserved marker-like lines that are live Markdown, not fenced examples."""
+    """Return reserved marker-like lines that are live Markdown, not code/examples."""
     lines = content.splitlines()
-    fence: tuple[str, int] | None = None
+    fence: tuple[str, int, int] | None = None
     found: list[tuple[int, str]] = []
     for index, line in enumerate(lines):
         if fence is not None:
@@ -88,8 +135,17 @@ def _reserved_marker_lines(content: str) -> list[tuple[int, str]]:
         if opening is not None:
             fence = opening
             continue
-        if line.strip().startswith(SECTION_MARKER_PREFIX):
-            found.append((index, line))
+
+        marker_text, indent_columns = _leading_indent(line)
+        if not marker_text.startswith(SECTION_MARKER_PREFIX):
+            continue
+        # Four columns is Markdown indented-code territory at top level and also the
+        # common raw indentation of fenced/list continuation content. Such text cannot
+        # be a top-level live section marker. One-to-three columns remain candidates so
+        # parse_sections can reject accidentally indented live-marker syntax explicitly.
+        if indent_columns >= 4:
+            continue
+        found.append((index, line))
     return found
 
 
@@ -99,7 +155,8 @@ def parse_sections(content: str) -> list[SectionSpan]:
     Section identity comes from an exact standalone marker immediately followed by a
     Markdown H2-H6 heading. Section boundaries are marker-to-marker, not heading-level
     based, so nested Markdown headings remain ordinary section content. Marker examples
-    inside fenced Markdown code blocks are ignored and never become live section state.
+    inside fenced Markdown code blocks or indented/container code are ignored and never
+    become live section state.
     """
     if not isinstance(content, str):
         raise SectionError("knowledge content must be a string")
