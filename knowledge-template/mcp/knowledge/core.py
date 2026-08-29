@@ -12,7 +12,7 @@ from typing import Any, Iterable
 import yaml
 from filelock import FileLock
 
-from sections import SectionError, parse_sections
+from sections import SectionError, parse_sections, split_markdown_lines
 
 INDEX_FILENAME = "INDEX.md"
 LOCK_FILENAME = ".knowledge.lock"
@@ -386,8 +386,8 @@ def _revision(data: bytes) -> str:
 
 
 def _semantic_content_from_body(body: str) -> str:
-    """Return the exact semantic content exposed by full/scoped Knowledge reads."""
-    lines = body.splitlines()
+    """Return semantic content using only CR/LF Markdown line boundaries."""
+    lines = split_markdown_lines(body)
     heading_index = next((i for i, line in enumerate(lines) if line.strip()), None)
     if heading_index is None:
         return ""
@@ -414,7 +414,9 @@ def _load_document(root: Path, path: Path) -> Document:
     metadata_raw, body = _split_front_matter(text, label=relative)
     metadata = validate_metadata(metadata_raw, expected_path=relative)
     expected_heading = f"# {metadata['title']}"
-    first_body_line = next((line.strip() for line in body.splitlines() if line.strip()), "")
+    first_body_line = next(
+        (line.strip() for line in split_markdown_lines(body) if line.strip()), ""
+    )
     if first_body_line != expected_heading:
         raise ValidationError(
             f"{relative}: first body heading must exactly match title: {expected_heading}"
