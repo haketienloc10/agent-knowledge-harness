@@ -136,6 +136,25 @@ Stable body."""
         self.assertEqual(reindexed["documents"], 1)
         self.assertTrue(check_store(self.root)["ok"])
 
+    def test_list_nested_fenced_marker_example_is_valid_through_integrity_paths(self):
+        content = """- Example marker syntax:
+
+    ```markdown
+    <!-- knowledge-section:Bad_Id -->
+    ## Illustrative marker only
+    ```
+
+<!-- knowledge-section:contract -->
+## Contract
+
+Stable body."""
+        write_knowledge(self.root, [entry(content=content)])
+        checked = check_store(self.root)
+        self.assertTrue(checked["ok"], checked["errors"])
+        reindexed = reindex_store(self.root)
+        self.assertEqual(reindexed["documents"], 1)
+        self.assertTrue(check_store(self.root)["ok"])
+
 
 if __name__ == "__main__":
     unittest.main()
