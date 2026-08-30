@@ -31,6 +31,7 @@ required=(
   mcp/knowledge/tests/test_review_5058125369.py
   mcp/knowledge/tests/test_review_5058234594.py
   mcp/knowledge/tests/test_review_5058439895.py
+  mcp/knowledge/tests/test_review_5060423648.py
   mcp/knowledge/tests/test_review_regressions.py
   mcp/knowledge/tests/test_section_integrity.py
   mcp/knowledge/tests/test_server_contract.py
@@ -211,13 +212,19 @@ for pattern in \
   'allow_empty' \
   '_update_list_containers' \
   'BLOCK_QUOTE_RE' \
+  '_block_quote_layout' \
   '_block_quote_content' \
   '_blockquote_next_allows_type7' \
+  'Nested quote prefixes' \
   'inner_allow_type7' \
   'LINK_REFERENCE_START_RE' \
   '_consume_link_destination' \
   '_consume_link_title' \
+  '_consume_multiline_link_title' \
+  '_link_reference_definition_end' \
   '_is_link_reference_definition' \
+  'multiline labels' \
+  'link_reference_through' \
   'in_block_quote' \
   'closing tag need not match' \
   'Indented code cannot interrupt a paragraph' \
@@ -285,6 +292,12 @@ rg -q '\.claude/skills' "$skill_installer" || \
   fail 'skill installer must install Claude user-scope skill'
 rg -q 'install-user-skill\.sh' "$installer" || \
   fail 'main knowledge installer must install the distillation skill'
+rg -q 'knowledge\.py" check --root' "$installer" || \
+  fail 'main knowledge installer must preflight the canonical store before registration'
+rg -q 'compatibility preflight failed' "$installer" || \
+  fail 'main knowledge installer must explain store compatibility preflight failure'
+rg -q 'reserved section-marker collisions' "$installer" || \
+  fail 'main knowledge installer must explain reserved-prefix collision repair'
 
 skill_smoke_root="$(mktemp -d)"
 if ! bash "$skill_installer" \
