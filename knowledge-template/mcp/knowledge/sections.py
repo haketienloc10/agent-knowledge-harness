@@ -392,20 +392,18 @@ def _link_reference_definition_end(lines: list[str], start_index: int) -> int | 
     This is intentionally a block-boundary helper, not a renderer. It supports multiline
     labels, the one permitted line ending before destination/title, and multiline titles.
     Invalid continuation-title text falls back to the already-complete destination-only
-    definition so the following line is still processed as ordinary Markdown.
+    definition so the following line is still processed as ordinary Markdown. The caller's
+    canonical Knowledge content bound is the natural scan bound; do not impose a smaller
+    parser-only title length limit.
     """
     if start_index >= len(lines):
         return None
 
     candidate: list[str] = []
-    total_chars = 0
     for line in lines[start_index:]:
         if candidate and not line.strip():
             break
         candidate.append(line)
-        total_chars += len(line) + 1
-        if total_chars > 8_192:
-            break
     if not candidate:
         return None
 
