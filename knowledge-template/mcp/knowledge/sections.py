@@ -18,12 +18,25 @@ SECTION_HEADING_RE = re.compile(r"^ {0,3}#{2,6}[ \t]+\S.*$")
 ATX_HEADING_RE = re.compile(r"^#{1,6}(?:[ \t]+|$)")
 SETEXT_UNDERLINE_RE = re.compile(r"^(?:=+|-+)[ \t]*$")
 MARKDOWN_LINE_ENDING_RE = re.compile(r"\r\n|\r|\n")
+THEMATIC_BREAK_BODY_RE = re.compile(
+    r"(?:(?:\*[ \t]*){3,}|(?:_[ \t]*){3,}|(?:-[ \t]*){3,})$"
+)
 LIST_ITEM_RE = re.compile(
-    r"^ {0,3}(?:[-+*]|\d{1,9}[.)])(?P<gap>[ \t]+)(?P<content>.*)$"
+    r"^ {0,3}(?P<marker>[-+*]|\d{1,9}[.)])"
+    r"(?:(?P<gap>[ \t]+)(?P<content>.*)|(?P<empty>$))"
+)
+BLOCK_QUOTE_RE = re.compile(r"^ {0,3}>[ \t]?(?P<content>.*)$")
+LINK_REFERENCE_DEFINITION_RE = re.compile(
+    r"^ {0,3}\[(?:\\.|[^\[\]\\]){1,999}\]:[ \t]*"
+    r"(?:<[^<>\r\n]*>|[^\x00-\x20]+)"
+    r"(?:[ \t]+(?:\"(?:\\.|[^\"])*\"|'(?:\\.|[^'])*'|\((?:\\.|[^)])*\)))?"
+    r"[ \t]*$"
 )
 HTML_LITERAL_TAG_RE = re.compile(
     r"^<(?:pre|script|style|textarea)(?=[ \t>]|$)", re.IGNORECASE
 )
+# CommonMark type-1 HTML blocks intentionally end on any literal-content end tag;
+# the closing tag need not match the tag that opened the block.
 HTML_LITERAL_END_RE = re.compile(
     r"</(?:pre|script|style|textarea)>", re.IGNORECASE
 )
@@ -119,14 +132,43 @@ def _column_width(value: str) -> int:
     return columns
 
 
+def _is_thematic_break(line: str, container_indent: int = 0) -> bool:
+    """Recognize a thematic break relative to the current container indentation."""
+    stripped, indent_columns = _leading_indent(line)
+    if indent_columns < container_indent:
+        return False
+    if indent_columns - container_indent > 3:
+        return False
+    return THEMATIC_BREAK_BODY_RE.fullmatch(stripped) is not None
+
+
 def _list_item_layout(line: str) -> tuple[int, int, str] | None:
     """Return bullet indent, content indent, and content for one supported list item."""
-    match = LIST_ITEM_RE.fullmatch(line)
-    if match is None or _column_width(match.group("gap")) > 4:
+    # CommonMark gives thematic breaks precedence when the same line could be parsed
+    # as either a thematic break or a list item.
+    if _is_thematic_break(line):
         return None
+
+    match = LIST_ITEM_RE.fullmatch(line)
+    if match is None:
+        return None
+
     _, bullet_indent = _leading_indent(line)
+    marker = match.group("marker")
+    gap = match.group("gap")
+    content = match.group("content")
+
+    # An end-of-line marker (or a marker followed only by whitespace) starts the
+    # "blank first line" list-item form. Its continuation indent is W + 1 regardless
+    # of how much trailing whitespace follows the marker.
+    if gap is None or content == "":
+        return bullet_indent, bullet_indent + len(marker) + 1, ""
+
     content_indent = _column_width(line[: match.start("content")])
-    return bullet_indent, content_indent, match.group("content")
+    gap_width = content_indent - (bullet_indent + len(marker))
+    if gap_width > 4:
+        return None
+    return bullet_indent, content_indent, content
 
 
 def _leaf_block_content(
@@ -248,13 +290,58 @@ def _html_block_ends(line: str, block: HtmlBlockState) -> bool:
     raise AssertionError(f"unsupported HTML block kind: {block.kind}")
 
 
-def _update_list_containers(line: str, list_indents: list[int]) -> bool:
+def _block_quote_content(line: str) -> str | None:
+    match = BLOCK_QUOTE_RE.fullmatch(line)
+    return match.group("content") if match is not None else None
+
+
+def _is_link_reference_definition(line: str) -> bool:
+    """Recognize the unambiguous single-line link-reference form used for boundaries."""
+    return LINK_REFERENCE_DEFINITION_RE.fullmatch(line) is not None
+
+
+def _blockquote_next_allows_type7(line: str, *, inner_allow_type7: bool) -> bool | None:
+    """Return next-line type-7 eligibility for one explicit block-quote line.
+
+    Ordinary quoted paragraph text can lazily continue on a following unquoted line, so
+    it must keep type 7 disabled. Clear non-paragraph blocks inside the quote end that
+    paragraph state and permit a following outer type-7 HTML block.
+    """
+    content = _block_quote_content(line)
+    if content is None:
+        return None
+    stripped, indent_columns = _leading_indent(content)
+    if not stripped:
+        return True
+    if indent_columns >= 4:
+        return True
+    if ATX_HEADING_RE.match(stripped):
+        return True
+    if not inner_allow_type7 and SETEXT_UNDERLINE_RE.fullmatch(stripped):
+        return True
+    if _is_thematic_break(content):
+        return True
+    if _fence_run(stripped) is not None:
+        return True
+    if _opening_html_block(content, 0, allow_type7=inner_allow_type7) is not None:
+        return True
+    if inner_allow_type7 and _is_link_reference_definition(content):
+        return True
+    return False
+
+
+def _update_list_containers(
+    line: str,
+    list_indents: list[int],
+    *,
+    allow_empty: bool,
+) -> bool:
     """Update list indentation and report whether this line exits a container."""
     previous_indent = list_indents[-1] if list_indents else None
     if not line.strip():
         return False
     layout = _list_item_layout(line)
-    if layout is not None:
+    if layout is not None and (layout[2] or allow_empty):
         bullet_indent, content_indent, _ = layout
         while list_indents and bullet_indent < list_indents[-1]:
             list_indents.pop()
@@ -281,6 +368,8 @@ def _reserved_marker_lines(content: str) -> list[tuple[int, str]]:
     list_indents: list[int] = []
     found: list[tuple[int, str]] = []
     allow_type7 = True
+    in_block_quote = False
+
     for index, line in enumerate(lines):
         if fence is not None:
             _, indent_columns = _leading_indent(line)
@@ -311,11 +400,36 @@ def _reserved_marker_lines(content: str) -> list[tuple[int, str]]:
 
         if not line.strip():
             allow_type7 = True
+            in_block_quote = False
             continue
 
-        left_list_container = _update_list_containers(line, list_indents)
+        quote_content = _block_quote_content(line)
+        if quote_content is not None:
+            inner_allow_type7 = True if not in_block_quote else allow_type7
+            in_block_quote = True
+            quote_allow_type7 = _blockquote_next_allows_type7(
+                line,
+                inner_allow_type7=inner_allow_type7,
+            )
+            assert quote_allow_type7 is not None
+            allow_type7 = quote_allow_type7
+            continue
+        if in_block_quote and allow_type7:
+            # A non-quoted line after a clear non-paragraph quote block is outer Markdown.
+            # If allow_type7 is false, keep the quote open because ordinary paragraph
+            # continuation may legally omit its `>` marker.
+            in_block_quote = False
+
+        left_list_container = _update_list_containers(
+            line,
+            list_indents,
+            # Empty list items cannot interrupt an open paragraph, but they are valid at
+            # a block boundary and inside an already-active list.
+            allow_empty=allow_type7 or bool(list_indents),
+        )
         if left_list_container:
             allow_type7 = True
+            in_block_quote = False
         active_container_indent = list_indents[-1] if list_indents else 0
 
         marker_text, indent_columns = _leading_indent(line)
@@ -326,12 +440,14 @@ def _reserved_marker_lines(content: str) -> list[tuple[int, str]]:
             if indent_columns < 4:
                 found.append((index, line))
             allow_type7 = True
+            in_block_quote = False
             continue
 
         opening_fence = _opening_fence(line, active_container_indent)
         if opening_fence is not None:
             fence = opening_fence
             allow_type7 = True
+            in_block_quote = False
             continue
 
         opening_html = _opening_html_block(
@@ -343,13 +459,15 @@ def _reserved_marker_lines(content: str) -> list[tuple[int, str]]:
             if not _html_block_ends(line, opening_html):
                 html_block = opening_html
             allow_type7 = True
+            in_block_quote = False
             continue
 
-        # Four columns is Markdown indented-code territory at top level and also the
-        # common raw indentation of fenced/list continuation content. Non-marker text
-        # there cannot make the next type-7 HTML tag interrupt a paragraph at top level.
+        # Four columns is indented-code territory only when no paragraph is open.
+        # Indented code cannot interrupt a paragraph; in that case this remains ordinary
+        # paragraph continuation and type-7 HTML must stay disabled on the next line.
         if indent_columns >= 4:
-            allow_type7 = True
+            if allow_type7:
+                in_block_quote = False
             continue
 
         # A Setext underline converts the immediately preceding paragraph into a heading,
@@ -358,12 +476,29 @@ def _reserved_marker_lines(content: str) -> list[tuple[int, str]]:
         # paragraph text and must not accidentally enable a following type-7 block.
         if not allow_type7 and SETEXT_UNDERLINE_RE.fullmatch(marker_text):
             allow_type7 = True
+            in_block_quote = False
             continue
 
-        # We do not implement a complete CommonMark paragraph parser here; this flag is
-        # intentionally conservative and exists only to avoid treating standalone type-7
-        # HTML tags as block starts when the immediately preceding line is ordinary text.
+        # Thematic breaks can interrupt a paragraph and, unlike list items, win when a
+        # line such as `- - -` is syntactically ambiguous.
+        if _is_thematic_break(line, active_container_indent):
+            allow_type7 = True
+            in_block_quote = False
+            continue
+
+        # Link-reference definitions do not interrupt paragraphs. Recognize the
+        # unambiguous single-line form only when already at a block boundary.
+        if allow_type7 and _is_link_reference_definition(line):
+            in_block_quote = False
+            continue
+
+        # We do not implement a complete CommonMark paragraph parser here. This state
+        # deliberately tracks whether the current line clearly leaves a paragraph open;
+        # type-7 HTML is enabled only at verified block boundaries.
         allow_type7 = ATX_HEADING_RE.match(marker_text) is not None
+        if allow_type7:
+            in_block_quote = False
+
     return found
 
 
