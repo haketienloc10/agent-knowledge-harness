@@ -26,12 +26,7 @@ LIST_ITEM_RE = re.compile(
     r"(?:(?P<gap>[ \t]+)(?P<content>.*)|(?P<empty>$))"
 )
 BLOCK_QUOTE_RE = re.compile(r"^ {0,3}>[ \t]?(?P<content>.*)$")
-LINK_REFERENCE_DEFINITION_RE = re.compile(
-    r"^ {0,3}\[(?:\\.|[^\[\]\\]){1,999}\]:[ \t]*"
-    r"(?:<[^<>\r\n]*>|[^\x00-\x20]+)"
-    r"(?:[ \t]+(?:\"(?:\\.|[^\"])*\"|'(?:\\.|[^'])*'|\((?:\\.|[^)])*\)))?"
-    r"[ \t]*$"
-)
+LINK_REFERENCE_START_RE = re.compile(r"^ {0,3}\[")
 HTML_LITERAL_TAG_RE = re.compile(
     r"^<(?:pre|script|style|textarea)(?=[ \t>]|$)", re.IGNORECASE
 )
@@ -295,9 +290,115 @@ def _block_quote_content(line: str) -> str | None:
     return match.group("content") if match is not None else None
 
 
+def _consume_link_destination(line: str, start: int) -> int | None:
+    """Return the end offset of one valid single-line CommonMark link destination."""
+    if start >= len(line):
+        return None
+    if line[start] == "<":
+        index = start + 1
+        while index < len(line):
+            char = line[index]
+            if char == "\\" and index + 1 < len(line):
+                index += 2
+                continue
+            if char in {"\r", "\n", "<"}:
+                return None
+            if char == ">":
+                return index + 1
+            index += 1
+        return None
+
+    index = start
+    depth = 0
+    while index < len(line):
+        char = line[index]
+        if char == "\\" and index + 1 < len(line):
+            index += 2
+            continue
+        if ord(char) <= 0x20:
+            break
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            if depth == 0:
+                return None
+            depth -= 1
+        index += 1
+    if index == start or depth != 0:
+        return None
+    return index
+
+
+def _consume_link_title(line: str, start: int) -> int | None:
+    """Return the end offset of one optional single-line CommonMark link title."""
+    if start >= len(line):
+        return start
+    closer = {"\"": "\"", "'": "'", "(": ")"}.get(line[start])
+    if closer is None:
+        return None
+    index = start + 1
+    while index < len(line):
+        char = line[index]
+        if char == "\\" and index + 1 < len(line):
+            index += 2
+            continue
+        if char == closer:
+            return index + 1
+        index += 1
+    return None
+
+
 def _is_link_reference_definition(line: str) -> bool:
-    """Recognize the unambiguous single-line link-reference form used for boundaries."""
-    return LINK_REFERENCE_DEFINITION_RE.fullmatch(line) is not None
+    """Recognize a complete single-line CommonMark link-reference definition."""
+    start_match = LINK_REFERENCE_START_RE.match(line)
+    if start_match is None:
+        return False
+
+    label_start = line.find("[", 0, start_match.end())
+    index = label_start + 1
+    label_chars = 0
+    while index < len(line):
+        char = line[index]
+        if char == "\\" and index + 1 < len(line):
+            label_chars += 2
+            index += 2
+            continue
+        if char == "[":
+            return False
+        if char == "]":
+            break
+        label_chars += 1
+        index += 1
+    if index >= len(line) or line[index] != "]" or not (1 <= label_chars <= 999):
+        return False
+
+    index += 1
+    if index >= len(line) or line[index] != ":":
+        return False
+    index += 1
+    while index < len(line) and line[index] in {" ", "\t"}:
+        index += 1
+
+    destination_end = _consume_link_destination(line, index)
+    if destination_end is None:
+        return False
+    index = destination_end
+
+    whitespace_start = index
+    while index < len(line) and line[index] in {" ", "\t"}:
+        index += 1
+    if index == len(line):
+        return True
+    if index == whitespace_start:
+        return False
+
+    title_end = _consume_link_title(line, index)
+    if title_end is None:
+        return False
+    index = title_end
+    while index < len(line) and line[index] in {" ", "\t"}:
+        index += 1
+    return index == len(line)
 
 
 def _blockquote_next_allows_type7(line: str, *, inner_allow_type7: bool) -> bool | None:
@@ -314,7 +415,9 @@ def _blockquote_next_allows_type7(line: str, *, inner_allow_type7: bool) -> bool
     if not stripped:
         return True
     if indent_columns >= 4:
-        return True
+        # Indented code cannot interrupt a quoted paragraph either; it is a block only
+        # when the quote's inner paragraph is already closed.
+        return inner_allow_type7
     if ATX_HEADING_RE.match(stripped):
         return True
     if not inner_allow_type7 and SETEXT_UNDERLINE_RE.fullmatch(stripped):
@@ -486,8 +589,8 @@ def _reserved_marker_lines(content: str) -> list[tuple[int, str]]:
             in_block_quote = False
             continue
 
-        # Link-reference definitions do not interrupt paragraphs. Recognize the
-        # unambiguous single-line form only when already at a block boundary.
+        # Link-reference definitions do not interrupt paragraphs. Recognize a complete
+        # single-line definition only when already at a block boundary.
         if allow_type7 and _is_link_reference_definition(line):
             in_block_quote = False
             continue
