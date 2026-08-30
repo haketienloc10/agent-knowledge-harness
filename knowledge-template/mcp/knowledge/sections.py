@@ -285,9 +285,23 @@ def _html_block_ends(line: str, block: HtmlBlockState) -> bool:
     raise AssertionError(f"unsupported HTML block kind: {block.kind}")
 
 
+def _block_quote_layout(line: str) -> tuple[int, str] | None:
+    """Return nested block-quote depth plus innermost content for one explicit quote line."""
+    depth = 0
+    content = line
+    while True:
+        match = BLOCK_QUOTE_RE.fullmatch(content)
+        if match is None:
+            break
+        depth += 1
+        content = match.group("content")
+    return (depth, content) if depth else None
+
+
 def _block_quote_content(line: str) -> str | None:
-    match = BLOCK_QUOTE_RE.fullmatch(line)
-    return match.group("content") if match is not None else None
+    """Return innermost content after consuming every explicit nested quote prefix."""
+    layout = _block_quote_layout(line)
+    return layout[1] if layout is not None else None
 
 
 def _consume_link_destination(line: str, start: int) -> int | None:
@@ -348,57 +362,152 @@ def _consume_link_title(line: str, start: int) -> int | None:
     return None
 
 
-def _is_link_reference_definition(line: str) -> bool:
-    """Recognize a complete single-line CommonMark link-reference definition."""
-    start_match = LINK_REFERENCE_START_RE.match(line)
-    if start_match is None:
-        return False
+def _consume_multiline_link_title(text: str, start: int) -> int | None:
+    """Consume a CommonMark link title, allowing line endings but no blank line."""
+    if start >= len(text):
+        return None
+    closer = {"\"": "\"", "'": "'", "(": ")"}.get(text[start])
+    if closer is None:
+        return None
+    index = start + 1
+    while index < len(text):
+        char = text[index]
+        if char == "\\" and index + 1 < len(text):
+            index += 2
+            continue
+        if char == "\n":
+            if index + 1 < len(text) and text[index + 1] == "\n":
+                return None
+            index += 1
+            continue
+        if char == closer:
+            return index + 1
+        index += 1
+    return None
 
-    label_start = line.find("[", 0, start_match.end())
+
+def _link_reference_definition_end(lines: list[str], start_index: int) -> int | None:
+    """Return the inclusive end line of one CommonMark link-reference definition.
+
+    This is intentionally a block-boundary helper, not a renderer. It supports multiline
+    labels, the one permitted line ending before destination/title, and multiline titles.
+    Invalid continuation-title text falls back to the already-complete destination-only
+    definition so the following line is still processed as ordinary Markdown.
+    """
+    if start_index >= len(lines):
+        return None
+
+    candidate: list[str] = []
+    total_chars = 0
+    for line in lines[start_index:]:
+        if candidate and not line.strip():
+            break
+        candidate.append(line)
+        total_chars += len(line) + 1
+        if total_chars > 8_192:
+            break
+    if not candidate:
+        return None
+
+    text = "\n".join(candidate)
+    start_match = LINK_REFERENCE_START_RE.match(text)
+    if start_match is None:
+        return None
+
+    label_start = text.find("[", 0, start_match.end())
     index = label_start + 1
     label_chars = 0
-    while index < len(line):
-        char = line[index]
-        if char == "\\" and index + 1 < len(line):
+    label_has_non_whitespace = False
+    while index < len(text):
+        char = text[index]
+        if char == "\\" and index + 1 < len(text):
+            escaped = text[index + 1]
             label_chars += 2
+            label_has_non_whitespace = label_has_non_whitespace or escaped not in " \t\n"
             index += 2
             continue
         if char == "[":
-            return False
+            return None
         if char == "]":
             break
         label_chars += 1
+        if char not in " \t\n":
+            label_has_non_whitespace = True
+        if label_chars > 999:
+            return None
         index += 1
-    if index >= len(line) or line[index] != "]" or not (1 <= label_chars <= 999):
-        return False
+    if (
+        index >= len(text)
+        or text[index] != "]"
+        or not (1 <= label_chars <= 999)
+        or not label_has_non_whitespace
+    ):
+        return None
 
     index += 1
-    if index >= len(line) or line[index] != ":":
-        return False
+    if index >= len(text) or text[index] != ":":
+        return None
     index += 1
-    while index < len(line) and line[index] in {" ", "\t"}:
+
+    # Optional whitespace before the destination may contain at most one line ending.
+    line_endings = 0
+    while index < len(text) and text[index] in " \t\n":
+        if text[index] == "\n":
+            line_endings += 1
+            if line_endings > 1:
+                return None
         index += 1
 
-    destination_end = _consume_link_destination(line, index)
+    destination_end = _consume_link_destination(text, index)
     if destination_end is None:
-        return False
+        return None
     index = destination_end
 
     whitespace_start = index
-    while index < len(line) and line[index] in {" ", "\t"}:
+    while index < len(text) and text[index] in " \t":
         index += 1
-    if index == len(line):
-        return True
-    if index == whitespace_start:
-        return False
 
-    title_end = _consume_link_title(line, index)
+    # A destination-only definition is already complete at this line. If the next line
+    # is not a valid title continuation, return this endpoint and process that next line
+    # normally (CommonMark example: `\"title\" ok` is a paragraph, not a definition title).
+    destination_line_end = index
+    if index >= len(text):
+        return start_index + text[:destination_line_end].count("\n")
+
+    if text[index] != "\n":
+        if index == whitespace_start:
+            return None
+        title_end = _consume_multiline_link_title(text, index)
+        if title_end is None:
+            return None
+        after_title = title_end
+        while after_title < len(text) and text[after_title] in " \t":
+            after_title += 1
+        if after_title < len(text) and text[after_title] != "\n":
+            return None
+        return start_index + text[:after_title].count("\n")
+
+    title_line = index + 1
+    while title_line < len(text) and text[title_line] in " \t":
+        title_line += 1
+    if title_line >= len(text) or text[title_line] not in {"\"", "'", "("}:
+        return start_index + text[:destination_line_end].count("\n")
+
+    title_end = _consume_multiline_link_title(text, title_line)
     if title_end is None:
-        return False
-    index = title_end
-    while index < len(line) and line[index] in {" ", "\t"}:
-        index += 1
-    return index == len(line)
+        return start_index + text[:destination_line_end].count("\n")
+
+    after_title = title_end
+    while after_title < len(text) and text[after_title] in " \t":
+        after_title += 1
+    if after_title < len(text) and text[after_title] != "\n":
+        return start_index + text[:destination_line_end].count("\n")
+    return start_index + text[:after_title].count("\n")
+
+
+def _is_link_reference_definition(line: str) -> bool:
+    """Recognize one complete single-line CommonMark link-reference definition."""
+    return _link_reference_definition_end([line], 0) == 0
 
 
 def _blockquote_next_allows_type7(line: str, *, inner_allow_type7: bool) -> bool | None:
@@ -406,7 +515,8 @@ def _blockquote_next_allows_type7(line: str, *, inner_allow_type7: bool) -> bool
 
     Ordinary quoted paragraph text can lazily continue on a following unquoted line, so
     it must keep type 7 disabled. Clear non-paragraph blocks inside the quote end that
-    paragraph state and permit a following outer type-7 HTML block.
+    paragraph state and permit a following outer type-7 HTML block. Nested quote prefixes
+    are consumed before classifying the innermost block content.
     """
     content = _block_quote_content(line)
     if content is None:
@@ -472,8 +582,17 @@ def _reserved_marker_lines(content: str) -> list[tuple[int, str]]:
     found: list[tuple[int, str]] = []
     allow_type7 = True
     in_block_quote = False
+    link_reference_through = -1
 
     for index, line in enumerate(lines):
+        if index <= link_reference_through:
+            # Link-reference definitions are leaf-block material. Continuation lines for
+            # multiline labels/destinations/titles must not reopen paragraph or marker
+            # state before the definition is complete.
+            allow_type7 = True
+            in_block_quote = False
+            continue
+
         if fence is not None:
             _, indent_columns = _leading_indent(line)
             if line.strip() and indent_columns < fence.container_indent:
@@ -589,11 +708,15 @@ def _reserved_marker_lines(content: str) -> list[tuple[int, str]]:
             in_block_quote = False
             continue
 
-        # Link-reference definitions do not interrupt paragraphs. Recognize a complete
-        # single-line definition only when already at a block boundary.
-        if allow_type7 and _is_link_reference_definition(line):
-            in_block_quote = False
-            continue
+        # Link-reference definitions do not interrupt paragraphs. At a verified block
+        # boundary, consume the whole definition including a next-line destination/title
+        # and multiline title so those continuation lines cannot accidentally open one.
+        if allow_type7:
+            link_reference_end = _link_reference_definition_end(lines, index)
+            if link_reference_end is not None:
+                link_reference_through = link_reference_end
+                in_block_quote = False
+                continue
 
         # We do not implement a complete CommonMark paragraph parser here. This state
         # deliberately tracks whether the current line clearly leaves a paragraph open;
