@@ -213,7 +213,10 @@ for pattern in \
   'BLOCK_QUOTE_RE' \
   '_block_quote_content' \
   '_blockquote_next_allows_type7' \
-  'LINK_REFERENCE_DEFINITION_RE' \
+  'inner_allow_type7' \
+  'LINK_REFERENCE_START_RE' \
+  '_consume_link_destination' \
+  '_consume_link_title' \
   '_is_link_reference_definition' \
   'in_block_quote' \
   'closing tag need not match' \
