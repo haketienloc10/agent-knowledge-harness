@@ -30,6 +30,7 @@ required=(
   mcp/knowledge/tests/test_partial_update.py
   mcp/knowledge/tests/test_review_5058125369.py
   mcp/knowledge/tests/test_review_5058234594.py
+  mcp/knowledge/tests/test_review_5058439895.py
   mcp/knowledge/tests/test_review_regressions.py
   mcp/knowledge/tests/test_section_integrity.py
   mcp/knowledge/tests/test_server_contract.py
@@ -201,9 +202,22 @@ for pattern in \
   'split_markdown_lines' \
   'standalone `===`' \
   'Unicode text separators remain ordinary content characters' \
+  'THEMATIC_BREAK_BODY_RE' \
+  '_is_thematic_break' \
+  'thematic breaks precedence' \
   'LIST_ITEM_RE' \
   '_list_item_layout' \
+  'blank first line' \
+  'allow_empty' \
   '_update_list_containers' \
+  'BLOCK_QUOTE_RE' \
+  '_block_quote_content' \
+  '_blockquote_next_allows_type7' \
+  'LINK_REFERENCE_DEFINITION_RE' \
+  '_is_link_reference_definition' \
+  'in_block_quote' \
+  'closing tag need not match' \
+  'Indented code cannot interrupt a paragraph' \
   'active_container_indent' \
   'relative_indent' \
   'HtmlBlockState' \
