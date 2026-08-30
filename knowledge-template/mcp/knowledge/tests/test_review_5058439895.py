@@ -118,6 +118,23 @@ class Review5058439895Test(unittest.TestCase):
         )
         self.assertEqual(parse_sections(two_space_top_level_fence), [])
 
+    def test_empty_list_item_does_not_interrupt_open_paragraph(self):
+        content = "\n".join(
+            [
+                "paragraph",
+                "-",
+                "  ```markdown",
+                "  <!-- knowledge-section:example -->",
+                "  ## Example",
+                "<!-- knowledge-section:not-live -->",
+                "## Not live",
+            ]
+        )
+
+        # The empty `-` cannot interrupt the open paragraph. The following two-space
+        # fence is therefore top-level, so it remains open and hides later marker text.
+        self.assertEqual(parse_sections(content), [])
+
     def test_link_reference_definition_allows_following_type7_html_block(self):
         content = "\n".join(
             [
@@ -139,6 +156,26 @@ class Review5058439895Test(unittest.TestCase):
             ["real"],
         )
         self.assertEqual(read_section(content, "real")["content"], "real body")
+
+    def test_invalid_link_reference_text_does_not_fake_block_boundary(self):
+        for invalid_reference in ("[foo]: foo)", "[foo]: (foo", "[foo]: /url extra"):
+            with self.subTest(invalid_reference=invalid_reference):
+                content = "\n".join(
+                    [
+                        invalid_reference,
+                        "<custom-element>",
+                        "<!-- knowledge-section:real -->",
+                        "## Real",
+                        "body",
+                    ]
+                )
+
+                # Invalid reference-like text is an ordinary paragraph. Type-7 HTML
+                # cannot interrupt it, so the reserved HTML-comment marker remains live.
+                self.assertEqual(
+                    [span.section_id for span in parse_sections(content)],
+                    ["real"],
+                )
 
     def test_nonparagraph_blockquote_end_allows_following_type7_html(self):
         content = "\n".join(
@@ -175,6 +212,23 @@ class Review5058439895Test(unittest.TestCase):
         # A type-7 tag cannot interrupt the quoted paragraph, so the tag remains lazy
         # paragraph continuation. The reserved HTML-comment marker can interrupt it and
         # must stay live rather than being swallowed as part of a false HTML block.
+        self.assertEqual(
+            [span.section_id for span in parse_sections(content)],
+            ["real"],
+        )
+
+    def test_indented_quoted_line_cannot_interrupt_open_quote_paragraph(self):
+        content = "\n".join(
+            [
+                "> paragraph",
+                ">     continuation",
+                "<custom-element>",
+                "<!-- knowledge-section:real -->",
+                "## Real",
+                "body",
+            ]
+        )
+
         self.assertEqual(
             [span.section_id for span in parse_sections(content)],
             ["real"],
