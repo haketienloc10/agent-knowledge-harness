@@ -47,6 +47,12 @@ class Review5060423648ParserTest(unittest.TestCase):
         content = type7_example('[ref]: /url\n  "multi\n  line title"')
         self.assertEqual(ids(content), ["real"])
 
+    def test_long_valid_multiline_title_has_no_parser_only_8k_cap(self):
+        long_title = "x" * 9_000
+        content = type7_example(f'[ref]: /url\n  "{long_title}"')
+        self.assertLess(len(content), 24_000)
+        self.assertEqual(ids(content), ["real"])
+
     def test_next_line_destination_is_also_kept_inside_definition_boundary(self):
         content = type7_example("[ref]:\n  /url")
         self.assertEqual(ids(content), ["real"])
