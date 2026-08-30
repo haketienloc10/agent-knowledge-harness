@@ -150,7 +150,9 @@ bash scripts/knowledge-template-check.sh
 bash scripts/install-user-mcp.sh --store-root /path/to/shared-knowledge/store
 ```
 
-Mở fresh agent session sau user-scope MCP/skill registration. Sau public Knowledge tool change, rerun installer từ checkout mới để fresh session discover đủ 6 tools.
+Knowledge installer luôn `init` rồi chạy canonical `knowledge check` trên toàn existing store **trước** khi cài skill, tạo wrapper hoặc đổi Codex/Claude MCP registration. Nếu preflight fail, installer dừng để operator sửa canonical document trước; đặc biệt phải fence/escape illustrative text bắt đầu bằng reserved prefix `<!-- knowledge-section:` hoặc chuyển nó thành valid semantic marker + H2–H6 heading. Nếu document đã hợp lệ nhưng index stale, reindex store rồi rerun installer.
+
+Mở fresh agent session chỉ sau khi preflight + user-scope MCP/skill registration hoàn tất. Sau public Knowledge tool change, rerun installer từ checkout mới để fresh session discover đủ 6 tools.
 
 ## Workspace mới
 
@@ -186,7 +188,7 @@ bash scripts/install-user-mcp.sh
 
 rồi mở fresh QiQi/child session để load `$work-item`.
 
-Knowledge public-tool migration cũng chỉ update workspace/repo policy; operator phải rerun `knowledge-template/scripts/install-user-mcp.sh` với existing `--store-root` rồi mở fresh sessions.
+Knowledge public-tool migration cũng chỉ update workspace/repo policy. Operator phải rerun `knowledge-template/scripts/install-user-mcp.sh` với existing `--store-root`; installer preflight toàn store và abort trước user-facing registration nếu legacy content vi phạm reserved-marker/current integrity contract. Chỉ mở fresh sessions sau khi preflight pass.
 
 ## Acceptance smoke
 
