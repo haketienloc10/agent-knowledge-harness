@@ -15,6 +15,10 @@ Installs the user-level Shared Knowledge runtime:
 - stable `agent-knowledge-mcp` wrapper;
 - MCP registration named `knowledge` for available Codex/Claude CLIs.
 
+The installer initializes then integrity-checks the target Knowledge store before changing
+user-scope skill/wrapper/MCP registration. If an existing store is incompatible with the
+current canonical contract, installation stops for manual repair/reindex first.
+
 If an MCP registration or skill with the same name is owned by something else,
 installation fails instead of silently replacing user configuration.
 EOF
@@ -60,6 +64,18 @@ bin_dir="$(python3 -c 'import os,sys; print(os.path.abspath(os.path.expanduser(s
 # imports the same filelock/PyYAML-backed core as the server.
 uv sync --project "$project"
 uv run --project "$project" python "$home/scripts/knowledge.py" init --root "$store_root" >/dev/null
+
+# Public Knowledge contract changes may make formerly inert reserved-prefix text become
+# canonical section syntax. Validate the entire existing store before changing any
+# user-facing skill/wrapper/MCP registration so an incompatible legacy store never gets
+# activated and only fails later in a fresh agent session.
+if ! uv run --project "$project" python "$home/scripts/knowledge.py" check --root "$store_root"; then
+  printf 'ERROR: Knowledge store compatibility preflight failed: %s\n' "$store_root" >&2
+  printf 'Repair the reported canonical documents before enabling the new runtime.\n' >&2
+  printf 'For reserved section-marker collisions, fence/escape illustrative `<!-- knowledge-section:` text or convert it to a valid semantic marker + H2-H6 heading.\n' >&2
+  printf 'If the only issue is a stale index after valid document repair, run `knowledge.py reindex --root <store>` and rerun this installer.\n' >&2
+  exit 78
+fi
 
 # Distillation is agent semantic policy, not MCP storage behavior. Install the same
 # user-scoped skill for both supported agent families so QiQi and Herdr-launched
