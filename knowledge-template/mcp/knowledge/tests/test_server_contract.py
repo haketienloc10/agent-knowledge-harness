@@ -253,17 +253,21 @@ class KnowledgeServerContractTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("code=missing_section", error_text(rejected))
 
     async def test_full_write_rejects_malformed_reserved_section_marker(self):
-        async with Client(mcp) as client:
-            rejected = await client.call_tool(
-                "knowledge_write",
-                {
-                    "entries": [
-                        valid_entry(
-                            content="<!-- knowledge-section:Bad_Id -->\n## Bad\n\nbody"
-                        )
-                    ]
-                },
-            )
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            init_store(root)
+            with patch.dict(os.environ, {"KNOWLEDGE_STORE_ROOT": str(root)}):
+                async with Client(mcp) as client:
+                    rejected = await client.call_tool(
+                        "knowledge_write",
+                        {
+                            "entries": [
+                                valid_entry(
+                                    content="<!-- knowledge-section:Bad_Id -->\n## Bad\n\nbody"
+                                )
+                            ]
+                        },
+                    )
         self.assertTrue(rejected.is_error)
         self.assertIn("code=knowledge_validation", error_text(rejected))
 
