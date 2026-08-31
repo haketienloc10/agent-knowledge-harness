@@ -48,11 +48,14 @@ for path in "${required[@]}"; do
   [[ -f "$home/$path" ]] || fail "missing file: $path"
 done
 
-bash -n "$home/scripts/install-user-mcp.sh" || fail 'install-user-mcp.sh: invalid Bash syntax'
-bash -n "$home/scripts/install-user-skill.sh" || fail 'install-user-skill.sh: invalid Bash syntax'
-bash -n "$home/scripts/knowledge-cli.sh" || fail 'knowledge-cli.sh: invalid Bash syntax'
-bash -n "$home/scripts/knowledge-mcp-server.sh" || fail 'knowledge-mcp-server.sh: invalid Bash syntax'
-bash -n "$home/scripts/knowledge-template-check.sh" || fail 'knowledge-template-check.sh: invalid Bash syntax'
+for script in \
+  scripts/install-user-mcp.sh \
+  scripts/install-user-skill.sh \
+  scripts/knowledge-cli.sh \
+  scripts/knowledge-mcp-server.sh \
+  scripts/knowledge-template-check.sh; do
+  bash -n "$home/$script" || fail "$script: invalid Bash syntax"
+done
 
 python_runtime="python3"
 if [[ -x "$project/.venv/bin/python" ]]; then
@@ -76,6 +79,7 @@ PY
 
 "$python_runtime" - <<'PY' || fail 'knowledge runtime dependencies missing; run uv sync --project mcp/knowledge'
 import filelock
+import markdown_it
 import mcp
 import pydantic
 import yaml
@@ -90,87 +94,63 @@ project_file="$home/mcp/knowledge/pyproject.toml"
 skill="$home/skills/knowledge-distill/SKILL.md"
 installer="$home/scripts/install-user-mcp.sh"
 skill_installer="$home/scripts/install-user-skill.sh"
+core="$home/mcp/knowledge/core.py"
 
+# Public MCP surface and progressive-disclosure contract.
 [[ "$(rg -c '^@mcp\.tool\(\)$' "$server" || true)" == "6" ]] || \
   fail 'knowledge server must expose exactly six MCP tools'
 for tool in knowledge_search knowledge_read knowledge_read_metadata knowledge_read_section knowledge_write knowledge_update; do
   rg -q "^async def ${tool}\\(" "$server" || fail "missing ${tool} tool"
 done
-rg -q 'keywords: SearchKeywords' "$server" || \
-  fail 'knowledge_search must expose typed keyword constraints'
-rg -q 'context: KnowledgeSearchContext \| None' "$server" || \
-  fail 'knowledge_search context must use closed typed schema'
-rg -q 'ids: ReadIds' "$server" || \
-  fail 'knowledge read tools must accept exact bounded ids'
-rg -q 'section_id: SectionId' "$server" || \
-  fail 'knowledge_read_section must expose a stable typed section id'
-rg -q 'entries: WriteEntries' "$server" || \
-  fail 'knowledge_write must expose typed nested entry schema'
-rg -q 'expected_revision: ExactReadRevision' "$server" || \
-  fail 'knowledge_update must accept exact revision from any scoped exact read surface'
-rg -q 'changes: KnowledgePatch' "$server" || \
-  fail 'knowledge_update must expose a typed partial patch schema'
-rg -q '\) -> KnowledgeSearchResult:' "$server" || \
-  fail 'knowledge_search must expose structured output schema'
-rg -q '\) -> KnowledgeReadResult:' "$server" || \
-  fail 'knowledge_read must expose structured output schema'
-rg -q '\) -> KnowledgeMetadataReadResult:' "$server" || \
-  fail 'knowledge_read_metadata must expose structured output schema'
-rg -q '\) -> KnowledgeSectionReadResult:' "$server" || \
-  fail 'knowledge_read_section must expose structured output schema'
-rg -q '\) -> KnowledgeWriteResult:' "$server" || \
-  fail 'knowledge mutation tools must expose structured output schema'
-rg -q 'routing decision cards' "$server" || \
-  fail 'server instructions must state search cards are discovery-only'
-rg -q 'intentionally does not return revision' "$server" || \
-  fail 'server instructions must preserve exact-read-before-update guardrail'
-rg -q 'smallest semantic scope required' "$server" || \
-  fail 'server instructions must explain progressive partial reads'
-rg -q 'knowledge-distill' "$server" || \
-  fail 'knowledge mutation contract must route semantic distillation through knowledge-distill'
+for pattern in \
+  'keywords: SearchKeywords' \
+  'context: KnowledgeSearchContext \| None' \
+  'ids: ReadIds' \
+  'section_id: SectionId' \
+  'entries: WriteEntries' \
+  'expected_revision: ExactReadRevision' \
+  'changes: KnowledgePatch' \
+  '\) -> KnowledgeSearchResult:' \
+  '\) -> KnowledgeReadResult:' \
+  '\) -> KnowledgeMetadataReadResult:' \
+  '\) -> KnowledgeSectionReadResult:' \
+  '\) -> KnowledgeWriteResult:' \
+  'routing decision cards' \
+  'intentionally does not return revision' \
+  'smallest semantic scope required' \
+  'knowledge-distill'; do
+  rg -q "$pattern" "$server" || fail "knowledge server missing public invariant: $pattern"
+done
 
-rg -q 'extra="forbid"' "$contracts" || \
-  fail 'typed knowledge models must reject unknown fields'
-rg -q 'StringConstraints' "$contracts" || \
-  fail 'typed full-content fields must support field-level whitespace preservation'
-rg -q '^ExactMarkdownText = Annotated' "$contracts" || \
-  fail 'full write/read content must share one exact Markdown text constraint'
-rg -q 'strip_whitespace=False' "$contracts" || \
-  fail 'full write/read content must preserve Markdown-significant whitespace'
-rg -q "routing fields must be nested under the 'routing' object" "$contracts" || \
-  fail 'typed write schema must explain flat routing mistakes'
-rg -q 'filesystem fields are owned by Knowledge MCP' "$contracts" || \
-  fail 'typed write schema must explain filesystem ownership'
-rg -q 'MAX_READ_RESULTS' "$contracts" || \
-  fail 'knowledge_read ids must have a hard hydration bound'
-rg -q '^class KnowledgeSearchHit' "$contracts" || \
-  fail 'missing thin search-hit schema'
-rg -q '^class KnowledgeReadItem' "$contracts" || \
-  fail 'missing full read-item schema'
-rg -q 'Hard maximum is 500' "$contracts" || \
-  fail 'routing.summary schema must expose its hard maximum'
-rg -q 'target 300 characters or less' "$contracts" || \
-  fail 'routing.summary schema must expose its conservative preflight budget'
-rg -q 'is 1000 characters' "$contracts" || \
-  fail 'source.note schema must expose its hard maximum'
-rg -q 'target 600 characters or less' "$contracts" || \
-  fail 'source.note schema must expose its conservative preflight budget'
-rg -q '"pydantic>=2,<3"' "$project_file" || \
-  fail 'pydantic must be an explicit runtime dependency'
+# Full read/write typed contract.
+for pattern in \
+  'extra="forbid"' \
+  '^ExactMarkdownText = Annotated' \
+  'strip_whitespace=False' \
+  "routing fields must be nested under the 'routing' object" \
+  'filesystem fields are owned by Knowledge MCP' \
+  'MAX_READ_RESULTS' \
+  '^class KnowledgeSearchHit' \
+  '^class KnowledgeReadItem' \
+  'Hard maximum is 500' \
+  'target 300 characters or less' \
+  'is 1000 characters' \
+  'target 600 characters or less'; do
+  rg -q "$pattern" "$contracts" || fail "knowledge contracts missing invariant: $pattern"
+done
 
+# Scoped exact-read / partial-patch schema. KnowledgePatch is the single patch grammar.
 for pattern in \
   '^ExactReadRevision = Annotated' \
   'knowledge_read_metadata' \
   'knowledge_read_section' \
   'knowledge_update.expected_revision' \
-  '^class _ExactSectionModel' \
   '^class KnowledgeMetadataReadResult' \
   '^class KnowledgeSectionReadResult' \
   '^class KnowledgeRoutingPatch' \
   '^class KnowledgeMetadataPatch' \
   '^class KnowledgeSectionPatch' \
   '^class KnowledgePatch' \
-  'str_strip_whitespace=False' \
   'MAX_SECTION_ID_CHARS' \
   'MAX_SECTION_HEADING_CHARS' \
   'MAX_SECTION_BODY_CHARS' \
@@ -178,79 +158,51 @@ for pattern in \
   'full content replacement and section replacement are mutually exclusive'; do
   rg -q "$pattern" "$partial_contracts" || fail "partial contracts missing invariant: $pattern"
 done
-
 for pattern in \
+  'KnowledgePatch' \
+  'KnowledgePatch\.model_validate' \
   'read_knowledge' \
   'write_knowledge' \
   'current\["revision"\] != expected_revision' \
   'knowledge revision conflict' \
-  'replace_section' \
-  'parse_sections' \
-  'metadata.*content.*section'; do
-  rg -U -q "$pattern" "$partial_update" || fail "partial update adapter missing invariant: $pattern"
+  'replace_section'; do
+  rg -q "$pattern" "$partial_update" || fail "partial update adapter missing invariant: $pattern"
 done
+if rg -q '^def _validate_partial_changes\(' "$partial_update"; then
+  fail 'partial update adapter must not duplicate the KnowledgePatch grammar'
+fi
 
+# Stable semantic sections: lexical Knowledge rules here; CommonMark block ownership is
+# delegated to a maintained parser and behavior details are owned by unit/integration tests.
 for pattern in \
   'MAX_KNOWLEDGE_SECTIONS = 100' \
   'MAX_SECTION_ID_CHARS = 100' \
   'MAX_SECTION_HEADING_CHARS = 300' \
   'MAX_SECTION_BODY_CHARS = 24_000' \
+  'SECTION_MARKER_PREFIX' \
+  'SECTION_MARKER_RE' \
   'SECTION_HEADING_RE' \
-  'three leading spaces' \
-  'spaces or tabs after the opening hash sequence' \
-  'SETEXT_UNDERLINE_RE' \
   'MARKDOWN_LINE_ENDING_RE' \
-  'split_markdown_lines' \
-  'standalone `===`' \
-  'Unicode text separators remain ordinary content characters' \
-  'THEMATIC_BREAK_BODY_RE' \
-  '_is_thematic_break' \
-  'thematic breaks precedence' \
-  'LIST_ITEM_RE' \
-  '_list_item_layout' \
-  'blank first line' \
-  'allow_empty' \
-  '_update_list_containers' \
-  'BLOCK_QUOTE_RE' \
-  '_block_quote_layout' \
-  '_block_quote_content' \
-  '_blockquote_next_allows_type7' \
-  'Nested quote prefixes' \
-  'inner_allow_type7' \
-  'LINK_REFERENCE_START_RE' \
-  '_consume_link_destination' \
-  '_consume_link_title' \
-  '_consume_multiline_link_title' \
-  '_link_reference_definition_end' \
-  '_is_link_reference_definition' \
-  'multiline labels' \
-  'link_reference_through' \
-  'in_block_quote' \
-  'closing tag need not match' \
-  'Indented code cannot interrupt a paragraph' \
-  'active_container_indent' \
-  'relative_indent' \
-  'HtmlBlockState' \
-  '_opening_html_block' \
-  'raw HTML blocks are ignored' \
-  'knowledge-section:' \
-  'lowercase-kebab-id' \
+  'MarkdownIt\("commonmark"' \
+  '"html": True' \
+  '^def parse_sections\(' \
+  '^def section_summaries\(' \
+  '^def read_section\(' \
+  '^def replace_section\(' \
   'duplicate knowledge section id' \
   'heading exceeds' \
   'body exceeds' \
   'immediately followed' \
   'Markdown H2-H6 heading' \
-  '_leading_indent' \
-  '_opening_fence' \
-  'indent_columns >= 4' \
-  'fenced Markdown code blocks or indented/container code are ignored' \
-  '_section_body_lines' \
-  'never content whitespace' \
-  'preserve all existing semantic section markers' \
-  'section structure is owned by the canonical document'; do
-  rg -U -q "$pattern" "$sections" || fail "semantic section parser missing invariant: $pattern"
+  'preserve all existing semantic section markers'; do
+  rg -q "$pattern" "$sections" || fail "semantic section contract missing invariant: $pattern"
 done
+rg -q '"markdown-it-py>=3,<5"' "$project_file" || \
+  fail 'markdown-it-py must be an explicit runtime dependency for CommonMark classification'
+rg -q '"pydantic>=2,<3"' "$project_file" || \
+  fail 'pydantic must be an explicit runtime dependency'
 
+# knowledge-distill remains semantic quality policy independent of storage implementation.
 for pattern in \
   'Persist what the work established, not what the task assumed' \
   'Compression must not increase certainty' \
@@ -286,6 +238,7 @@ for pattern in \
   rg -q "$pattern" "$skill" || fail "knowledge-distill missing quality gate: $pattern"
 done
 
+# User-scope installation and upgrade safety.
 rg -q '\.agents/skills' "$skill_installer" || \
   fail 'skill installer must install Codex user-scope skill'
 rg -q '\.claude/skills' "$skill_installer" || \
@@ -316,7 +269,7 @@ else
 fi
 rm -rf "$skill_smoke_root"
 
-core="$home/mcp/knowledge/core.py"
+# Canonical storage/concurrency/integrity stays owned by core.
 for contract in \
   'expected_revision' \
   'FileLock' \
@@ -334,7 +287,6 @@ for contract in \
   'split_markdown_lines' \
   '_validate_section_structure' \
   '_semantic_content_from_body' \
-  'CR/LF Markdown line boundaries' \
   'content exceeds.*MAX_CONTENT_CHARS' \
   '_validate_section_structure\(content, label="knowledge write content"\)' \
   '_validate_section_structure\(content, label=relative\)'; do
