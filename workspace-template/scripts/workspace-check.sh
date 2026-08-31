@@ -121,7 +121,18 @@ fi
 delegation_silence_expected="$(cat <<'EOF'
 ## Delegation Silence
 
-Trong khi `delegate_repo_task` đang chạy đồng bộ, QiQi không poll process/pane/session, không đọc `.qiqi/state/`, không scrape terminal và không phát user-facing progress dựa trên hidden child runtime. Chờ tool terminal return; sau đó reconcile structured state + native response. Nếu tool fail/blocked, xử lý theo exact returned contract, không tự mở runtime internals để đoán tiến độ hoặc kết quả.
+Ngay sau khi `delegate_repo_task` bắt đầu và trước khi call terminally return, fail hoặc cancel, QiQi **không phát bất kỳ user-visible progress commentary nào**.
+
+Trong khoảng này QiQi không:
+
+- phát câu kiểu "đang chạy", "đang chờ", "chưa có kết quả", "tiếp tục chờ" hoặc tương đương;
+- paraphrase lại task, scope, constraint, verification hoặc điều vừa giao chỉ để báo tiến độ;
+- phát commentary về việc đang kiểm chứng, chưa thể kết luận hoặc đang đợi child/agent;
+- suy đoán trạng thái, phần trăm hoàn thành hoặc bước hiện tại của child;
+- poll process/pane/session, đọc `.qiqi/state/`, scrape terminal/transcript hoặc mở runtime internals để suy ra tiến độ/kết quả;
+- tạo dependent task dựa trên partial/in-flight runtime state.
+
+Assistant output tiếp theo cho user phải dựa trên terminal result của call, trừ khi call fail/cancel cần báo exact failure contract. Với `blocked`, xử lý exact returned contract và không invent blocker content từ runtime internals.
 EOF
 )"
 delegation_silence_actual="$(python3 - "$agents_md" <<'PY'
