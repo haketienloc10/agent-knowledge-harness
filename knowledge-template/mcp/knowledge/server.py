@@ -35,7 +35,7 @@ from partial_contracts import (
     SectionId,
 )
 from partial_update import update_knowledge
-from sections import SectionError, parse_sections, read_section, section_summaries
+from sections import SectionError, read_section, section_summaries
 
 
 def _store_root() -> Path:
@@ -147,10 +147,6 @@ async def knowledge_read(ids: ReadIds) -> KnowledgeReadResult:
     """Hydrate one or two exact knowledge ids with full semantic content and revision."""
     try:
         result = read_knowledge(_store_root(), ids)
-        for item in result["results"]:
-            parse_sections(item["content"])
-    except SectionError as exc:
-        _raise_actionable_error(_section_validation_error(exc))
     except KnowledgeError as exc:
         _raise_actionable_error(exc)
     return KnowledgeReadResult.model_validate(result)
@@ -222,11 +218,7 @@ async def knowledge_write(entries: WriteEntries) -> KnowledgeWriteResult:
     """
     payload = [entry.model_dump(exclude_none=True) for entry in entries]
     try:
-        for entry in payload:
-            parse_sections(entry["content"])
         result = write_knowledge(_store_root(), payload)
-    except SectionError as exc:
-        _raise_actionable_error(_section_validation_error(exc))
     except KnowledgeError as exc:
         _raise_actionable_error(exc)
     return KnowledgeWriteResult.model_validate(result)
@@ -247,9 +239,7 @@ async def knowledge_update(
     mutually exclusive. The whole knowledge document still has one SHA-256 revision.
     """
     try:
-        result = update_knowledge(
-            _store_root(), id, expected_revision, changes.to_patch()
-        )
+        result = update_knowledge(_store_root(), id, expected_revision, changes)
     except KnowledgeError as exc:
         _raise_actionable_error(exc)
     return KnowledgeWriteResult.model_validate(result)
