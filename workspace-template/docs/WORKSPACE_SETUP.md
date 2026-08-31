@@ -56,10 +56,20 @@ Fresh session phải có:
 ```text
 knowledge_search
 knowledge_read
+knowledge_read_metadata
+knowledge_read_section
 knowledge_write
+knowledge_update
 ```
 
-Smoke progressive disclosure: search trả thin cards; exact read 1–2 IDs trả full semantic content/sources/revision; search không trả revision.
+Smoke progressive disclosure:
+
+- search trả thin cards và không revision;
+- full read trả full semantic content/sources/revision;
+- metadata read trả provenance/revision + section index nhưng không whole content;
+- section read trả đúng one section body + whole-document revision;
+- partial metadata/section update không yêu cầu caller resend untouched whole document;
+- stale whole-document revision phải conflict.
 
 ## 3. Registry và System Map
 
@@ -116,10 +126,15 @@ Sau khi hiểu concern:
 1. tạo 3–8 discriminative concepts;
 2. `knowledge_search`;
 3. chọn 1–2 exact candidates;
-4. `knowledge_read` full content/provenance/revision;
-5. material use/update dựa trên full read, không search card;
-6. before create/update search dedupe; existing update target full-read trước;
-7. substantive reusable conclusion review/write theo policy.
+4. exact-read smallest sufficient semantic scope:
+   - full `knowledge_read` khi cần whole concept;
+   - `knowledge_read_metadata` khi chỉ cần metadata/provenance/revision + section index;
+   - `knowledge_read_section` khi chỉ cần one existing marked section;
+5. material use/update dựa trên exact read đủ scope, không search card;
+6. before create/update search dedupe; existing update target lấy exact revision từ exact read;
+7. create/intentional whole replacement dùng `knowledge_write`;
+8. metadata/content/one-section partial mutation dùng `knowledge_update` và vẫn cạnh tranh trên one whole-document revision;
+9. substantive reusable conclusion review/mutation theo knowledge-distill policy.
 
 Fact từ Knowledge mà QiQi dùng làm delegation premise và không nằm trong Work Item vẫn phải inline TaskPacket với provenance.
 
@@ -152,16 +167,17 @@ START không có session ID; RESUME dùng exact native ID của cùng repo/agent
 
 Trên repo test an toàn:
 
-1. QiQi thấy `work_item_*`, `knowledge_search/read/write`;
+1. QiQi thấy `work_item_*` và đủ 6 Knowledge tools;
 2. QiQi create/get test Work Item;
 3. delegate TaskPacket identify task/revision;
 4. child đọc cùng Work Item;
 5. child chỉ update current-repo evidence;
 6. QiQi reread thấy revision mới;
-7. stale writer conflict;
-8. Knowledge search card thin + exact read full;
-9. child không mở sibling repo/physical DB/store;
-10. qiqi_delegate native hook/RESUME smoke pass cho agent family thực sự dùng.
+7. stale Work Item writer conflict;
+8. Knowledge search card thin + metadata/section/full exact reads đúng scope;
+9. partial Knowledge update preserve untouched canonical state và stale revision bị reject;
+10. child không mở sibling repo/physical DB/store;
+11. qiqi_delegate native hook/RESUME smoke pass cho agent family thực sự dùng.
 
 ## 12. Workspace đã cài harness
 
@@ -174,7 +190,7 @@ bash scripts/migrate-workspace.sh --status /path/to/workspace
 bash scripts/migrate-workspace.sh --verify /path/to/workspace
 ```
 
-Cài user-scoped Work Item MCP là explicit operator step; migration không tự sửa user MCP config.
+Cài user-scoped Work Item/Knowledge MCP là explicit operator step; migration không tự sửa user MCP config. Sau Knowledge public-tool change phải rerun `knowledge-template/scripts/install-user-mcp.sh` từ harness checkout mới và mở fresh agent session để client discover tool surface mới.
 
 ## Acceptance gate
 
@@ -184,7 +200,7 @@ knowledge-template checker PASS
 workspace-check PASS
 fresh QiQi Work Item discovery PASS
 fresh child Work Item discovery/update PASS
-Knowledge progressive-disclosure smoke PASS
+Knowledge scoped progressive-disclosure smoke PASS
 native qiqi_delegate smoke PASS
 ```
 

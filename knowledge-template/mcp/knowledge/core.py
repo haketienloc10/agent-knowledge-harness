@@ -12,6 +12,8 @@ from typing import Any, Iterable
 import yaml
 from filelock import FileLock
 
+from sections import SectionError, parse_sections, split_markdown_lines
+
 INDEX_FILENAME = "INDEX.md"
 LOCK_FILENAME = ".knowledge.lock"
 INDEX_VERSION = 1
@@ -42,6 +44,13 @@ class ValidationError(KnowledgeError):
 
 class ConflictError(KnowledgeError):
     pass
+
+
+def _validate_section_structure(content: str, *, label: str) -> None:
+    try:
+        parse_sections(content)
+    except SectionError as exc:
+        raise ValidationError(f"{label}: {exc}") from exc
 
 
 @dataclass(frozen=True)
@@ -317,7 +326,8 @@ def validate_write_entry(value: Any) -> dict[str, Any]:
     content = value.get("content")
     if not isinstance(content, str):
         raise ValidationError("content must be a string")
-    content = content.strip()
+    content = content.strip("\r\n")
+    _validate_section_structure(content, label="knowledge write content")
     if len(content) > MAX_CONTENT_CHARS:
         raise ValidationError(f"content exceeds {MAX_CONTENT_CHARS} characters")
 
@@ -375,6 +385,18 @@ def _revision(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def _semantic_content_from_body(body: str) -> str:
+    """Return semantic content using only CR/LF Markdown line boundaries."""
+    lines = split_markdown_lines(body)
+    heading_index = next((i for i, line in enumerate(lines) if line.strip()), None)
+    if heading_index is None:
+        return ""
+    content_lines = lines[heading_index + 1 :]
+    if content_lines and content_lines[0] == "":
+        content_lines = content_lines[1:]
+    return "\n".join(content_lines)
+
+
 def _load_document(root: Path, path: Path) -> Document:
     resolved = _ensure_within(root, path)
     if not resolved.is_file():
@@ -392,11 +414,19 @@ def _load_document(root: Path, path: Path) -> Document:
     metadata_raw, body = _split_front_matter(text, label=relative)
     metadata = validate_metadata(metadata_raw, expected_path=relative)
     expected_heading = f"# {metadata['title']}"
-    first_body_line = next((line.strip() for line in body.splitlines() if line.strip()), "")
+    first_body_line = next(
+        (line.strip() for line in split_markdown_lines(body) if line.strip()), ""
+    )
     if first_body_line != expected_heading:
         raise ValidationError(
             f"{relative}: first body heading must exactly match title: {expected_heading}"
         )
+    content = _semantic_content_from_body(body)
+    if len(content) > MAX_CONTENT_CHARS:
+        raise ValidationError(
+            f"{relative}: content exceeds {MAX_CONTENT_CHARS} characters"
+        )
+    _validate_section_structure(content, label=relative)
     return Document(
         path=resolved,
         relative_path=relative,
@@ -407,11 +437,7 @@ def _load_document(root: Path, path: Path) -> Document:
 
 
 def _document_content(document: Document) -> str:
-    lines = document.body.splitlines()
-    heading_index = next((i for i, line in enumerate(lines) if line.strip()), None)
-    if heading_index is None:
-        return ""
-    return "\n".join(lines[heading_index + 1 :]).strip()
+    return _semantic_content_from_body(document.body)
 
 
 def _detail_paths(root: Path) -> Iterable[Path]:
@@ -544,7 +570,7 @@ def _render_document(entry: dict[str, Any]) -> bytes:
     body = f"# {entry['title']}"
     if content:
         body += f"\n\n{content}"
-    text = f"---\n{front}\n---\n\n{body.rstrip()}\n"
+    text = f"---\n{front}\n---\n\n{body}\n"
     data = text.encode("utf-8")
     if len(data) > MAX_DOCUMENT_BYTES:
         raise ValidationError(

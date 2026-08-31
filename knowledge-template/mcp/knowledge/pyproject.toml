@@ -5,6 +5,7 @@ description = "Repository-independent Markdown knowledge MCP"
 requires-python = ">=3.10"
 dependencies = [
   "filelock>=3,<4",
+  "markdown-it-py>=3,<5",
   "mcp>=2,<3",
   "pydantic>=2,<3",
   "PyYAML>=6,<7",

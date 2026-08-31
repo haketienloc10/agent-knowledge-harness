@@ -30,6 +30,20 @@ def valid_entry(*, content: str = "smoke") -> dict:
     }
 
 
+def sectioned_content() -> str:
+    return """Short preamble.
+
+<!-- knowledge-section:contract -->
+## Contract
+
+Original contract.
+
+<!-- knowledge-section:verification -->
+## Verification
+
+Original verification."""
+
+
 def error_text(result) -> str:
     return "\n".join(
         block.text
@@ -45,7 +59,14 @@ class KnowledgeServerContractTest(unittest.IsolatedAsyncioTestCase):
         tools = {tool.name: tool for tool in listed.tools}
         self.assertEqual(
             set(tools),
-            {"knowledge_search", "knowledge_read", "knowledge_write"},
+            {
+                "knowledge_search",
+                "knowledge_read",
+                "knowledge_read_metadata",
+                "knowledge_read_section",
+                "knowledge_write",
+                "knowledge_update",
+            },
         )
 
         search_schema = tools["knowledge_search"].input_schema
@@ -55,6 +76,12 @@ class KnowledgeServerContractTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(set(read_schema["properties"]), {"ids"})
         ids_schema = read_schema["properties"]["ids"]
         self.assertEqual(ids_schema.get("maxItems"), 2)
+
+        metadata_schema = tools["knowledge_read_metadata"].input_schema
+        self.assertEqual(set(metadata_schema["properties"]), {"ids"})
+
+        section_schema = tools["knowledge_read_section"].input_schema
+        self.assertEqual(set(section_schema["properties"]), {"id", "section_id"})
 
         write_schema = tools["knowledge_write"].input_schema
         entries = write_schema["properties"]["entries"]
@@ -68,6 +95,12 @@ class KnowledgeServerContractTest(unittest.IsolatedAsyncioTestCase):
         for misplaced in ("summary", "when_to_read", "keywords", "aliases"):
             self.assertNotIn(misplaced, entry["properties"])
         self.assertFalse(entry.get("additionalProperties", True))
+
+        update_schema = tools["knowledge_update"].input_schema
+        self.assertEqual(
+            set(update_schema["properties"]),
+            {"id", "expected_revision", "changes"},
+        )
 
     async def test_search_is_thin_then_read_hydrates_exact_id(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -102,6 +135,141 @@ class KnowledgeServerContractTest(unittest.IsolatedAsyncioTestCase):
                     self.assertIn("revision", hydrated)
                     self.assertIn("routing", hydrated)
                     self.assertNotIn("path", hydrated)
+
+    async def test_metadata_and_section_reads_avoid_full_document_hydration(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            init_store(root)
+            with patch.dict(os.environ, {"KNOWLEDGE_STORE_ROOT": str(root)}):
+                async with Client(mcp) as client:
+                    created = await client.call_tool(
+                        "knowledge_write",
+                        {"entries": [valid_entry(content=sectioned_content())]},
+                    )
+                    item_id = created.structured_content["changes"][0]["id"]
+
+                    metadata = await client.call_tool(
+                        "knowledge_read_metadata",
+                        {"ids": [item_id]},
+                    )
+                    self.assertFalse(metadata.is_error)
+                    meta_item = metadata.structured_content["results"][0]
+                    self.assertNotIn("content", meta_item)
+                    self.assertIn("revision", meta_item)
+                    self.assertEqual(
+                        [section["id"] for section in meta_item["sections"]],
+                        ["contract", "verification"],
+                    )
+
+                    section = await client.call_tool(
+                        "knowledge_read_section",
+                        {"id": item_id, "section_id": "verification"},
+                    )
+                    self.assertFalse(section.is_error)
+                    self.assertEqual(section.structured_content["heading"], "## Verification")
+                    self.assertEqual(section.structured_content["content"], "Original verification.")
+                    self.assertEqual(
+                        section.structured_content["revision"],
+                        meta_item["revision"],
+                    )
+
+    async def test_partial_update_patches_metadata_or_one_section(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            init_store(root)
+            with patch.dict(os.environ, {"KNOWLEDGE_STORE_ROOT": str(root)}):
+                async with Client(mcp) as client:
+                    created = await client.call_tool(
+                        "knowledge_write",
+                        {"entries": [valid_entry(content=sectioned_content())]},
+                    )
+                    change = created.structured_content["changes"][0]
+                    item_id = change["id"]
+
+                    metadata_update = await client.call_tool(
+                        "knowledge_update",
+                        {
+                            "id": item_id,
+                            "expected_revision": change["revision"],
+                            "changes": {
+                                "metadata": {
+                                    "routing": {
+                                        "summary": "Updated metadata without resending full content."
+                                    }
+                                }
+                            },
+                        },
+                    )
+                    self.assertFalse(metadata_update.is_error)
+                    revision = metadata_update.structured_content["changes"][0]["revision"]
+
+                    section_update = await client.call_tool(
+                        "knowledge_update",
+                        {
+                            "id": item_id,
+                            "expected_revision": revision,
+                            "changes": {
+                                "section": {
+                                    "id": "verification",
+                                    "content": "Run focused verification, then full verification.",
+                                }
+                            },
+                        },
+                    )
+                    self.assertFalse(section_update.is_error)
+
+                    full = await client.call_tool("knowledge_read", {"ids": [item_id]})
+                    item = full.structured_content["results"][0]
+                    self.assertEqual(
+                        item["routing"]["summary"],
+                        "Updated metadata without resending full content.",
+                    )
+                    self.assertIn("Original contract.", item["content"])
+                    self.assertIn("Run focused verification", item["content"])
+                    self.assertNotIn("Original verification.", item["content"])
+
+    async def test_partial_update_rejects_missing_section_without_creating_it(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            init_store(root)
+            with patch.dict(os.environ, {"KNOWLEDGE_STORE_ROOT": str(root)}):
+                async with Client(mcp) as client:
+                    created = await client.call_tool(
+                        "knowledge_write",
+                        {"entries": [valid_entry(content=sectioned_content())]},
+                    )
+                    change = created.structured_content["changes"][0]
+                    rejected = await client.call_tool(
+                        "knowledge_update",
+                        {
+                            "id": change["id"],
+                            "expected_revision": change["revision"],
+                            "changes": {
+                                "section": {"id": "not-there", "content": "body"}
+                            },
+                        },
+                    )
+        self.assertTrue(rejected.is_error)
+        self.assertIn("code=missing_section", error_text(rejected))
+
+    async def test_full_write_rejects_malformed_reserved_section_marker(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            init_store(root)
+            with patch.dict(os.environ, {"KNOWLEDGE_STORE_ROOT": str(root)}):
+                async with Client(mcp) as client:
+                    rejected = await client.call_tool(
+                        "knowledge_write",
+                        {
+                            "entries": [
+                                valid_entry(
+                                    content="<!-- knowledge-section:Bad_Id -->\n## Bad\n\nbody"
+                                )
+                            ]
+                        },
+                    )
+        self.assertTrue(rejected.is_error)
+        self.assertIn("code=knowledge_validation", error_text(rejected))
 
     async def test_flat_routing_payload_fails_before_tool_body_with_hint(self):
         bad_entry = valid_entry()
@@ -163,7 +331,7 @@ class KnowledgeServerContractTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(rejected.is_error)
         text = error_text(rejected)
         self.assertIn("code=revision_conflict", text)
-        self.assertIn("action=call knowledge_read again", text)
+        self.assertIn("read the exact knowledge target again", text)
         self.assertIn("expected_revision", text)
 
 

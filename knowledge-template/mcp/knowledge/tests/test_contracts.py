@@ -90,6 +90,13 @@ class KnowledgeContractsTest(unittest.TestCase):
         self.assertIsNone(entry.id)
         self.assertIsNone(entry.expected_revision)
 
+    def test_write_content_preserves_markdown_boundary_whitespace(self):
+        payload = create_payload()
+        exact = "    indented_code()\nline with hard break  "
+        payload["content"] = exact
+        entry = KnowledgeWriteEntry.model_validate(payload)
+        self.assertEqual(entry.content, exact)
+
     def test_update_requires_revision(self):
         payload = create_payload()
         payload["id"] = "domain:smoke.payment:smoke-retry-rule"
@@ -151,6 +158,22 @@ class KnowledgeContractsTest(unittest.TestCase):
         self.assertIn("routing", item)
         self.assertIn("revision", item)
         self.assertNotIn("path", item)
+
+    def test_full_read_content_preserves_markdown_boundary_whitespace(self):
+        exact = "    indented_code()\nline with hard break  "
+        result = KnowledgeReadResult.model_validate({
+            "results": [{
+                "id": "domain:smoke.payment:smoke-retry-rule",
+                "revision": "a" * 64,
+                "canonical_name": "smoke-retry-rule",
+                "title": "Smoke retry rule",
+                "scope": {"kind": "domain", "id": "smoke.payment"},
+                "routing": create_payload()["routing"],
+                "sources": create_payload()["sources"],
+                "content": exact,
+            }]
+        })
+        self.assertEqual(result.results[0].content, exact)
 
     def test_write_result_is_typed(self):
         result = KnowledgeWriteResult.model_validate({

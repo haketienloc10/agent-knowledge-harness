@@ -80,6 +80,12 @@ for pattern in \
   'work_item_\*' \
   'canonical operational protocol' \
   'QiQi sở hữu overall' \
+  'knowledge_search' \
+  'knowledge_read_metadata' \
+  'knowledge_read_section' \
+  'knowledge_update' \
+  'smallest sufficient semantic scope' \
+  'whole-document SHA-256 revision' \
   '`delegate_repo_task`' \
   '`user_request`' \
   '`required_context`' \
@@ -102,6 +108,10 @@ rg -U -q 'Work Item read/update/persistence failure.*\$work-item.*không local M
 # Keep only activation/authority/safety invariants in workspace always-on policy.
 if rg -q '^### Current snapshot và material history$|^### Material session reconciliation$|Phase-specific guardrails:' "$agents_md"; then
   fail 'AGENTS.md: detailed Work Item operational protocol must live in $work-item, not workspace always-on policy'
+fi
+
+if rg -q 'existing update target phải full-read|Update existing knowledge phải full-read' "$agents_md"; then
+  fail 'AGENTS.md: legacy full-read-only Knowledge update policy found'
 fi
 
 # CRITICAL INVARIANT — DO NOT REMOVE OR WEAKEN THIS CHECK merely to make a
@@ -141,13 +151,27 @@ if [[ -f "$workspace_root/.agents/skills/ticket-work-item/SKILL.md" ]]; then
   fail 'workspace: legacy ticket-work-item skill must be removed; Work Item operations use user-scoped $work-item'
 fi
 
+identity="$workspace_root/identity.md"
+for pattern in 'knowledge_read_metadata' 'knowledge_read_section' 'knowledge_update' 'smallest sufficient semantic scope'; do
+  rg -q "$pattern" "$identity" || fail "identity.md: missing scoped Knowledge guidance: $pattern"
+done
+
 workspace_readme="$workspace_root/README.md"
 for pattern in \
   'Work Item operational skill' \
   '\$work-item' \
   'user-scoped skill' \
-  'Không còn workspace-local `\$ticket-work-item`'; do
-  rg -q "$pattern" "$workspace_readme" || fail "README.md: missing Work Item skill layering guidance: $pattern"
+  'Không còn workspace-local `\$ticket-work-item`' \
+  'knowledge_read_metadata' \
+  'knowledge_read_section' \
+  'knowledge_update' \
+  'one SHA-256 revision'; do
+  rg -q "$pattern" "$workspace_readme" || fail "README.md: missing workspace capability guidance: $pattern"
+done
+
+workspace_setup="$workspace_root/docs/WORKSPACE_SETUP.md"
+for pattern in 'knowledge_read_metadata' 'knowledge_read_section' 'knowledge_update' 'whole-document revision'; do
+  rg -q "$pattern" "$workspace_setup" || fail "docs/WORKSPACE_SETUP.md: missing scoped Knowledge guidance: $pattern"
 done
 
 codex_config="$workspace_root/.codex/config.toml"
