@@ -95,8 +95,27 @@ Durable body."""
             ["live"],
         )
 
-    def test_list_outdent_restores_block_boundary_for_type7_html(self):
+    def test_lazy_list_continuation_does_not_create_type7_html_block(self):
         content = """- List paragraph.
+<custom>
+<!-- knowledge-section:not-live -->
+## Example only
+
+<!-- knowledge-section:live -->
+## Live
+
+Durable body."""
+        # CommonMark list-item laziness allows the unindented `<custom>` line to remain
+        # paragraph continuation text. Type-7 HTML cannot interrupt that paragraph, so
+        # the following reserved HTML-comment marker is live rather than HTML-block body.
+        self.assertEqual(
+            [section.section_id for section in parse_sections(content)],
+            ["not-live", "live"],
+        )
+
+    def test_blank_line_after_list_restores_block_boundary_for_type7_html(self):
+        content = """- List paragraph.
+
 <custom>
 <!-- knowledge-section:not-live -->
 ## Example only
