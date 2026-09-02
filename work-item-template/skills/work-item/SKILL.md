@@ -48,10 +48,20 @@ Before substantive planning, implementation, review, status, handoff, RESUME/STA
 follow-up, or completion decision that depends on a Work Item:
 
 1. `work_item_get(id)`.
-2. Use the latest canonical revision/state, not a cached prompt/conversation snapshot.
-3. Reconcile any supplied TaskPacket/user context against that state before acting.
-4. If current Work Item conflicts with a required premise, stop the dependent action
+2. Treat the returned `revision` plus bounded current-state projection as the latest
+   canonical decision state; do not expect resolved/superseded/checkpoint history in
+   the default read.
+3. Reconcile any supplied TaskPacket/user context against that current state before acting.
+4. Call `work_item_history_read(...)` only when provenance/history is material to the
+   current decision or when a full historical-array replacement requires the complete
+   canonical collection.
+5. If current Work Item conflicts with a required premise, stop the dependent action
    and surface/reconcile the conflict according to role authority.
+
+`work_item_history_read` reads exactly one semantic collection per call. Its cursor is
+opaque and bound to the whole Work Item revision, collection, and filters. If the Work
+Item changes between pages, restart the history read from the current revision; never
+mix pages from two revisions.
 
 ### Explicit new Work Item
 
@@ -59,8 +69,8 @@ Create only after explicit user/orchestrator selection of the Work Item workflow
 
 1. Determine a stable canonical ID only when source + external ID are unambiguous.
 2. Call `work_item_get(id)` first so repeated intake does not reset an existing task.
-3. If found, continue from the existing canonical document and reconcile genuinely new
-   source material; do not recreate/reset history.
+3. If found, continue from the existing current-state projection and reconcile genuinely
+   new source material; read scoped history only if the current decision needs it.
 4. If not found and creation is within role authority, `work_item_create(...)` from
    material current facts/requirements only.
 5. Do not promote unsupported hypotheses, suggested fixes, or ticket comments into
@@ -74,38 +84,54 @@ identity instead of inventing one.
 Every Work Item update uses optimistic concurrency:
 
 ```text
-read latest revision
+work_item_get -> latest revision/current state
+→ read scoped complete history collection when a historical full-array replacement is needed
 → reconcile intended state
 → work_item_update(id, expected_revision, changes)
-→ revision conflict: reread → reconcile → retry
+→ revision conflict: reread current snapshot/history as needed → reconcile → retry
 ```
 
 Rules:
 
 - Never silently last-write-wins over a newer revision.
 - Nested repository objects merge by supplied fields.
-- Arrays replace atomically; preserve every current entry not intentionally removed.
+- `current_requirements` and `next_actions` are current snapshot arrays and replace atomically.
+- Historical semantic arrays (`questions`, `decisions`, `changes`, `blockers`, `handoffs`,
+  `checkpoints`) also replace atomically until incremental mutation operations are available.
+  **Never reconstruct them from `work_item_get`**, because its lifecycle fields are bounded
+  subsets. Read the complete target collection through `work_item_history_read` first.
+- Preserve every canonical array entry not intentionally removed.
 - Explicit `null` is JSON merge-patch deletion; omitted fields mean no change.
 - Do not patch immutable/derived fields such as `id`, `revision`, or `artifacts`.
 - Unexpected/store failures are not evidence that a write succeeded.
 
 Use the typed semantic shapes exposed by `WorkItemPatch`; do not encode status markers
-inside strings or use semantic arrays as free-form notes.
+inside strings or use semantic arrays as free-form notes. Canonical questions and
+decisions require explicit lifecycle `status`; legacy missing statuses are migrated once
+into explicit `open`/`active` state rather than remaining implicit runtime semantics.
 
 ## Current snapshot vs material history
 
 Keep these roles stable across sessions:
 
 ```text
-summary / repos / verification / status / phase / blockers / next_actions
-  = current effective snapshot
+work_item_get:
+  summary / repos / verification / status / phase / current_requirements / next_actions
+  open_questions / active_decisions / open_blockers / pending_handoffs
+    = bounded current effective decision state
 
-questions / decisions / changes / checkpoints
-  = material history/provenance explaining the snapshot
+work_item_history_read:
+  questions / decisions / changes / checkpoints / blockers / handoffs
+    = exact scoped canonical history/provenance
 
 artifact
   = optional detailed material; never a replacement for Work Item reconciliation
 ```
+
+`work_item_get.history` is deterministic metadata/counts only. It is not a prose summary
+and does not return checkpoint records. If a fresh session cannot continue from
+`summary`, `repos[repo].summary`, current requirements, and current lifecycle state,
+repair those current snapshots rather than depending on default history hydration.
 
 ### Repository summary
 
@@ -121,9 +147,13 @@ plans or unexecuted checks.
 
 ### Checkpoints
 
-`checkpoints[]` is accumulated material phase/milestone history. Preserve existing
-material checkpoints and append a checkpoint when a substantive session establishes a
-new milestone that a future reader needs to reconstruct major task progression.
+`checkpoints[]` is accumulated material phase/milestone history. It is not returned by
+`work_item_get`; read it through `work_item_history_read(collection="checkpoints", ...)`
+when provenance or a full checkpoint-array replacement is actually needed.
+
+Preserve existing material checkpoints and append a checkpoint when a substantive
+session establishes a new milestone that a future reader needs to reconstruct major task
+progression.
 
 Checkpoint metadata may include:
 
@@ -161,6 +191,8 @@ Generic mapping:
 Implementation **must reconcile the Work Item even when no artifact is created**.
 Persist the current implemented outcome, relevant repo status/verification, and a
 material implementation checkpoint when a new implementation milestone was established.
+If checkpoint history must be replaced through the current update contract, hydrate the
+complete checkpoint collection first via `work_item_history_read`.
 
 ### Review guardrail
 
@@ -183,18 +215,23 @@ do not introduce a hard workflow machine or event log.
 
 Use semantic fields only for their intended material meaning:
 
-- `questions[]`: unresolved external/product ambiguity, not generic notes.
+- `questions[]`: external/product ambiguity lifecycle, not generic notes.
 - `decisions[]`: material decisions explaining current task interpretation/behavior.
 - `changes[]`: requirement/scope evolution only, not implementation progress.
 - `blockers[]`: conditions materially preventing progress.
 - `handoffs[]`: explicit remaining work transferred to another repo/owner.
 - `next_actions[]`: concrete continuation actions with repo/owner target.
 
+Default `work_item_get` exposes only `open_questions`, `active_decisions`,
+`open_blockers`, and `pending_handoffs`. Resolved/superseded lifecycle records remain
+canonical and audit-readable through scoped history.
+
 When a user/customer answer resolves a material question and the current role owns the
 reconciliation:
 
 ```text
-question resolved
+read complete questions/decisions collection when replacement is required
+→ question resolved
 → decision active when appropriate
 → current_requirements reconciled if semantics changed
 → changes[] appended if effective requirement/scope actually changed
@@ -230,9 +267,11 @@ Always obey the active `AGENTS.md` authority boundary.
 
 Operationally, QiQi normally owns overall `status`, `phase`, `summary`, repo assignment,
 global `next_actions`, product/customer decision reconciliation, cross-repo coordination,
-and final completion. After repo delegation returns, reread latest Work Item before a
-dependent orchestration decision and do not silently assume repo persistence succeeded
-when returned material evidence is absent from canonical state.
+and final completion. After repo delegation returns, reread the bounded current Work
+Item snapshot before a dependent orchestration decision. Read scoped history only when
+that decision needs provenance or a historical collection must be replaced. Do not
+silently assume repo persistence succeeded when returned material evidence is absent
+from canonical state.
 
 ### Repository execution agent
 
@@ -245,14 +284,17 @@ to reflect local progress.
 
 For a substantive turn with a canonical Work Item:
 
-1. Ensure decisions/actions used the latest relevant Work Item state.
-2. Persist material state established by this turn within role authority.
-3. Preserve atomic-array entries not intentionally removed.
-4. Add/update verification and one material checkpoint when applicable.
-5. Persist blocker/question/handoff/next action when materially required.
-6. If a revision conflict occurs, reread/reconcile/retry before claiming persistence.
-7. Do not treat artifact creation as the canonical-state update.
-8. If persistence failed, report that failure; do not claim the Work Item contains the
+1. Ensure decisions/actions used the latest bounded current Work Item state.
+2. Read only the scoped history needed for provenance or an exact full-array replacement.
+3. Persist material state established by this turn within role authority.
+4. Preserve canonical atomic-array entries not intentionally removed; never derive a
+   historical replacement from bounded lifecycle subsets.
+5. Add/update verification and one material checkpoint when applicable.
+6. Persist blocker/question/handoff/next action when materially required.
+7. If a revision conflict occurs, restart any stale history pagination, reread/reconcile,
+   and retry before claiming persistence.
+8. Do not treat artifact creation as the canonical-state update.
+9. If persistence failed, report that failure; do not claim the Work Item contains the
    missing state.
 
 Work Item handling does not replace separate Shared Knowledge review/write rules when a
