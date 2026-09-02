@@ -116,13 +116,14 @@ Requirement change type MVP có: `requirement_added`, `requirement_changed`,
 `requirement_removed`, `scope_changed`.
 
 Canonical `questions[]` và `decisions[]` luôn có lifecycle `status` explicit. Store cũ
-thiếu status được migrate một lần thành `question=open`, `decision=active` và Work Item
-revision được advance; runtime không giữ implicit lifecycle semantics lâu dài.
+thiếu hoặc có `status: null` được migrate một lần thành `question=open`,
+`decision=active` và Work Item revision được advance; runtime không giữ implicit
+lifecycle semantics lâu dài.
 
-## Snapshot và history
+## Progressive disclosure: snapshot và history
 
 Stored document vẫn chứa đầy đủ current state + material history, nhưng public read
-surface dùng progressive disclosure.
+surface không hydrate toàn canonical document mặc định.
 
 `work_item_get(id)` là **bounded current-state projection**:
 
@@ -162,9 +163,10 @@ questions | decisions | changes | checkpoints | blockers | handoffs
 `checkpoints`, vì đó là collection có canonical `repo` field. Filter không hợp semantic
 collection sẽ fail validation thay vì bị silently ignore.
 
-History giữ canonical array order. Cursor là opaque và bind vào exact whole Work Item
-revision + collection + filters. Nếu Work Item đổi giữa hai page, caller phải restart
-history read từ revision mới; server không bao giờ silently mix hai revisions.
+History giữ canonical array order. Cursor là opaque và bind vào canonical Work Item id,
+exact whole Work Item revision, collection và filters. Nếu Work Item đổi giữa hai page,
+caller phải restart history read từ revision mới; server không bao giờ silently mix hai
+revisions hoặc dùng cursor của Work Item khác.
 
 `work_item_get.history` chỉ là deterministic counts (`total`, và `current`/`hidden` khi
 có lifecycle subset), không phải synthesized prose và không chứa checkpoint references.
@@ -189,6 +191,132 @@ artifact_id = optional detail artifact reference
 
 Không persist terminal transcript, command-by-command activity hoặc agent reasoning.
 
+## Typed incremental mutation
+
+Read progressive disclosure chỉ giải quyết read amplification. Write path cũng không
+được bắt model hydrate/resend accumulated history chỉ để sửa một record.
+
+Public `work_item_update` nhận một `WorkItemMutation`:
+
+```text
+WorkItemMutation
+  state       = bounded current-state patch
+  operations  = typed semantic commands (<= 50/call)
+```
+
+### `mutation.state`
+
+Current effective fields duy nhất được patch trực tiếp:
+
+```text
+title / status / phase / summary
+current_requirements
+repos
+next_actions
+```
+
+- `repos` merge nested object theo supplied fields.
+- `current_requirements` và `next_actions` là bounded current arrays và replace nguyên tử.
+- State patch giữ JSON merge-patch null/omission semantics.
+- Historical semantic collections **không tồn tại** như full-array replacement fields
+  trong public state schema.
+
+Điều này làm accidental deletion do caller reconstruct thiếu history trở thành lỗi
+**không thể biểu diễn bằng public mutation schema**, thay vì chỉ dựa vào discipline.
+
+### `mutation.operations`
+
+Operation algebra cố ý nhỏ và domain-specific:
+
+```text
+checkpoint_append
+question_upsert
+decision_upsert
+change_upsert
+blocker_upsert
+handoff_upsert
+```
+
+Không dùng generic JSON Patch và không tạo một MCP tool riêng cho từng collection. Một
+product decision có thể cần resolve question + create/supersede decision + update current
+requirement + append checkpoint; tất cả phải commit atomically trong **một** Work Item
+revision.
+
+Operation list:
+
+- tối đa 50 operations/call;
+- apply theo caller order;
+- duplicate stable-id target trong cùng call bị reject;
+- all-or-nothing trong cùng `BEGIN IMMEDIATE` transaction;
+- stale `expected_revision` luôn conflict, kể cả khi writer khác sửa record/collection
+  hoàn toàn khác;
+- server không auto-rebase stale semantic operation.
+
+### Stable-id lifecycle semantics
+
+`upsert` không có nghĩa arbitrary overwrite. Nó nghĩa create record mới hoặc advance
+lifecycle/provenance hợp lệ của stable id hiện tại.
+
+```text
+question:  open -> resolved
+decision:  active -> superseded
+blocker:   open -> resolved
+handoff:   pending -> resolved
+
+change:
+  proposed -> accepted | rejected | superseded
+  accepted -> superseded
+  rejected/superseded terminal
+```
+
+Reverse transitions bị reject. Nếu blocker/handoff cũ đã resolved nhưng cùng concern tái
+xuất hiện, tạo stable id mới thay vì reopen history cũ.
+
+Identity/provenance được giữ monotonic:
+
+- `questions[].question` immutable; `answer` / `decision_id` là write-once resolution.
+- `decisions[].summary` immutable; `superseded_by` là write-once.
+- `changes[].type` và `changes[].summary` immutable.
+- `blockers[].summary` immutable.
+- `handoffs[].from`, `.to`, `.summary` immutable.
+- existing provenance/evidence extension chỉ được giữ nguyên hoặc thêm mới; không silent
+  rewrite established provenance.
+- `checkpoints[]` chỉ có append path; không có checkpoint upsert/edit API.
+
+Cross-record reference được validate trên **final candidate document** sau khi toàn bộ
+operation list đã apply. Vì vậy một atomic mutation có thể:
+
+```text
+create decision d7
++ supersede d3 -> d7
++ resolve question q2 -> d7
+```
+
+nhưng commit sẽ rollback toàn bộ nếu `decision_id` / `superseded_by` cuối cùng reference
+missing decision hoặc decision tự supersede chính nó.
+
+### Compact mutation receipt
+
+`work_item_update` success không trả full canonical document:
+
+```json
+{
+  "updated": true,
+  "id": "redmine:116655",
+  "revision": 42,
+  "changed": ["repos.backend-api", "decisions:d7", "questions:q2", "checkpoints"]
+}
+```
+
+`changed` là bounded diagnostic labels, không phải mutation path language. Nếu caller cần
+current state sau commit thì gọi lại `work_item_get` khi quyết định kế tiếp thật sự cần.
+Mutation success tự nó không bơm history/full document vào model context.
+
+Expected update-domain failures (`work_item_validation`, `revision_conflict`, missing
+Work Item) trả structured result với `updated=false`. Revision conflict yêu cầu reread
+current snapshot, reconcile và retry; không hydrate full history trừ khi exact provenance
+thực sự cần cho quyết định.
+
 ## Material session reconciliation
 
 Mọi substantive Work Item session established material state phải reconcile canonical
@@ -212,8 +340,8 @@ artifact
 
 Phase-specific guardrails chỉ áp dụng nơi failure mode đặc biệt:
 
-- **Implementation:** phải persist current implemented outcome + material checkpoint dù
-  không tạo artifact.
+- **Implementation:** persist current implemented outcome qua state patch và append một
+  material checkpoint khi có milestone mới; không đọc/resend historical checkpoints.
 - **Review:** review artifact giữ detail; checkpoint giữ material finding. Không overwrite
   implementation-oriented repo summary thành `Review code...` narrative nếu review chỉ
   xác nhận current implementation.
@@ -293,7 +421,8 @@ Sửa config chỉ cần restart/fresh MCP process, **không cần database migr
 
 `work_item_get` trả bounded current-state projection cùng **thin artifact index**. Index
 này là derived metadata, không được persist trong `work_items.document_json`. Core từ
-chối create hoặc update nếu caller cố ghi field `artifacts`.
+chối create nếu caller cố persist field `artifacts`; mutation state schema không expose
+field này.
 
 Full artifact detail dùng progressive disclosure:
 
@@ -311,11 +440,12 @@ Work Item revision tăng và không cạnh tranh optimistic writer với task-st
 Hard payload/storage bounds:
 
 ```text
-write chunk          <= 32,000 UTF-8 bytes/call
-read section         4..32,000 UTF-8 bytes/call
-artifacts/item       <= 50
-sections/artifact    <= 100
-template config file <= 64,000 bytes
+Work Item semantic ops <= 50/call
+artifact write chunk   <= 32,000 UTF-8 bytes/call
+artifact read section  4..32,000 UTF-8 bytes/call
+artifacts/item         <= 50
+sections/artifact      <= 100
+template config file   <= 64,000 bytes
 ```
 
 Artifact lifecycle:
@@ -344,7 +474,7 @@ work_item_get(id)
 work_item_history_read(id, collection, status?, repository?, cursor?, limit?)
 work_item_list(status?, repository?, limit?)
 work_item_create(id, title, summary?, status?, phase?, current_requirements?, repositories?)
-work_item_update(id, expected_revision, changes: WorkItemPatch)
+work_item_update(id, expected_revision, mutation: WorkItemMutation)
 ```
 
 Optional artifact tools:
@@ -358,81 +488,69 @@ work_item_artifact_read(id, artifact_id, section_id, cursor?, limit_bytes?)
 work_item_artifact_finalize(id, artifact_id, expected_artifact_revision)
 ```
 
-`work_item_update` vẫn dùng JSON merge-patch semantics:
+Một update có thể kết hợp current state và semantic operations:
 
-- nested object merge;
-- array replace nguyên tử;
-- `null` remove field;
-- required field bị remove sẽ fail validation;
-- immutable/derived field như `id`, `revision`, `artifacts` không được patch.
-
-`current_requirements` và `next_actions` là current arrays nên bounded snapshot đủ để
-reconcile chúng. Các historical semantic arrays (`questions`, `decisions`, `changes`,
-`blockers`, `handoffs`, `checkpoints`) vẫn replace nguyên tử cho đến khi incremental
-mutation API được triển khai: caller **không** được rebuild chúng từ `work_item_get`.
-Khi cần replace, phải page toàn target collection bằng `work_item_history_read` tại exact
-revision rồi mới update.
-
-### Typed WorkItemPatch
-
-MCP expose schema cụ thể cho `changes` thay vì generic `dict`. Mục đích là để agent
-không phải đoán shape hoặc ý nghĩa của semantic fields:
-
-```text
-questions[]     = external/product ambiguity records; không phải string/note
-changes[]       = requirement/scope evolution; không phải generic code/progress log
-blockers[]      = điều thực sự chặn tiến độ; không phải risk/note chung
-handoffs[]      = remaining work chuyển giữa repo/owner
-next_actions[]  = object có action + repo hoặc owner; không phải list[string]
-checkpoints[]   = accumulated material milestones; optional kind/artifact_id
-repos           = current repo truth; nested object merge
+```json
+{
+  "state": {
+    "summary": "Backend implementation hoàn tất.",
+    "repos": {
+      "backend-api": {
+        "status": "done",
+        "verification": ["unit tests passed"]
+      }
+    }
+  },
+  "operations": [
+    {
+      "op": "checkpoint_append",
+      "value": {
+        "repo": "backend-api",
+        "kind": "verification",
+        "summary": "Focused unit tests passed."
+      }
+    }
+  ]
+}
 ```
 
-Canonical examples:
+Resolve một existing question chỉ cần target transition, không cần resend question hoặc
+full collection:
 
-```yaml
-questions:
-  - id: q1
-    status: open
-    question: SMTP capacity thực tế là bao nhiêu?
-
-blockers:
-  - id: b1
-    status: open
-    summary: Chưa xác định producer-side bulk classifier.
-
-next_actions:
-  - repo: sg_mail
-    action: Xác định classification boundary.
-
-checkpoints:
-  - repo: sg_mail
-    kind: implementation-rework
-    artifact_id: review:2
-    summary: Fixed review finding and reverified.
+```json
+{
+  "operations": [
+    {
+      "op": "question_upsert",
+      "value": {
+        "id": "q1",
+        "status": "resolved",
+        "decision_id": "d7"
+      }
+    }
+  ]
+}
 ```
 
-Các nested semantic record cho phép provenance/evidence mở rộng như `source`,
-`evidence`, `decided_by`, `caused_by_decision`, nhưng top-level patch field lạ bị từ
-chối. Serialization dùng `exclude_unset=True`: field omitted nghĩa là không đổi, còn
-explicit `null` vẫn được giữ để core áp JSON merge-patch deletion.
-
-Expected update-domain failures (`work_item_validation`, `revision_conflict`, missing
-Work Item) trả structured result với `updated=false` để agent thấy nguyên nhân và action
-thay vì chỉ nhận generic `Error executing tool`. Unexpected runtime/store failures vẫn
-là MCP tool errors.
+Các nested mutation record cho phép provenance/evidence mở rộng như `source`, `evidence`,
+`decided_by`, `caused_by_decision`; established extension không được silently rewrite.
+Semantic mutation explicit `null` bị reject: field không đổi thì omit.
 
 ## Optimistic concurrency
 
-Mọi Work Item có `revision` do MCP sở hữu.
+Mọi Work Item có một whole-document `revision` do MCP sở hữu.
 
 ```text
 QiQi đọc revision 12
 backend đọc revision 12
-backend update -> revision 13
-QiQi update bằng expected_revision=12 -> conflict
+backend checkpoint_append -> revision 13
+QiQi blocker_upsert bằng expected_revision=12 -> conflict
 QiQi reread revision 13 -> reconcile -> retry
 ```
+
+Writer thứ hai vẫn conflict dù sửa collection khác. Incremental mutation giảm payload,
+**không** thay đổi concurrency model thành per-record revision và không silently merge
+stale commands.
 
 History pagination dùng cùng whole Work Item revision:
 
@@ -454,9 +572,13 @@ writer B artifact_get -> reconcile -> retry
 
 Không có last-write-wins silent overwrite.
 
-SQLite dùng `BEGIN IMMEDIATE`, WAL và exact revision checks cho mutation paths. History
-read vẫn extract từ canonical `document_json` hiện tại; thay đổi này giảm model-context
-hydration, không giả vờ tối ưu storage I/O bằng schema/chunk store mới.
+SQLite Work Item mutation dùng `BEGIN IMMEDIATE`, exact revision check, apply state +
+operations trên in-memory candidate, validate final canonical document/cross-record
+references, rồi persist document **một lần** và advance revision **một lần**. Operation
+N fail thì toàn transaction rollback.
+
+Read/history và incremental mutation vẫn operate trên canonical `document_json`; không
+thêm event store, per-record persistence hoặc revision model thứ hai.
 
 ## Ownership policy
 
@@ -470,42 +592,42 @@ QiQi sở hữu global orchestration state:
 - repo involvement/assignment;
 - global `next_actions`;
 - reconciliation sau cross-repo handoff;
+- product/customer decisions;
 - quyết định task thực sự `done`.
 
 ### Repository execution agent
 
 Agent đọc bounded current Work Item để hiểu context và chỉ đọc scoped history khi thật
-sự cần provenance/reconciliation. Nó vẫn:
+sự cần provenance. Nó vẫn:
 
 - chỉ investigation/implementation/verification trong Git root hiện tại;
 - chỉ cập nhật repo evidence/state mà nó thực sự xác lập;
-- có thể ghi blocker, open question, checkpoint và handoff nó phát hiện;
+- có thể append material checkpoint hoặc advance blocker/open question/handoff nó phát hiện;
 - không đánh dấu sibling repo done;
 - không tự xử lý phần việc của repository khác;
 - cross-repo remaining work phải được ghi/handoff và trả lại QiQi để điều phối.
 
-Artifact không thay đổi ownership rule và không override newer canonical Work Item
-state.
+Typed incremental operations không thay đổi authority model.
 
 ## Questions, decisions và changes
 
 Open question tồn tại khi implementation không thể tự chốt một external/product
 ambiguity. Agent không đoán để hoàn thành task.
 
-Khi user/customer Q&A trả lời:
+Khi user/customer Q&A trả lời, một atomic mutation có thể thực hiện:
 
 ```text
-question resolved
+decision_upsert(new decision)
       ↓
-decision active
+question_upsert(open -> resolved)
       ↓
-current_requirements được reconcile nếu semantics thay đổi
+state.current_requirements reconcile nếu semantics thay đổi
+      ↓
+change_upsert nếu requirement/scope thực sự đổi
 ```
 
-Nếu requirement/scope thực sự thay đổi, ghi thêm `changes[]`.
-
-Decision cũ không bị xóa khi bị đổi. Mark `status: superseded` và trỏ
-`superseded_by` sang decision mới để phân biệt "implementation trước sai" với
+Decision cũ không bị rewrite khi requirement đổi. Advance nó `active -> superseded` và
+trỏ `superseded_by` sang decision mới để phân biệt "implementation trước sai" với
 "requirement sau đã đổi".
 
 ## Handoff cross-repo
@@ -514,7 +636,7 @@ Handoff nằm trong chính canonical Work Item, không có handoff store thứ h
 
 ```text
 backend agent
-  ↓ ghi handoff backend -> frontend + evidence
+  ↓ handoff_upsert pending + evidence
 Work Item
   ↓
 QiQi reconcile/delegate
@@ -550,9 +672,10 @@ work_item_artifact_sections
 work_item_artifact_chunks
 ```
 
-Bounded snapshot/history read không thêm persistence table. One-time lifecycle migration
-sử dụng SQLite `PRAGMA user_version` làm store-version marker và chỉ materialize explicit
-question/decision status trong existing `document_json`.
+Bounded snapshot/history read và incremental Work Item mutation không thêm persistence
+table. One-time lifecycle migration sử dụng SQLite `PRAGMA user_version` làm store-version
+marker và chỉ materialize explicit question/decision status trong existing
+`document_json`.
 
 Artifact template config là startup advisory file, **không phải persistence table/store**.
 Không có filesystem/Markdown task-artifact store thứ hai.
@@ -610,9 +733,9 @@ cùng tên trỏ sang runtime khác, installer fail thay vì overwrite âm thầ
 set `WORK_ITEM_DB_PATH` và giữ inherited environment, nên optional
 `WORK_ITEM_ARTIFACT_TEMPLATES_PATH` được truyền qua nếu set khi client/MCP được mở.
 
-Sau thay đổi skill/policy, mở fresh QiQi/child session để client discover user-scope skill
-mới. Workspace migration không tự ghi vào user home; sau migration policy sang `$work-item`
-thì rerun `scripts/install-user-mcp.sh` từ `work-item-template` để refresh skill.
+Sau thay đổi skill/policy/public schema, rerun installer từ checkout mới và mở fresh
+QiQi/child session để client discover user-scope MCP tool schema + skill mới. Workspace
+migration không tự ghi vào user home.
 
 ## Verification
 
@@ -622,30 +745,34 @@ bash scripts/work-item-template-check.sh
 
 Test/check cover ít nhất:
 
-- create/get/list/update Work Item;
+- create/get/list Work Item + compact incremental update receipt;
 - bounded `work_item_get` current-state projection không hydrate accumulated history;
 - open/active/current lifecycle subsets + deterministic history counts;
 - scoped single-collection history read + typed filter validation;
-- opaque cursor bind revision/collection/filters + revision-change conflict/restart;
-- one-time legacy question/decision lifecycle migration + explicit canonical status;
-- questions/decisions/requirement changes;
-- nested repo state merge;
-- stale Work Item revision và concurrent writers;
-- typed `WorkItemPatch` semantic shapes/descriptions;
+- opaque cursor bind Work Item id/revision/collection/filters + conflict/restart;
+- one-time legacy missing/null question/decision lifecycle migration;
+- typed `WorkItemMutation` và state/history schema separation;
+- historical full-array replacement không representable qua public mutation schema;
+- checkpoint append với 200 existing checkpoints không hydrate/resend history;
+- partial question resolve / decision supersede không resend immutable record body;
+- monotonic lifecycle + immutable identity + write-once provenance guards;
+- change lifecycle transition rules;
+- final-candidate cross-record reference validation;
+- duplicate semantic target và >50 operations bị reject;
+- operation failure rollback cả state patch + prior operations;
+- stale writer và concurrent writers vẫn conflict trên whole Work Item revision;
+- nested repo state merge + current-array replacement semantics;
 - repo-summary current-truth semantics + checkpoint `kind`/`artifact_id` metadata;
-- shared `$work-item` skill progressive-disclosure contract + explicit opt-in boundary;
+- shared `$work-item` incremental mutation protocol + explicit opt-in boundary;
 - managed user-scope skill install/idempotence/unmanaged-conflict behavior;
 - main MCP installer includes the shared skill installation;
-- reject các payload từng gây retry: question string/`text`, blocker string, invalid change enum,
-  next-action string/missing owner;
-- preserve nested provenance, repo partial merge và explicit merge-patch `null`;
 - structured update validation/conflict/not-found results;
-- immutable metadata và derived `artifacts` guard;
+- immutable metadata và derived `artifacts` boundary;
 - artifact create/list/get manifest;
 - stale artifact writer revision;
 - artifact revision độc lập Work Item revision;
 - exact Work Item revision khi tạo artifact;
-- exact 32,000-byte write boundary và UTF-8 byte semantics;
+- exact 32,000-byte artifact write boundary và UTF-8 byte semantics;
 - bounded artifact read + revision-bound continuation cursor;
 - exact preservation của Markdown/code whitespace;
 - artifact/section MVP caps;
@@ -653,10 +780,9 @@ Test/check cover ít nhất:
 - guidance load-once, detached create-response và storage independence;
 - section ngoài template vẫn hợp lệ vì template chỉ advisory;
 - finalize empty bị reject và complete artifact immutable;
-- human CLI thin artifact index/full explicit artifact view;
 - human CLI diagnostic/raw streaming + explicit JSON materialization đều read-only;
-- static invariant cho MCP tool count, typed update/read surface, template/storage boundary,
-  post-commit mutation response, bounded payload và read-only boundary.
+- static invariant cho MCP tool count, bounded read, typed incremental update, compact
+  mutation response, template/storage boundary và read-only CLI.
 
 Khi rollout thực tế, mở fresh Codex/Claude session để MCP client discover tool surface +
 `$work-item` skill và smoke test QiQi + repository child trên cùng database.
