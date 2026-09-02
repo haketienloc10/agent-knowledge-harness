@@ -280,8 +280,36 @@ for pattern in \
 done
 
 # Mutation write path must stay one whole-document optimistic transaction. It must not
-# call bounded read/history helpers or silently retry/rebase a stale operation.
-if rg -q 'get_work_item_snapshot|read_work_item_history|while .*revision|retry' "$mutations"; then
+# hydrate public read surfaces, loop on conflicts, or recursively re-enter itself.
+if ! MUTATIONS_PATH="$mutations" python3 - <<'PY'
+import ast
+import os
+from pathlib import Path
+
+path = Path(os.environ["MUTATIONS_PATH"])
+tree = ast.parse(path.read_text(encoding="utf-8"))
+mutate = next(
+    node
+    for node in tree.body
+    if isinstance(node, ast.FunctionDef) and node.name == "mutate_work_item"
+)
+call_names = {
+    node.func.id
+    for node in ast.walk(mutate)
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+}
+assert "get_work_item_snapshot" not in call_names
+assert "read_work_item_history" not in call_names
+assert "mutate_work_item" not in call_names
+assert not any(isinstance(node, ast.While) for node in ast.walk(mutate))
+assert not any(
+    isinstance(node, ast.ExceptHandler)
+    and isinstance(node.type, ast.Name)
+    and node.type.id == "ConflictError"
+    for node in ast.walk(mutate)
+)
+PY
+then
   fail 'mutations.py: mutation engine must not hydrate public reads or auto-retry/rebase stale operations'
 fi
 
