@@ -8,196 +8,187 @@ from pydantic import ValidationError as PydanticValidationError
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from models import WorkItemPatch
+from models import MUTATION_OPERATION_MAX, WorkItemMutation, WorkItemStatePatch
 
 
-class WorkItemPatchModelTests(unittest.TestCase):
-    def test_valid_mixed_patch_preserves_canonical_shape_and_provenance(self) -> None:
-        patch = WorkItemPatch.model_validate(
+class WorkItemMutationModelTests(unittest.TestCase):
+    def test_state_patch_contains_only_current_effective_fields(self) -> None:
+        state = WorkItemStatePatch.model_validate(
             {
-                "phase": "design-investigation",
-                "questions": [
-                    {
-                        "id": "q1",
-                        "status": "open",
-                        "question": "Which producer marks the bulk-mail batch?",
-                        "source": "repo investigation",
-                    }
-                ],
-                "decisions": [
-                    {
-                        "id": "d1",
-                        "status": "active",
-                        "summary": "Keep bulk and primary mail isolated.",
-                        "decided_by": "user",
-                    }
-                ],
-                "changes": [
-                    {
-                        "id": "c1",
-                        "type": "requirement_added",
-                        "status": "accepted",
-                        "summary": "Evaluate a separate bulk-mail path.",
-                        "caused_by_decision": "d1",
-                    }
-                ],
-                "repos": {"sg_mail": {"status": "pending"}},
-                "blockers": [
-                    {"id": "b1", "status": "open", "summary": "Bulk classifier is unknown."}
-                ],
-                "handoffs": [
-                    {
-                        "id": "h1",
-                        "from": "sg_mail",
-                        "to": "mail-producer",
-                        "status": "pending",
-                        "summary": "Identify producer-side bulk signature.",
-                        "evidence": ["producer is outside current repo"],
-                    }
-                ],
-                "next_actions": [
-                    {"repo": "sg_mail", "action": "Confirm the classification boundary."}
-                ],
-                "checkpoints": [
-                    {
-                        "repo": "sg_mail",
-                        "summary": "Current source path verified.",
-                        "kind": "investigation",
-                    }
-                ],
+                "phase": "implementation",
+                "summary": "Current effective state",
+                "current_requirements": ["Requirement A"],
+                "repos": {"sg_mail": {"status": "done"}, "old_repo": None},
+                "next_actions": [{"owner": "QiQi", "action": "Reconcile completion"}],
             }
         ).to_merge_patch()
+        self.assertEqual(state["repos"]["sg_mail"], {"status": "done"})
+        self.assertIsNone(state["repos"]["old_repo"])
+        self.assertEqual(state["next_actions"][0]["owner"], "QiQi")
 
-        self.assertEqual(patch["handoffs"][0]["from"], "sg_mail")
-        self.assertNotIn("from_", patch["handoffs"][0])
-        self.assertEqual(patch["questions"][0]["source"], "repo investigation")
-        self.assertEqual(patch["decisions"][0]["decided_by"], "user")
-        self.assertEqual(patch["changes"][0]["caused_by_decision"], "d1")
-        self.assertEqual(patch["checkpoints"][0]["kind"], "investigation")
-        self.assertEqual(patch["repos"]["sg_mail"], {"status": "pending"})
+        for historical in ("questions", "decisions", "changes", "blockers", "handoffs", "checkpoints"):
+            with self.assertRaises(PydanticValidationError):
+                WorkItemStatePatch.model_validate({historical: []})
 
-    def test_checkpoint_phase_metadata_is_optional_and_free_form(self) -> None:
-        patch = WorkItemPatch.model_validate(
+    def test_incremental_operation_union_is_typed_and_preserves_aliases_and_provenance(self) -> None:
+        mutation = WorkItemMutation.model_validate(
             {
-                "checkpoints": [
+                "operations": [
                     {
-                        "repo": "sg_mail",
-                        "kind": "implementation-rework",
-                        "artifact_id": "review:2",
-                        "summary": "Review finding was fixed and reverified.",
+                        "op": "question_upsert",
+                        "value": {
+                            "id": "q1",
+                            "status": "open",
+                            "question": "Which producer marks the batch?",
+                            "source": "repo investigation",
+                        },
                     },
                     {
-                        "repo": "sg_mail",
-                        "summary": "Implementation completed without an artifact.",
+                        "op": "decision_upsert",
+                        "value": {
+                            "id": "d1",
+                            "status": "active",
+                            "summary": "Keep bulk and primary mail isolated.",
+                            "decided_by": "user",
+                        },
+                    },
+                    {
+                        "op": "change_upsert",
+                        "value": {
+                            "id": "c1",
+                            "type": "requirement_added",
+                            "status": "accepted",
+                            "summary": "Evaluate a separate bulk-mail path.",
+                            "caused_by_decision": "d1",
+                        },
+                    },
+                    {
+                        "op": "handoff_upsert",
+                        "value": {
+                            "id": "h1",
+                            "from": "sg_mail",
+                            "to": "mail-producer",
+                            "status": "pending",
+                            "summary": "Identify producer-side bulk signature.",
+                            "evidence": ["producer is outside current repo"],
+                        },
+                    },
+                    {
+                        "op": "checkpoint_append",
+                        "value": {
+                            "repo": "sg_mail",
+                            "kind": "investigation",
+                            "summary": "Current source path verified.",
+                        },
                     },
                 ]
             }
-        ).to_merge_patch()
+        ).to_core_mutation()
 
-        self.assertEqual(patch["checkpoints"][0]["kind"], "implementation-rework")
-        self.assertEqual(patch["checkpoints"][0]["artifact_id"], "review:2")
-        self.assertNotIn("kind", patch["checkpoints"][1])
-        self.assertNotIn("artifact_id", patch["checkpoints"][1])
+        operations = mutation["operations"]
+        self.assertEqual(operations[0]["value"]["source"], "repo investigation")
+        self.assertEqual(operations[1]["value"]["decided_by"], "user")
+        self.assertEqual(operations[2]["value"]["caused_by_decision"], "d1")
+        self.assertEqual(operations[3]["value"]["from"], "sg_mail")
+        self.assertNotIn("from_", operations[3]["value"])
+        self.assertEqual(operations[4]["value"]["kind"], "investigation")
 
-    def test_questions_must_be_canonical_objects_not_strings_or_text_records(self) -> None:
+    def test_existing_record_transition_can_be_partial(self) -> None:
+        mutation = WorkItemMutation.model_validate(
+            {
+                "operations": [
+                    {
+                        "op": "question_upsert",
+                        "value": {"id": "q1", "status": "resolved", "decision_id": "d2"},
+                    },
+                    {
+                        "op": "decision_upsert",
+                        "value": {"id": "d1", "status": "superseded", "superseded_by": "d2"},
+                    },
+                ]
+            }
+        ).to_core_mutation()
+        self.assertNotIn("question", mutation["operations"][0]["value"])
+        self.assertNotIn("summary", mutation["operations"][1]["value"])
+
+    def test_incremental_record_mutation_rejects_explicit_null_but_omission_is_allowed(self) -> None:
+        valid = WorkItemMutation.model_validate(
+            {"operations": [{"op": "question_upsert", "value": {"id": "q1", "status": "resolved"}}]}
+        ).to_core_mutation()
+        self.assertNotIn("answer", valid["operations"][0]["value"])
+
         with self.assertRaises(PydanticValidationError):
-            WorkItemPatch.model_validate({"questions": ["[open] unresolved question"]})
-
+            WorkItemMutation.model_validate(
+                {"operations": [{"op": "question_upsert", "value": {"id": "q1", "answer": None}}]}
+            )
         with self.assertRaises(PydanticValidationError):
-            WorkItemPatch.model_validate(
-                {"questions": [{"text": "wrong field", "status": "open"}]}
+            WorkItemMutation.model_validate(
+                {"operations": [{"op": "decision_upsert", "value": {"id": "d1", "source": None}}]}
             )
 
-        valid = WorkItemPatch.model_validate(
-            {"questions": [{"id": "q1", "status": "open", "question": "Canonical question"}]}
-        )
-        self.assertEqual(valid.to_merge_patch()["questions"][0]["question"], "Canonical question")
+    def test_current_state_preserves_explicit_null_merge_patch_semantics(self) -> None:
+        mutation = WorkItemMutation.model_validate(
+            {"state": {"repos": {"old": None}}}
+        ).to_core_mutation()
+        self.assertEqual(mutation, {"state": {"repos": {"old": None}}})
 
-    def test_blockers_must_be_objects(self) -> None:
+    def test_unknown_or_generic_semantic_operation_is_rejected(self) -> None:
         with self.assertRaises(PydanticValidationError):
-            WorkItemPatch.model_validate({"blockers": ["test blocker string"]})
-
-        valid = WorkItemPatch.model_validate(
-            {"blockers": [{"id": "b1", "status": "open", "summary": "SMTP capacity unknown"}]}
-        )
-        self.assertEqual(valid.to_merge_patch()["blockers"][0]["id"], "b1")
-
-    def test_requirement_change_enums_are_explicit(self) -> None:
+            WorkItemMutation.model_validate(
+                {"operations": [{"op": "upsert", "value": {"id": "q1"}}]}
+            )
         with self.assertRaises(PydanticValidationError):
-            WorkItemPatch.model_validate(
+            WorkItemMutation.model_validate(
+                {"operations": [{"op": "checkpoint_upsert", "value": {"summary": "rewrite"}}]}
+            )
+
+    def test_empty_and_oversized_mutation_are_rejected(self) -> None:
+        with self.assertRaises(PydanticValidationError):
+            WorkItemMutation.model_validate({})
+        with self.assertRaises(PydanticValidationError):
+            WorkItemMutation.model_validate({"state": {}})
+        with self.assertRaises(PydanticValidationError):
+            WorkItemMutation.model_validate(
                 {
-                    "changes": [
-                        {
-                            "id": "c1",
-                            "type": "requirement",
-                            "status": "accepted",
-                            "summary": "wrong type",
-                        }
+                    "operations": [
+                        {"op": "checkpoint_append", "value": {"summary": f"checkpoint {i}"}}
+                        for i in range(MUTATION_OPERATION_MAX + 1)
                     ]
                 }
             )
+
+    def test_next_actions_remain_bounded_current_array_replacement(self) -> None:
         with self.assertRaises(PydanticValidationError):
-            WorkItemPatch.model_validate(
-                {
-                    "changes": [
-                        {
-                            "id": "c1",
-                            "type": "requirement_added",
-                            "status": "active",
-                            "summary": "wrong status",
-                        }
-                    ]
-                }
-            )
-
-    def test_next_actions_require_object_shape_and_target(self) -> None:
+            WorkItemMutation.model_validate({"state": {"next_actions": ["do the next thing"]}})
         with self.assertRaises(PydanticValidationError):
-            WorkItemPatch.model_validate({"next_actions": ["do the next thing"]})
-        with self.assertRaises(PydanticValidationError):
-            WorkItemPatch.model_validate({"next_actions": [{"action": "do the next thing"}]})
+            WorkItemMutation.model_validate({"state": {"next_actions": [{"action": "do it"}]}})
 
-        valid = WorkItemPatch.model_validate(
-            {"next_actions": [{"owner": "QiQi", "action": "Reconcile the task"}]}
-        )
-        self.assertEqual(valid.to_merge_patch()["next_actions"][0]["owner"], "QiQi")
+        valid = WorkItemMutation.model_validate(
+            {"state": {"next_actions": [{"repo": "sg_mail", "action": "Verify behavior"}]}}
+        ).to_core_mutation()
+        self.assertEqual(valid["state"]["next_actions"][0]["repo"], "sg_mail")
 
-    def test_repo_partial_merge_and_null_deletion_are_preserved(self) -> None:
-        patch = WorkItemPatch.model_validate(
-            {"repos": {"sg_mail": {"status": "done"}, "old_repo": None}}
-        ).to_merge_patch()
-        self.assertEqual(patch["repos"]["sg_mail"], {"status": "done"})
-        self.assertIsNone(patch["repos"]["old_repo"])
+    def test_schema_makes_full_history_replacement_unrepresentable(self) -> None:
+        schema = WorkItemMutation.model_json_schema()
+        state_schema = schema["$defs"]["WorkItemStatePatch"]
+        state_properties = state_schema["properties"]
+        for historical in ("questions", "decisions", "changes", "blockers", "handoffs", "checkpoints"):
+            self.assertNotIn(historical, state_properties)
+        self.assertIn("current_requirements", state_properties)
+        self.assertIn("repos", state_properties)
+        self.assertIn("next_actions", state_properties)
+        self.assertEqual(schema["properties"]["operations"]["maxItems"], MUTATION_OPERATION_MAX)
 
-    def test_omitted_fields_are_not_emitted_but_explicit_null_is_preserved(self) -> None:
-        self.assertEqual(WorkItemPatch.model_validate({}).to_merge_patch(), {})
-        self.assertEqual(
-            WorkItemPatch.model_validate({"summary": None}).to_merge_patch(),
-            {"summary": None},
-        )
-
-    def test_unknown_top_level_patch_field_is_rejected(self) -> None:
-        with self.assertRaises(PydanticValidationError):
-            WorkItemPatch.model_validate({"question": "typo singular field"})
-        with self.assertRaises(PydanticValidationError):
-            WorkItemPatch.model_validate({"artifacts": []})
-
-    def test_schema_describes_semantic_meanings_and_array_replacement(self) -> None:
-        schema = WorkItemPatch.model_json_schema()
-        properties = schema["properties"]
+    def test_schema_documents_checkpoint_and_repo_semantics(self) -> None:
+        schema = WorkItemMutation.model_json_schema()
         definitions = schema["$defs"]
-        repo_summary_description = definitions["RepoPatch"]["properties"]["summary"]["description"].lower()
-        self.assertIn("not free-form notes", properties["questions"]["description"].lower())
-        self.assertIn("requirement/scope", properties["changes"]["description"].lower())
-        self.assertIn("not generic risks", properties["blockers"]["description"].lower())
-        self.assertIn("do not send plain strings", properties["next_actions"]["description"].lower())
-        self.assertIn("accumulated material", properties["checkpoints"]["description"].lower())
-        self.assertIn("current effective repo truth", properties["repos"]["description"].lower())
-        self.assertIn("current effective repository", repo_summary_description)
-        self.assertIn("narrative", repo_summary_description)
-        self.assertIn("historical phase", repo_summary_description)
-        self.assertIn("not an enum", definitions["CheckpointPatch"]["properties"]["kind"]["description"].lower())
-        self.assertIn("omit when the phase has no artifact", definitions["CheckpointPatch"]["properties"]["artifact_id"]["description"].lower())
-        self.assertIn("arrays replace atomically", properties["current_requirements"]["description"].lower())
+        checkpoint = definitions["CheckpointRecord"]["properties"]
+        repo_summary = definitions["RepoPatch"]["properties"]["summary"]["description"].lower()
+        self.assertIn("not an enum", checkpoint["kind"]["description"].lower())
+        self.assertIn("omit when the phase has no artifact", checkpoint["artifact_id"]["description"].lower())
+        self.assertIn("current effective repository", repo_summary)
+        self.assertIn("narrative", repo_summary)
+        self.assertIn("historical phase", repo_summary)
 
 
 if __name__ == "__main__":
