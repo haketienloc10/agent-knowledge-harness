@@ -51,9 +51,15 @@ for pattern in \
   'MCPServer' \
   'WORK_ITEM_DB_PATH' \
   'work_item_get' \
+  'work_item_history_read' \
   'work_item_list' \
   'work_item_create' \
   'work_item_update' \
+  'WorkItemSnapshot' \
+  'WorkItemHistoryPage' \
+  'HistoryCollection' \
+  'HistoryReadLimit' \
+  'history_revision_conflict' \
   'WorkItemPatch' \
   '_work_item_update_error_result' \
   '"updated": False' \
@@ -74,7 +80,7 @@ for pattern in \
   'ARTIFACT_READ_MIN_BYTES' \
   'typed WorkItemPatch' \
   'do not encode' \
-  'Do not create artifacts merely as normal progress bookkeeping' \
+  'Do not create artifacts merely as normal progress' \
   'Artifact read cursors are bound to one artifact revision' \
   'Artifact mutations never advance' \
   'load_artifact_templates' \
@@ -87,8 +93,8 @@ for pattern in \
 done
 
 tool_count="$(rg -c '^@mcp\.tool\(\)$' "$server" || true)"
-[[ "$tool_count" == "10" ]] || \
-  fail "server.py: expected exactly ten public MCP tools (4 Work Item + 6 artifact), found $tool_count"
+[[ "$tool_count" == "11" ]] || \
+  fail "server.py: expected exactly eleven public MCP tools (5 Work Item + 6 artifact), found $tool_count"
 
 # CRITICAL TYPED UPDATE INVARIANT — DO NOT REMOVE OR WEAKEN THIS CHECK.
 # The generic dict[str, Any] update surface caused repeated agent retries with wrong
@@ -117,6 +123,42 @@ assert "except (ValidationError, ConflictError, NotFoundError)" in source
 PY
 then
   fail 'server.py: work_item_update must expose WorkItemPatch and return structured expected-domain failures'
+fi
+
+# CRITICAL BOUNDED READ INVARIANT — public GET must never regress to raw full-document
+# hydration. History is a separate one-collection typed tool with revision-bound cursor semantics.
+if ! SERVER_PATH="$server" python3 - <<'PY'
+import ast
+import os
+from pathlib import Path
+
+path = Path(os.environ["SERVER_PATH"])
+text = path.read_text(encoding="utf-8")
+tree = ast.parse(text)
+funcs = {
+    node.name: node
+    for node in tree.body
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+}
+get_fn = funcs["work_item_get"]
+history_fn = funcs["work_item_history_read"]
+get_source = ast.get_source_segment(text, get_fn) or ""
+history_source = ast.get_source_segment(text, history_fn) or ""
+assert "get_work_item_snapshot(" in get_source
+assert "WorkItemSnapshot.model_validate" in get_source
+assert "get_work_item(_db_path()" not in get_source
+args = {
+    arg.arg: ast.unparse(arg.annotation)
+    for arg in history_fn.args.args
+    if arg.annotation is not None
+}
+assert args["collection"] == "HistoryCollection"
+assert args["status"] == "HistoryStatus | None"
+assert "read_work_item_history(" in history_source
+assert "WorkItemHistoryPage.model_validate" in history_source
+PY
+then
+  fail 'server.py: bounded snapshot/scoped-history read contract regressed'
 fi
 
 # CRITICAL ARTIFACT TEMPLATE BOUNDARY — guidance is startup advisory data only.
@@ -185,12 +227,33 @@ for pattern in \
   'checkpoints' \
   'DERIVED_FIELDS = \{"artifacts"\}' \
   'must not persist derived fields' \
-  'must not modify derived fields'; do
+  'must not modify derived fields' \
+  'load_work_item_document' \
+  'project_work_item_snapshot' \
+  'get_work_item_snapshot' \
+  'read_work_item_history' \
+  'HISTORY_COLLECTIONS' \
+  'HISTORY_STATUS_BY_COLLECTION' \
+  'HISTORY_REPOSITORY_FILTER_COLLECTIONS' \
+  'history revision conflict' \
+  'history cursor does not match collection or filters' \
+  'PRAGMA user_version' \
+  'WORK_ITEM_DATA_VERSION = 1' \
+  '_migrate_legacy_lifecycle_statuses'; do
   rg -q "$pattern" "$core" || fail "core.py: missing contract: $pattern"
 done
 
 for pattern in \
   'class WorkItemPatch' \
+  'class QuestionRecord' \
+  'class DecisionRecord' \
+  'class RequirementChangeRecord' \
+  'class BlockerRecord' \
+  'class HandoffRecord' \
+  'class NextActionRecord' \
+  'class CheckpointRecord' \
+  'class WorkItemSnapshot' \
+  'class WorkItemHistoryPage' \
   'class QuestionPatch' \
   'class DecisionPatch' \
   'class RequirementChangePatch' \
@@ -199,6 +262,8 @@ for pattern in \
   'class HandoffPatch' \
   'class NextActionPatch' \
   'class CheckpointPatch' \
+  'Required canonical question lifecycle' \
+  'Required canonical decision lifecycle' \
   'extra="forbid"' \
   'extra="allow"' \
   'to_merge_patch' \
@@ -216,13 +281,14 @@ for pattern in \
   'not an enum or workflow FSM' \
   'current effective repo truth' \
   'accumulated material phase/milestone history'; do
-  rg -F -q "$pattern" "$models" || fail "models.py: missing typed patch contract: $pattern"
+  rg -F -q "$pattern" "$models" || fail "models.py: missing typed patch/read contract: $pattern"
 done
 
 # Explicit null is JSON merge-patch deletion while omitted fields mean no change.
 # This distinction and optional checkpoint phase metadata must survive serialization.
 if ! PYTHONPATH="$project" uv run --project "$project" python - <<'PY'
-from models import WorkItemPatch
+from pydantic import ValidationError
+from models import DecisionRecord, QuestionRecord, WorkItemPatch
 assert WorkItemPatch.model_validate({}).to_merge_patch() == {}
 assert WorkItemPatch.model_validate({"summary": None}).to_merge_patch() == {"summary": None}
 assert WorkItemPatch.model_validate({"repos": {"old": None}}).to_merge_patch() == {"repos": {"old": None}}
@@ -236,9 +302,21 @@ checkpoint = WorkItemPatch.model_validate({
 }).to_merge_patch()["checkpoints"][0]
 assert checkpoint["kind"] == "implementation-rework"
 assert checkpoint["artifact_id"] == "review:2"
+try:
+    QuestionRecord.model_validate({"id": "q1", "question": "missing status"})
+except ValidationError:
+    pass
+else:
+    raise AssertionError("QuestionRecord.status must be required")
+try:
+    DecisionRecord.model_validate({"id": "d1", "summary": "missing status"})
+except ValidationError:
+    pass
+else:
+    raise AssertionError("DecisionRecord.status must be required")
 PY
 then
-  fail 'models.py: WorkItemPatch must preserve merge-patch null/omission and checkpoint phase metadata'
+  fail 'models.py: WorkItemPatch/read models must preserve merge-patch semantics and explicit lifecycle status'
 fi
 
 for pattern in \
