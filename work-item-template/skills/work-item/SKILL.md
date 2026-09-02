@@ -59,9 +59,10 @@ follow-up, or completion decision that depends on a Work Item:
    and surface/reconcile the conflict according to role authority.
 
 `work_item_history_read` reads exactly one semantic collection per call. Its cursor is
-opaque and bound to the whole Work Item revision, collection, and filters. If the Work
-Item changes between pages, restart the history read from the current revision; never
-mix pages from two revisions.
+opaque and bound to the canonical Work Item identity, whole Work Item revision,
+collection, and filters. If the Work Item changes between pages, restart the history
+read from the current revision; never mix pages from two revisions or reuse a cursor for
+a different Work Item.
 
 ### Explicit new Work Item
 
@@ -95,7 +96,7 @@ Rules:
 
 - Never silently last-write-wins over a newer revision.
 - Nested repository objects merge by supplied fields.
-- `current_requirements` and `next_actions` are current snapshot arrays and replace atomically.
+- `current_requirements` and `next_actions` are current snapshot arrays; these arrays replace atomically.
 - Historical semantic arrays (`questions`, `decisions`, `changes`, `blockers`, `handoffs`,
   `checkpoints`) also replace atomically until incremental mutation operations are available.
   **Never reconstruct them from `work_item_get`**, because its lifecycle fields are bounded
@@ -107,8 +108,9 @@ Rules:
 
 Use the typed semantic shapes exposed by `WorkItemPatch`; do not encode status markers
 inside strings or use semantic arrays as free-form notes. Canonical questions and
-decisions require explicit lifecycle `status`; legacy missing statuses are migrated once
-into explicit `open`/`active` state rather than remaining implicit runtime semantics.
+decisions require explicit lifecycle `status`; legacy missing or null statuses are
+migrated once into explicit `open`/`active` state rather than remaining implicit runtime
+semantics.
 
 ## Current snapshot vs material history
 
