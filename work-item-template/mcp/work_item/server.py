@@ -24,18 +24,27 @@ from artifacts import (
     read_artifact_section,
 )
 from core import (
+    HISTORY_LIMIT_MAX,
     ConflictError,
     NotFoundError,
     ValidationError,
     WorkItemError,
     create_work_item,
-    get_work_item,
+    get_work_item_snapshot,
     list_work_items,
     new_document,
+    read_work_item_history,
     resolve_db_path,
     update_work_item,
 )
-from models import WorkItemPatch, WorkItemStatus
+from models import (
+    HistoryCollection,
+    HistoryStatus,
+    WorkItemHistoryPage,
+    WorkItemPatch,
+    WorkItemSnapshot,
+    WorkItemStatus,
+)
 
 ArtifactType = Literal["intake", "investigation", "plan", "review", "report"]
 WorkItemId = Annotated[
@@ -67,10 +76,9 @@ SectionId = Annotated[
 ]
 Revision = Annotated[int, Field(ge=1)]
 ListLimit = Annotated[int, Field(ge=1, le=200)]
+HistoryReadLimit = Annotated[int, Field(ge=1, le=HISTORY_LIMIT_MAX)]
 ArtifactListLimit = Annotated[int, Field(ge=1, le=ARTIFACT_LIST_MAX)]
-ArtifactReadLimit = Annotated[
-    int, Field(ge=ARTIFACT_READ_MIN_BYTES, le=ARTIFACT_READ_MAX_BYTES)
-]
+ArtifactReadLimit = Annotated[int, Field(ge=ARTIFACT_READ_MIN_BYTES, le=ARTIFACT_READ_MAX_BYTES)]
 ArtifactContent = Annotated[
     str,
     Field(
@@ -83,22 +91,17 @@ ArtifactContent = Annotated[
     ),
 ]
 
-# Artifact templates are advisory configuration, loaded and validated exactly once when
-# the MCP process starts. Restart the MCP process after changing the config file.
 ARTIFACT_TEMPLATES = load_artifact_templates()
 
 
 def _db_path() -> Path:
     raw = os.environ.get("WORK_ITEM_DB_PATH", "").strip()
     if not raw:
-        raise RuntimeError(
-            "WORK_ITEM_DB_PATH must point to the global Work Item SQLite database"
-        )
+        raise RuntimeError("WORK_ITEM_DB_PATH must point to the global Work Item SQLite database")
     return resolve_db_path(raw)
 
 
 def _not_found_result(item_id: str, exc: NotFoundError) -> dict[str, Any]:
-    """Return a normal control-flow result for an absent canonical Work Item."""
     return {
         "found": False,
         "id": item_id,
@@ -114,7 +117,6 @@ def _work_item_update_error_result(
     item_id: str,
     exc: ValidationError | ConflictError | NotFoundError,
 ) -> dict[str, Any]:
-    """Return expected update-domain failures as visible structured control flow."""
     if isinstance(exc, ValidationError):
         return {
             "updated": False,
@@ -123,8 +125,9 @@ def _work_item_update_error_result(
                 "code": "work_item_validation",
                 "message": str(exc),
                 "action": (
-                    "fix the patch to match the WorkItemPatch schema; semantic arrays are full "
-                    "replacements, then retry with the same revision unless the Work Item changed"
+                    "fix the patch to match the WorkItemPatch schema; historical semantic arrays are "
+                    "full replacements, so read the complete target collection with "
+                    "work_item_history_read before replacing it"
                 ),
             },
         }
@@ -136,8 +139,9 @@ def _work_item_update_error_result(
                 "code": "revision_conflict",
                 "message": str(exc),
                 "action": (
-                    "call work_item_get, reconcile against the current document including any full "
-                    "array replacement, then retry with its exact revision"
+                    "call work_item_get again for the current revision; if retrying a full historical "
+                    "array replacement, reread that complete collection with work_item_history_read, "
+                    "then reconcile and retry with the exact current revision"
                 ),
             },
         }
@@ -169,22 +173,25 @@ def _raise_actionable_error(exc: WorkItemError) -> None:
         raise ValueError(f"code=artifact_conflict; {message}") from exc
     if isinstance(exc, ArtifactNotFoundError):
         raise ValueError(
-            f"code=artifact_not_found; {exc}; "
-            "action=call work_item_artifact_list/get to verify artifact identity"
+            f"code=artifact_not_found; {exc}; action=call work_item_artifact_list/get to verify artifact identity"
         ) from exc
     if isinstance(exc, ConflictError):
         message = str(exc)
+        if "history revision conflict" in message:
+            raise ValueError(
+                "code=history_revision_conflict; "
+                f"{message}; action=restart work_item_history_read from the current revision without the stale cursor"
+            ) from exc
         if "revision conflict" in message:
             raise ValueError(
                 "code=revision_conflict; "
-                f"{message}; action=call work_item_get again, reconcile against the current "
-                "document, then retry with its exact revision"
+                f"{message}; action=call work_item_get again; if reconciling a historical full-array "
+                "replacement, reread that complete collection with work_item_history_read before retrying"
             ) from exc
         raise ValueError(f"code=work_item_conflict; {message}") from exc
     if isinstance(exc, NotFoundError):
         raise ValueError(
-            f"code=work_item_not_found; {exc}; "
-            "action=verify the canonical task id or let QiQi create it"
+            f"code=work_item_not_found; {exc}; action=verify the canonical task id or let QiQi create it"
         ) from exc
     if isinstance(exc, ValidationError):
         raise ValueError(f"code=work_item_validation; {exc}") from exc
@@ -193,20 +200,13 @@ def _raise_actionable_error(exc: WorkItemError) -> None:
 
 def _with_artifacts(item: dict[str, Any]) -> dict[str, Any]:
     result = dict(item)
-    result["artifacts"] = list_artifacts(
-        _db_path(), item["id"], limit=ARTIFACT_LIST_MAX
-    )
+    result["artifacts"] = list_artifacts(_db_path(), item["id"], limit=ARTIFACT_LIST_MAX)
     return result
 
 
-def _with_template_guidance(
-    artifact: dict[str, Any], artifact_type: str
-) -> dict[str, Any]:
-    """Attach advisory startup config without changing the stored artifact manifest."""
+def _with_template_guidance(artifact: dict[str, Any], artifact_type: str) -> dict[str, Any]:
     result = dict(artifact)
-    result["template_guidance"] = template_guidance_for(
-        ARTIFACT_TEMPLATES, artifact_type
-    )
+    result["template_guidance"] = template_guidance_for(ARTIFACT_TEMPLATES, artifact_type)
     return result
 
 
@@ -214,44 +214,75 @@ mcp = MCPServer(
     "Global Work Item",
     instructions=(
         "Canonical mutable product-task state shared by QiQi and repository execution agents. "
-        "When a TaskPacket identifies a Work Item, read it before substantive task work so "
-        "continuity does not depend on QiQi repeating prior history. QiQi owns global "
-        "orchestration state such as overall status/phase, repo assignment, next actions and "
-        "task completion. A repository agent may read the whole Work Item for context but must "
-        "only execute work in its current Git root and only update evidence/state it actually "
-        "established for that repository, plus blockers, open questions, checkpoints or handoffs "
-        "it discovered. Cross-repo remaining work is recorded and returned to QiQi; child agents "
-        "must not modify sibling repositories. Work Item state is task truth, not reusable system "
-        "knowledge and not runtime session state. Updates use optimistic concurrency: always pass "
-        "the exact revision returned by work_item_get/list and reread on conflict. work_item_update "
-        "exposes a typed WorkItemPatch: use canonical record objects for questions, decisions, "
-        "requirement/scope changes, blockers, handoffs, next actions and checkpoints; do not encode "
-        "those semantic collections as plain strings or generic activity logs. The patch uses JSON "
-        "merge-patch semantics: nested objects merge, arrays replace atomically, and null removes a "
-        "field; required fields cannot be removed. A missing work_item_get is normal startup control "
-        "flow and returns found=false so QiQi can create the item. Optional task artifacts provide "
-        "progressive-disclosure detail for explicit user-requested intake, investigation, plan, review "
-        "or report material. Do not create artifacts merely as normal progress bookkeeping. Artifact "
-        "types remain fixed, while configurable template guidance only recommends section ids, titles "
-        "and purposes; it is not persisted and never requires, forbids, or reorders artifact sections. "
-        "work_item_get returns only thin artifact metadata. Full artifact content must be read by "
-        "section through bounded work_item_artifact_read calls. Artifact writes are independently "
-        "revisioned, append-only while draft, limited to 32000 UTF-8 bytes per call, and become "
-        "immutable after finalize. Artifact read cursors are bound to one artifact revision; restart "
-        "a section read if the artifact changes between pages. Artifact mutations never advance the "
-        "Work Item revision. If artifact detail conflicts with newer canonical Work Item state, the "
-        "Work Item wins."
+        "When a TaskPacket identifies a Work Item, call work_item_get before substantive task work. "
+        "work_item_get is a bounded current-state projection: it returns current requirements, current "
+        "repo state, open questions/blockers, active decisions, pending handoffs, next actions, compact "
+        "history counts and thin artifact metadata; it intentionally does not hydrate resolved, "
+        "superseded or checkpoint history. Use work_item_history_read only when provenance/history is "
+        "material to the current decision or when a legacy full-array mutation requires the complete "
+        "target historical collection. Each history call reads exactly one semantic collection and its "
+        "opaque cursor is bound to the whole Work Item revision plus collection and filters; if the "
+        "Work Item changes between pages, restart the history read rather than mixing revisions. QiQi "
+        "owns global orchestration state such as overall status/phase, repo assignment, next actions and "
+        "task completion. A repository agent must only execute work in its current Git root and only "
+        "update evidence/state it actually established for that repository, plus blockers, open questions, "
+        "checkpoints or handoffs it discovered. Cross-repo remaining work is recorded and returned to QiQi; "
+        "child agents must not modify sibling repositories. Work Item state is task truth, not reusable "
+        "system knowledge and not runtime session state. Updates use optimistic concurrency: always pass "
+        "the exact revision returned by work_item_get/list and reread on conflict. work_item_update exposes "
+        "a typed WorkItemPatch. Historical semantic arrays still replace atomically until incremental "
+        "mutations are available, so never construct those arrays from the bounded snapshot; use "
+        "work_item_history_read to hydrate the complete target collection first. A missing work_item_get "
+        "is normal startup control flow and returns found=false so QiQi can create the item. Optional task "
+        "artifacts provide progressive-disclosure detail for explicit user-requested intake, investigation, "
+        "plan, review or report material. work_item_get returns only thin artifact metadata. Full artifact "
+        "content must be read by section through bounded work_item_artifact_read calls. Artifact writes are "
+        "independently revisioned, append-only while draft, limited to 32000 UTF-8 bytes per call, and "
+        "become immutable after finalize. Artifact read cursors are bound to one artifact revision; restart "
+        "a section read if the artifact changes between pages. Artifact mutations never advance the Work "
+        "Item revision. If artifact detail conflicts with newer canonical Work Item state, the Work Item wins."
     ),
 )
 
 
 @mcp.tool()
 async def work_item_get(id: WorkItemId) -> dict[str, Any]:
-    """Return canonical Work Item state plus a thin artifact index; absent items return found=false."""
+    """Return a bounded current-state Work Item snapshot plus thin artifact metadata."""
     try:
-        return _with_artifacts(get_work_item(_db_path(), id))
+        result = _with_artifacts(get_work_item_snapshot(_db_path(), id))
+        return WorkItemSnapshot.model_validate(result).model_dump(mode="python", by_alias=True)
     except NotFoundError as exc:
         return _not_found_result(id, exc)
+    except WorkItemError as exc:
+        _raise_actionable_error(exc)
+
+
+@mcp.tool()
+async def work_item_history_read(
+    id: WorkItemId,
+    collection: HistoryCollection,
+    status: HistoryStatus | None = None,
+    repository: str | None = None,
+    cursor: str | None = None,
+    limit: HistoryReadLimit = 50,
+) -> dict[str, Any]:
+    """Read one bounded canonical history collection page bound to one Work Item revision.
+
+    `status` is valid only for lifecycle collections. `repository` is valid only for checkpoints.
+    A cursor is opaque and bound to revision, collection and filters. If the Work Item revision
+    changes between pages, restart without the stale cursor.
+    """
+    try:
+        result = read_work_item_history(
+            _db_path(),
+            id,
+            collection=collection,
+            status=status,
+            repository=repository,
+            cursor=cursor,
+            limit=limit,
+        )
+        return WorkItemHistoryPage.model_validate(result).model_dump(mode="python")
     except WorkItemError as exc:
         _raise_actionable_error(exc)
 
@@ -264,9 +295,7 @@ async def work_item_list(
 ) -> list[dict[str, Any]]:
     """List compact Work Item summaries, optionally filtered by status or involved repository."""
     try:
-        return list_work_items(
-            _db_path(), status=status, repository=repository, limit=limit
-        )
+        return list_work_items(_db_path(), status=status, repository=repository, limit=limit)
     except WorkItemError as exc:
         _raise_actionable_error(exc)
 
@@ -292,7 +321,6 @@ async def work_item_create(
             current_requirements=current_requirements,
             repositories=repositories,
         )
-        # Mutation success must not depend on a second, post-commit artifact query.
         return create_work_item(_db_path(), document)
     except WorkItemError as exc:
         _raise_actionable_error(exc)
@@ -306,15 +334,14 @@ async def work_item_update(
 ) -> dict[str, Any]:
     """Atomically merge a typed WorkItemPatch using exact optimistic revision control.
 
-    Nested objects merge. Semantic arrays are full replacements: read the current Work Item,
-    reconcile the complete intended array, then update using that exact revision. The schema
-    distinguishes requirements, questions, decisions, requirement/scope changes, blockers,
-    handoffs, next actions and checkpoints so callers should not guess record shapes or meanings.
+    Nested objects merge. Historical semantic arrays are full replacements until incremental
+    mutations are available. Never rebuild them from work_item_get because that surface is a
+    current-state projection; read the complete target collection with work_item_history_read,
+    reconcile the intended replacement, then update using that exact whole Work Item revision.
     `artifacts` is derived metadata reserved by core and cannot be persisted.
     """
     try:
         patch = changes.to_merge_patch()
-        # Mutation success must not depend on a second, post-commit artifact query.
         return update_work_item(_db_path(), id, expected_revision, patch)
     except (ValidationError, ConflictError, NotFoundError) as exc:
         return _work_item_update_error_result(id, exc)
@@ -336,10 +363,7 @@ async def work_item_artifact_list(
 
 
 @mcp.tool()
-async def work_item_artifact_get(
-    id: WorkItemId,
-    artifact_id: ArtifactId,
-) -> dict[str, Any]:
+async def work_item_artifact_get(id: WorkItemId, artifact_id: ArtifactId) -> dict[str, Any]:
     """Return artifact metadata and ordered section manifest; never returns section content."""
     try:
         return get_artifact(_db_path(), id, artifact_id)
