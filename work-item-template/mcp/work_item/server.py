@@ -230,17 +230,20 @@ mcp = MCPServer(
         "child agents must not modify sibling repositories. Work Item state is task truth, not reusable "
         "system knowledge and not runtime session state. Updates use optimistic concurrency: always pass "
         "the exact revision returned by work_item_get/list and reread on conflict. work_item_update exposes "
-        "a typed WorkItemPatch. Historical semantic arrays still replace atomically until incremental "
-        "mutations are available, so never construct those arrays from the bounded snapshot; use "
-        "work_item_history_read to hydrate the complete target collection first. A missing work_item_get "
-        "is normal startup control flow and returns found=false so QiQi can create the item. Optional task "
-        "artifacts provide progressive-disclosure detail for explicit user-requested intake, investigation, "
-        "plan, review or report material. work_item_get returns only thin artifact metadata. Full artifact "
-        "content must be read by section through bounded work_item_artifact_read calls. Artifact writes are "
-        "independently revisioned, append-only while draft, limited to 32000 UTF-8 bytes per call, and "
-        "become immutable after finalize. Artifact read cursors are bound to one artifact revision; restart "
-        "a section read if the artifact changes between pages. Artifact mutations never advance the Work "
-        "Item revision. If artifact detail conflicts with newer canonical Work Item state, the Work Item wins."
+        "a typed WorkItemPatch. Use canonical record objects for questions, decisions, requirement/scope "
+        "changes, blockers, handoffs, next actions and checkpoints; do not encode those semantic collections "
+        "as plain strings or generic activity logs. Historical semantic arrays still replace atomically "
+        "until incremental mutations are available, so never construct those arrays from the bounded "
+        "snapshot; use work_item_history_read to hydrate the complete target collection first. A missing "
+        "work_item_get is normal startup control flow and returns found=false so QiQi can create the item. "
+        "Optional task artifacts provide progressive-disclosure detail for explicit user-requested intake, "
+        "investigation, plan, review or report material. Do not create artifacts merely as normal progress "
+        "bookkeeping. work_item_get returns only thin artifact metadata. Full artifact content must be read "
+        "by section through bounded work_item_artifact_read calls. Artifact writes are independently "
+        "revisioned, append-only while draft, limited to 32000 UTF-8 bytes per call, and become immutable "
+        "after finalize. Artifact read cursors are bound to one artifact revision; restart a section read "
+        "if the artifact changes between pages. Artifact mutations never advance the Work Item revision. "
+        "If artifact detail conflicts with newer canonical Work Item state, the Work Item wins."
     ),
 )
 
@@ -282,7 +285,7 @@ async def work_item_history_read(
             cursor=cursor,
             limit=limit,
         )
-        return WorkItemHistoryPage.model_validate(result).model_dump(mode="python")
+        return WorkItemHistoryPage.model_validate(result).model_dump(mode="python", by_alias=True)
     except WorkItemError as exc:
         _raise_actionable_error(exc)
 
