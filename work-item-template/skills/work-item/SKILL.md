@@ -52,17 +52,15 @@ follow-up, or completion decision that depends on a Work Item:
    canonical decision state; do not expect resolved/superseded/checkpoint history in
    the default read.
 3. Reconcile any supplied TaskPacket/user context against that current state before acting.
-4. Call `work_item_history_read(...)` only when provenance/history is material to the
-   current decision or when a full historical-array replacement requires the complete
-   canonical collection.
+4. Call `work_item_history_read(...)` only when exact provenance/history is material to
+   the current decision. Mutation no longer requires hydrating a full historical array.
 5. If current Work Item conflicts with a required premise, stop the dependent action
    and surface/reconcile the conflict according to role authority.
 
 `work_item_history_read` reads exactly one semantic collection per call. Its cursor is
-opaque and bound to the canonical Work Item identity, whole Work Item revision,
-collection, and filters. If the Work Item changes between pages, restart the history
-read from the current revision; never mix pages from two revisions or reuse a cursor for
-a different Work Item.
+opaque and bound to Work Item id, whole Work Item revision, collection, and filters. If
+the Work Item changes between pages, restart the history read from the current revision;
+never mix pages from two revisions.
 
 ### Explicit new Work Item
 
@@ -82,35 +80,121 @@ identity instead of inventing one.
 
 ## Update mechanics
 
-Every Work Item update uses optimistic concurrency:
+Every Work Item update uses one typed `WorkItemMutation` plus optimistic concurrency:
 
 ```text
 work_item_get -> latest revision/current state
-→ read scoped complete history collection when a historical full-array replacement is needed
-→ reconcile intended state
-→ work_item_update(id, expected_revision, changes)
-→ revision conflict: reread current snapshot/history as needed → reconcile → retry
+→ build current-state patch + smallest typed semantic operations
+→ work_item_update(id, expected_revision, mutation)
+→ revision conflict: reread → reconcile → retry
+```
+
+A mutation has two separate roles:
+
+```text
+mutation.state
+  = current effective fields only
+
+mutation.operations
+  = typed incremental mutation of semantic lifecycle/history records
+```
+
+### Current-state patch
+
+`mutation.state` may patch only:
+
+```text
+title / status / phase / summary
+current_requirements
+repos
+next_actions
 ```
 
 Rules:
 
-- Never silently last-write-wins over a newer revision.
 - Nested repository objects merge by supplied fields.
-- `current_requirements` and `next_actions` are current snapshot arrays; these arrays replace atomically.
-- Historical semantic arrays (`questions`, `decisions`, `changes`, `blockers`, `handoffs`,
-  `checkpoints`) also replace atomically until incremental mutation operations are available.
-  **Never reconstruct them from `work_item_get`**, because its lifecycle fields are bounded
-  subsets. Read the complete target collection through `work_item_history_read` first.
-- Preserve every canonical array entry not intentionally removed.
-- Explicit `null` is JSON merge-patch deletion; omitted fields mean no change.
-- Do not patch immutable/derived fields such as `id`, `revision`, or `artifacts`.
-- Unexpected/store failures are not evidence that a write succeeded.
+- `current_requirements` and `next_actions` are bounded current-state arrays; these
+  arrays replace atomically.
+- Explicit `null` keeps JSON merge-patch deletion semantics for state fields where the
+  canonical model permits it; omitted fields mean no change.
+- Historical semantic collections are intentionally **not** public full-array replacement
+  fields in `mutation.state`.
 
-Use the typed semantic shapes exposed by `WorkItemPatch`; do not encode status markers
-inside strings or use semantic arrays as free-form notes. Canonical questions and
-decisions require explicit lifecycle `status`; legacy missing or null statuses are
-migrated once into explicit `open`/`active` state rather than remaining implicit runtime
-semantics.
+### Typed semantic operations
+
+Use the smallest operation that expresses the material change:
+
+```text
+checkpoint_append
+question_upsert
+decision_upsert
+change_upsert
+blocker_upsert
+handoff_upsert
+```
+
+Rules:
+
+- Up to 50 operations may be sent in one call.
+- Operations are applied in caller order and commit all-or-nothing under one whole Work
+  Item revision.
+- Do not target the same stable-id record twice in one mutation; reconcile it into one
+  deterministic operation.
+- A stale writer always conflicts, even when it targets a different collection/record.
+  The server never auto-rebases semantic operations.
+- Existing stable-id records keep semantic identity/provenance. Upsert means create or
+  monotonic lifecycle advance, not arbitrary historical rewrite.
+- Existing provenance/evidence extensions are additive: do not silently replace an
+  established value.
+- Cross-record references are validated against the **final candidate document**, so one
+  atomic mutation may create a decision, supersede an old decision to it, and resolve a
+  question to it.
+
+Lifecycle contract:
+
+```text
+question:  open -> resolved                 # resolved never reopens
+decision:  active -> superseded             # superseded never reactivates
+blocker:   open -> resolved                 # recurring blocker gets a new id
+handoff:   pending -> resolved              # recurring handoff gets a new id
+
+change:
+  proposed -> accepted | rejected | superseded
+  accepted -> superseded
+  rejected/superseded are terminal
+```
+
+Identity/provenance rules:
+
+- `questions[].question` is immutable after create. Resolution may add write-once
+  `answer` and/or `decision_id`.
+- `decisions[].summary` is immutable after create. Supersession adds write-once
+  `superseded_by`.
+- `changes[].type` and `changes[].summary` are immutable after create.
+- `blockers[].summary` is immutable after create.
+- `handoffs[].from`, `handoffs[].to`, and `handoffs[].summary` are immutable after create.
+- `checkpoints[]` is append-only through `checkpoint_append`; there is no checkpoint
+  upsert/rewrite operation.
+
+If a historical statement was wrong or later changed, add the proper new semantic record
+or lifecycle transition rather than rewriting provenance.
+
+### Compact mutation receipt
+
+A successful `work_item_update` returns only a bounded receipt such as:
+
+```json
+{
+  "updated": true,
+  "id": "redmine:116655",
+  "revision": 42,
+  "changed": ["repos.backend", "decisions:d7", "questions:q3", "checkpoints"]
+}
+```
+
+The receipt is confirmation of the committed mutation, not a new snapshot. Reread
+`work_item_get(id)` only when the next decision actually needs resulting current state.
+Do not expect mutation success to hydrate the full Work Item document.
 
 ## Current snapshot vs material history
 
@@ -151,13 +235,10 @@ plans or unexecuted checks.
 
 `checkpoints[]` is accumulated material phase/milestone history. It is not returned by
 `work_item_get`; read it through `work_item_history_read(collection="checkpoints", ...)`
-when provenance or a full checkpoint-array replacement is actually needed.
+only when provenance is materially needed.
 
-Preserve existing material checkpoints and append a checkpoint when a substantive
-session establishes a new milestone that a future reader needs to reconstruct major task
-progression.
-
-Checkpoint metadata may include:
+Append a checkpoint when a substantive session establishes a new milestone that a future
+reader needs to reconstruct major task progression. Checkpoint metadata may include:
 
 ```text
 kind        = optional free-form descriptive milestone label
@@ -179,22 +260,21 @@ Generic mapping:
 
 | Session | Canonical effect when material |
 |---|---|
-| Investigation | current repo truth if understanding changes + checkpoint + question/blocker when needed |
+| Investigation | current repo truth + checkpoint + question/blocker when needed |
 | Planning | next action/handoff within authority + checkpoint when plan becomes continuation state |
 | Implementation | current implemented repo truth + checkpoint; artifact not required |
 | Verification | repository verification + checkpoint; summary/status only if conclusion changes |
 | Review | review artifact when workflow requests it + checkpoint; preserve current implementation truth |
-| Decision | persist decision/requirement effects within role authority |
+| Decision | persist decision/question/requirement effects within role authority |
 | Report | report artifact when workflow requests it + checkpoint; preserve prior repo/history truth |
 | Completion | final effective summary/status/checkpoint only within global completion authority |
 
 ### Implementation guardrail
 
 Implementation **must reconcile the Work Item even when no artifact is created**.
-Persist the current implemented outcome, relevant repo status/verification, and a
-material implementation checkpoint when a new implementation milestone was established.
-If checkpoint history must be replaced through the current update contract, hydrate the
-complete checkpoint collection first via `work_item_history_read`.
+Persist current implemented outcome and verification through `mutation.state`; append one
+material implementation checkpoint through `checkpoint_append` when a new milestone was
+established. Do not read/resend historical checkpoints for this common path.
 
 ### Review guardrail
 
@@ -222,25 +302,26 @@ Use semantic fields only for their intended material meaning:
 - `changes[]`: requirement/scope evolution only, not implementation progress.
 - `blockers[]`: conditions materially preventing progress.
 - `handoffs[]`: explicit remaining work transferred to another repo/owner.
-- `next_actions[]`: concrete continuation actions with repo/owner target.
+- `next_actions[]`: concrete current continuation actions with repo/owner target.
 
 Default `work_item_get` exposes only `open_questions`, `active_decisions`,
 `open_blockers`, and `pending_handoffs`. Resolved/superseded lifecycle records remain
 canonical and audit-readable through scoped history.
 
 When a user/customer answer resolves a material question and the current role owns the
-reconciliation:
+reconciliation, prefer one atomic mutation:
 
 ```text
-read complete questions/decisions collection when replacement is required
-→ question resolved
-→ decision active when appropriate
-→ current_requirements reconciled if semantics changed
-→ changes[] appended if effective requirement/scope actually changed
-→ blockers/next_actions reconciled where applicable
+decision_upsert(new active decision when appropriate)
++ decision_upsert(old decision -> superseded when applicable)
++ question_upsert(open -> resolved)
++ mutation.state.current_requirements when semantics changed
++ change_upsert when effective requirement/scope actually changed
++ blocker_upsert / handoff_upsert / mutation.state.next_actions when applicable
 ```
 
-Supersede historical decisions rather than silently rewriting their provenance.
+Because references validate on the final candidate document, the new decision and the
+question/decision transitions may be in the same call.
 
 A repository execution agent does not use these mechanics to exceed current-repo
 authority; product/customer decisions and global orchestration remain with QiQi when
@@ -270,10 +351,10 @@ Always obey the active `AGENTS.md` authority boundary.
 Operationally, QiQi normally owns overall `status`, `phase`, `summary`, repo assignment,
 global `next_actions`, product/customer decision reconciliation, cross-repo coordination,
 and final completion. After repo delegation returns, reread the bounded current Work
-Item snapshot before a dependent orchestration decision. Read scoped history only when
-that decision needs provenance or a historical collection must be replaced. Do not
-silently assume repo persistence succeeded when returned material evidence is absent
-from canonical state.
+Item snapshot before a dependent orchestration decision when returned evidence may have
+changed canonical state. Read scoped history only when that decision needs provenance.
+Do not silently assume repo persistence succeeded when returned material evidence is
+absent from canonical state.
 
 ### Repository execution agent
 
@@ -286,18 +367,19 @@ to reflect local progress.
 
 For a substantive turn with a canonical Work Item:
 
-1. Ensure decisions/actions used the latest bounded current Work Item state.
-2. Read only the scoped history needed for provenance or an exact full-array replacement.
-3. Persist material state established by this turn within role authority.
-4. Preserve canonical atomic-array entries not intentionally removed; never derive a
-   historical replacement from bounded lifecycle subsets.
-5. Add/update verification and one material checkpoint when applicable.
+1. Ensure decisions/actions used the latest relevant bounded Work Item state.
+2. Read scoped history only when exact provenance is materially needed.
+3. Persist current effective fields through `mutation.state` within role authority.
+4. Persist semantic lifecycle/history changes with the smallest typed operations; never
+   reconstruct or resend a historical collection for a local record change.
+5. Add/update verification and append one material checkpoint when applicable.
 6. Persist blocker/question/handoff/next action when materially required.
-7. If a revision conflict occurs, restart any stale history pagination, reread/reconcile,
-   and retry before claiming persistence.
-8. Do not treat artifact creation as the canonical-state update.
-9. If persistence failed, report that failure; do not claim the Work Item contains the
-   missing state.
+7. If a revision conflict occurs, reread current state, reconcile the intended mutation,
+   and retry; do not expect server-side rebase.
+8. Treat the compact mutation receipt as commit confirmation, not as a refreshed snapshot.
+9. Do not treat artifact creation as the canonical-state update.
+10. If persistence failed, report that failure; do not claim the Work Item contains the
+    missing state.
 
 Work Item handling does not replace separate Shared Knowledge review/write rules when a
 reusable conclusion was established.
