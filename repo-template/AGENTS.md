@@ -44,7 +44,8 @@ Always-on boundary:
 
 - Repo agent không tự tạo/chọn Work Item chỉ vì prompt chứa ticket, Redmine/Jira/GitHub issue, incident hoặc generic coding task.
 - Nếu TaskPacket/user đã identify/select canonical Work Item, hoặc trước bất kỳ `work_item_*` call nào, **MUST apply `$work-item`**.
-- `$work-item` là canonical operational protocol cho latest read, exact revision, atomic-array reconciliation, snapshot/history semantics, material-session reconciliation, question/decision/change handling và artifact boundary. Không duplicate các mechanics đó trong always-on policy.
+- `$work-item` là canonical operational protocol cho bounded current read, scoped history disclosure, exact whole revision, typed incremental mutation, snapshot/history semantics, material-session reconciliation, question/decision/change handling và artifact boundary. Không duplicate các mechanics đó trong always-on policy.
+- Historical semantic collections không được reconstruct/resend như full-array mutation; repo agent dùng smallest typed operation (`checkpoint_append`, lifecycle upsert...) trong current-repo authority.
 - Nếu latest Work Item làm TaskPacket objective/constraint stale hoặc conflict, handoff conflict cho QiQi; không silently chọn một phía.
 
 ### Execution authority
@@ -53,9 +54,9 @@ Agent được:
 
 - investigate/implement/verify current repo;
 - update `repos[current_repo]` bằng evidence thực tế;
-- ghi material checkpoint;
-- ghi current-repo blocker/open question;
-- ghi pending handoff khi current repo tạo/khám phá cross-repo impact.
+- append material checkpoint;
+- advance current-repo blocker/open question lifecycle khi có evidence;
+- ghi/resolve handoff thuộc work do current repo tạo/khám phá.
 
 Agent không được:
 
