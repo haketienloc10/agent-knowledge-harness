@@ -23,9 +23,21 @@ class WorkItemSkillContractTests(unittest.TestCase):
             "do not decide that a generic",
             "before any `work_item_*` tool call",
             "work_item_get(id)",
+            "work_item_history_read",
             "work_item_create",
-            "expected_revision",
-            "arrays replace atomically",
+            "workitemmutation",
+            "mutation.state",
+            "mutation.operations",
+            "question_upsert",
+            "decision_upsert",
+            "change_upsert",
+            "blocker_upsert",
+            "handoff_upsert",
+            "checkpoint_append",
+            "operations are applied in caller order",
+            "all-or-nothing",
+            "server never auto-rebases",
+            "compact mutation receipt",
             "revision conflict: reread → reconcile → retry",
             "current effective repo truth",
             "accumulated material phase/milestone history",
@@ -41,6 +53,9 @@ class WorkItemSkillContractTests(unittest.TestCase):
             self.assertIn(required, lowered)
 
         self.assertNotIn("ticket-work-item", lowered)
+        self.assertNotIn("read the complete target collection through `work_item_history_read` first", lowered)
+        self.assertNotIn("historical semantic arrays", lowered)
+        self.assertIn("historical semantic collections are intentionally **not** public full-array replacement", lowered)
         self.assertIn("role authority still comes from the active `agents.md`", lowered)
 
     def test_main_mcp_installer_installs_shared_skill(self) -> None:
