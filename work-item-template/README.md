@@ -115,22 +115,67 @@ Repo status có: `pending`, `active`, `waiting`, `blocked`, `done`, `not_require
 Requirement change type MVP có: `requirement_added`, `requirement_changed`,
 `requirement_removed`, `scope_changed`.
 
+Canonical `questions[]` và `decisions[]` luôn có lifecycle `status` explicit. Store cũ
+thiếu status được migrate một lần thành `question=open`, `decision=active` và Work Item
+revision được advance; runtime không giữ implicit lifecycle semantics lâu dài.
+
 ## Snapshot và history
 
-Các field có hai vai trò khác nhau:
+Stored document vẫn chứa đầy đủ current state + material history, nhưng public read
+surface dùng progressive disclosure.
+
+`work_item_get(id)` là **bounded current-state projection**:
 
 ```text
-summary/current_requirements/status/phase/repos/blockers/next_actions
-= snapshot hiện tại để tiếp tục công việc ngay
-
-questions/decisions/changes/checkpoints
-= material history giải thích vì sao snapshot hiện tại hình thành
+id / revision / title / status / phase / summary
+current_requirements / repos / next_actions
+open_questions / active_decisions / open_blockers / pending_handoffs
+thin artifact metadata
+history counts
 ```
 
+Nó không trả mặc định resolved questions, superseded decisions, accepted/rejected
+changes, resolved blockers/handoffs hoặc checkpoint records. Tên field lifecycle được
+đổi thành `open_*` / `active_*` / `pending_*` để caller không nhầm projection subset với
+full canonical collection.
+
+Material history đọc riêng bằng đúng semantic collection:
+
+```text
+work_item_history_read(
+  id,
+  collection,
+  status?,
+  repository?,
+  cursor?,
+  limit?
+)
+```
+
+Mỗi call chỉ đọc **một** collection trong:
+
+```text
+questions | decisions | changes | checkpoints | blockers | handoffs
+```
+
+`status` chỉ hợp lệ cho lifecycle collections. `repository` hiện chỉ hợp lệ cho
+`checkpoints`, vì đó là collection có canonical `repo` field. Filter không hợp semantic
+collection sẽ fail validation thay vì bị silently ignore.
+
+History giữ canonical array order. Cursor là opaque và bind vào exact whole Work Item
+revision + collection + filters. Nếu Work Item đổi giữa hai page, caller phải restart
+history read từ revision mới; server không bao giờ silently mix hai revisions.
+
+`work_item_get.history` chỉ là deterministic counts (`total`, và `current`/`hidden` khi
+có lifecycle subset), không phải synthesized prose và không chứa checkpoint references.
+
 `repos[repo].summary` là **current effective repo truth** sau tất cả work đã biết. Nó
-không phải narrative của session mới nhất. `checkpoints[]` là accumulated material
-phase/milestone history; future reader phải reconstruct được major progression mà không
-bắt buộc mở artifact.
+không phải narrative của session mới nhất. Nếu fresh session không thể tiếp tục từ
+`summary`, `repos`, current requirements và lifecycle subset thì phải sửa current
+snapshot, không chữa bằng cách hydrate history mặc định.
+
+`checkpoints[]` vẫn là accumulated material phase/milestone history; future reader có
+thể reconstruct major progression bằng scoped history read mà không bắt buộc mở artifact.
 
 Checkpoint có thể thêm:
 
@@ -246,11 +291,11 @@ export WORK_ITEM_ARTIFACT_TEMPLATES_PATH="$HOME/.config/agent-work-items/artifac
 Env phải tồn tại lúc Codex/Claude/MCP process được mở. Không set thì dùng repo default.
 Sửa config chỉ cần restart/fresh MCP process, **không cần database migration**.
 
-`work_item_get` trả Work Item cùng **thin artifact index**. Index này là derived
-metadata, không được persist trong `work_items.document_json`. Core từ chối create hoặc
-update nếu caller cố ghi field `artifacts`.
+`work_item_get` trả bounded current-state projection cùng **thin artifact index**. Index
+này là derived metadata, không được persist trong `work_items.document_json`. Core từ
+chối create hoặc update nếu caller cố ghi field `artifacts`.
 
-Full detail dùng progressive disclosure:
+Full artifact detail dùng progressive disclosure:
 
 ```text
 artifact_list -> artifact_get manifest -> artifact_read bounded section chunks
@@ -296,6 +341,7 @@ Canonical Work Item tools:
 
 ```text
 work_item_get(id)
+work_item_history_read(id, collection, status?, repository?, cursor?, limit?)
 work_item_list(status?, repository?, limit?)
 work_item_create(id, title, summary?, status?, phase?, current_requirements?, repositories?)
 work_item_update(id, expected_revision, changes: WorkItemPatch)
@@ -320,8 +366,12 @@ work_item_artifact_finalize(id, artifact_id, expected_artifact_revision)
 - required field bị remove sẽ fail validation;
 - immutable/derived field như `id`, `revision`, `artifacts` không được patch.
 
-Arrays replace nguyên tử là intentional cho MVP: caller phải đọc Work Item hiện tại,
-reconcile full intended array, rồi update bằng exact revision.
+`current_requirements` và `next_actions` là current arrays nên bounded snapshot đủ để
+reconcile chúng. Các historical semantic arrays (`questions`, `decisions`, `changes`,
+`blockers`, `handoffs`, `checkpoints`) vẫn replace nguyên tử cho đến khi incremental
+mutation API được triển khai: caller **không** được rebuild chúng từ `work_item_get`.
+Khi cần replace, phải page toàn target collection bằng `work_item_history_read` tại exact
+revision rồi mới update.
 
 ### Typed WorkItemPatch
 
@@ -384,6 +434,15 @@ QiQi update bằng expected_revision=12 -> conflict
 QiQi reread revision 13 -> reconcile -> retry
 ```
 
+History pagination dùng cùng whole Work Item revision:
+
+```text
+history page 1 @ revision 12 -> cursor(revision 12)
+Work Item update -> revision 13
+history page 2 bằng cursor revision 12 -> history_revision_conflict
+caller restart history read @ revision 13
+```
+
 Artifact có optimistic revision riêng:
 
 ```text
@@ -395,7 +454,9 @@ writer B artifact_get -> reconcile -> retry
 
 Không có last-write-wins silent overwrite.
 
-SQLite dùng `BEGIN IMMEDIATE`, WAL và exact revision checks cho mutation paths.
+SQLite dùng `BEGIN IMMEDIATE`, WAL và exact revision checks cho mutation paths. History
+read vẫn extract từ canonical `document_json` hiện tại; thay đổi này giảm model-context
+hydration, không giả vờ tối ưu storage I/O bằng schema/chunk store mới.
 
 ## Ownership policy
 
@@ -413,7 +474,8 @@ QiQi sở hữu global orchestration state:
 
 ### Repository execution agent
 
-Agent được đọc toàn bộ Work Item để hiểu context nhưng:
+Agent đọc bounded current Work Item để hiểu context và chỉ đọc scoped history khi thật
+sự cần provenance/reconciliation. Nó vẫn:
 
 - chỉ investigation/implementation/verification trong Git root hiện tại;
 - chỉ cập nhật repo evidence/state mà nó thực sự xác lập;
@@ -488,6 +550,10 @@ work_item_artifact_sections
 work_item_artifact_chunks
 ```
 
+Bounded snapshot/history read không thêm persistence table. One-time lifecycle migration
+sử dụng SQLite `PRAGMA user_version` làm store-version marker và chỉ materialize explicit
+question/decision status trong existing `document_json`.
+
 Artifact template config là startup advisory file, **không phải persistence table/store**.
 Không có filesystem/Markdown task-artifact store thứ hai.
 
@@ -501,9 +567,12 @@ agent-work-item artifact redmine:113387 report:1 --section code-review
 agent-work-item artifact redmine:113387 report:1 --raw
 ```
 
-`show` chỉ hiển thị thin artifact index. Text-mode `artifact` stream stored chunks trực
-tiếp từ read-only SQLite connection; `--raw` stream copy/paste-ready titles + bodies;
-chỉ explicit `--json` mới materialize full selected artifact. CLI không có mutation path.
+Human CLI vẫn là read-only observer của canonical store. CLI `show` có thể giữ
+full-document diagnostic behavior riêng; agent-facing progressive disclosure contract nằm
+ở MCP `work_item_get` / `work_item_history_read`. Text-mode `artifact` stream stored
+chunks trực tiếp từ read-only SQLite connection; `--raw` stream copy/paste-ready titles +
+bodies; chỉ explicit `--json` mới materialize full selected artifact. CLI không có
+mutation path.
 
 Chi tiết: `CLI.md`.
 
@@ -554,12 +623,17 @@ bash scripts/work-item-template-check.sh
 Test/check cover ít nhất:
 
 - create/get/list/update Work Item;
+- bounded `work_item_get` current-state projection không hydrate accumulated history;
+- open/active/current lifecycle subsets + deterministic history counts;
+- scoped single-collection history read + typed filter validation;
+- opaque cursor bind revision/collection/filters + revision-change conflict/restart;
+- one-time legacy question/decision lifecycle migration + explicit canonical status;
 - questions/decisions/requirement changes;
 - nested repo state merge;
 - stale Work Item revision và concurrent writers;
 - typed `WorkItemPatch` semantic shapes/descriptions;
 - repo-summary current-truth semantics + checkpoint `kind`/`artifact_id` metadata;
-- shared `$work-item` skill operational contract + explicit opt-in boundary;
+- shared `$work-item` skill progressive-disclosure contract + explicit opt-in boundary;
 - managed user-scope skill install/idempotence/unmanaged-conflict behavior;
 - main MCP installer includes the shared skill installation;
 - reject các payload từng gây retry: question string/`text`, blocker string, invalid change enum,
@@ -572,7 +646,7 @@ Test/check cover ít nhất:
 - artifact revision độc lập Work Item revision;
 - exact Work Item revision khi tạo artifact;
 - exact 32,000-byte write boundary và UTF-8 byte semantics;
-- bounded read + revision-bound continuation cursor;
+- bounded artifact read + revision-bound continuation cursor;
 - exact preservation của Markdown/code whitespace;
 - artifact/section MVP caps;
 - configurable artifact template default/override/startup validation;
@@ -581,7 +655,7 @@ Test/check cover ít nhất:
 - finalize empty bị reject và complete artifact immutable;
 - human CLI thin artifact index/full explicit artifact view;
 - human CLI diagnostic/raw streaming + explicit JSON materialization đều read-only;
-- static invariant cho MCP tool count, typed update surface, template/storage boundary,
+- static invariant cho MCP tool count, typed update/read surface, template/storage boundary,
   post-commit mutation response, bounded payload và read-only boundary.
 
 Khi rollout thực tế, mở fresh Codex/Claude session để MCP client discover tool surface +
