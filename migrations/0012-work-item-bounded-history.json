@@ -1,21 +1,26 @@
 {
   "version": 12,
   "from_ref": "ebdda009b8cced791d5f56716653155be49fb828",
-  "to_ref": "42694684c04f69195f443121fab930b01b117caf",
-  "description": "adopt bounded Work Item current-state reads and revision-bound scoped history disclosure while carrying forward the strict Delegation Silence workspace invariant; rerun work-item-template/scripts/install-user-mcp.sh after migration to refresh the user-scoped MCP/skill",
+  "to_ref": "3152feef4d15858ad328b39fe5508f970da53109",
+  "description": "adopt bounded Work Item current-state/history reads plus typed incremental semantic mutations and compact receipts while carrying forward the strict Delegation Silence workspace invariant; rerun work-item-template/scripts/install-user-mcp.sh after migration to refresh the user-scoped MCP/skill",
   "workspace": {
     "merge": [
       "workspace-template/AGENTS.md"
     ],
     "replace": [
+      "workspace-template/docs/WORKSPACE_SETUP.md",
       "workspace-template/scripts/workspace-check.sh"
     ],
     "delete": [],
     "manual_review": []
   },
   "repo": {
-    "merge": [],
-    "replace": [],
+    "merge": [
+      "repo-template/AGENTS.md"
+    ],
+    "replace": [
+      "repo-template/docs/REPO_SETUP.md"
+    ],
     "delete": [],
     "manual_review": []
   }
