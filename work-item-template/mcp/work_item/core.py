@@ -109,11 +109,11 @@ def _migrate_legacy_lifecycle_statuses(conn: sqlite3.Connection) -> None:
             document = json.loads(row["document_json"])
             changed = False
             for question in document.get("questions", []):
-                if isinstance(question, dict) and "status" not in question:
+                if isinstance(question, dict) and question.get("status") is None:
                     question["status"] = "open"
                     changed = True
             for decision in document.get("decisions", []):
-                if isinstance(decision, dict) and "status" not in decision:
+                if isinstance(decision, dict) and decision.get("status") is None:
                     decision["status"] = "active"
                     changed = True
             if not changed:
@@ -533,9 +533,12 @@ def _decode_history_cursor(cursor: str) -> dict[str, Any]:
         raise ValidationError("history cursor is malformed") from exc
     if not isinstance(payload, dict):
         raise ValidationError("history cursor is malformed")
-    required = {"v", "revision", "collection", "status", "repository", "next_index"}
+    required = {"v", "id", "revision", "collection", "status", "repository", "next_index"}
     if set(payload) != required or payload.get("v") != 1:
         raise ValidationError("history cursor is malformed or unsupported")
+    item_id = _required_text(payload["id"], "history cursor id", max_chars=256)
+    if not WORK_ITEM_ID_RE.fullmatch(item_id):
+        raise ValidationError("history cursor id is invalid")
     if not isinstance(payload["revision"], int) or isinstance(payload["revision"], bool):
         raise ValidationError("history cursor revision is invalid")
     if not isinstance(payload["next_index"], int) or isinstance(payload["next_index"], bool) or payload["next_index"] < 0:
@@ -590,6 +593,8 @@ def read_work_item_history(
     start = 0
     if cursor is not None:
         payload = _decode_history_cursor(cursor)
+        if payload["id"] != document["id"]:
+            raise ValidationError("history cursor does not match Work Item")
         if payload["revision"] != document["revision"]:
             raise ConflictError(
                 f"history revision conflict for {item_id}: cursor revision "
@@ -622,6 +627,7 @@ def read_work_item_history(
         next_cursor = _encode_history_cursor(
             {
                 "v": 1,
+                "id": document["id"],
                 "revision": document["revision"],
                 "collection": collection,
                 "status": status,
