@@ -24,6 +24,7 @@ PYTHONPATH="$project" uv run --project "$project" python -m unittest discover -s
   fail 'Work Item typed MCP/template contract tests failed'
 python3 -m py_compile \
   "$project/core.py" \
+  "$project/mutations.py" \
   "$project/server.py" \
   "$project/artifacts.py" \
   "$project/artifact_templates.py" \
@@ -39,6 +40,7 @@ bash -n "$home/scripts/install-user-mcp.sh" || \
 
 server="$project/server.py"
 core="$project/core.py"
+mutations="$project/mutations.py"
 artifacts="$project/artifacts.py"
 artifact_templates="$project/artifact_templates.py"
 artifact_template_config="$home/config/artifact-templates.json"
@@ -60,7 +62,8 @@ for pattern in \
   'HistoryCollection' \
   'HistoryReadLimit' \
   'history_revision_conflict' \
-  'WorkItemPatch' \
+  'WorkItemMutation' \
+  'mutate_work_item' \
   '_work_item_update_error_result' \
   '"updated": False' \
   'work_item_validation' \
@@ -68,6 +71,13 @@ for pattern in \
   'except NotFoundError as exc' \
   '"found": False' \
   'work_item_not_found' \
+  'question_upsert' \
+  'decision_upsert' \
+  'change_upsert' \
+  'blocker_upsert' \
+  'handoff_upsert' \
+  'checkpoint_append' \
+  'compact receipt' \
   'work_item_artifact_list' \
   'work_item_artifact_get' \
   'work_item_artifact_create' \
@@ -78,8 +88,6 @@ for pattern in \
   'ArtifactReadLimit' \
   'ARTIFACT_LIST_MAX' \
   'ARTIFACT_READ_MIN_BYTES' \
-  'typed WorkItemPatch' \
-  'do not encode' \
   'Do not create artifacts merely as normal progress' \
   'Artifact read cursors are bound to one artifact revision' \
   'Artifact mutations never advance' \
@@ -96,9 +104,9 @@ tool_count="$(rg -c '^@mcp\.tool\(\)$' "$server" || true)"
 [[ "$tool_count" == "11" ]] || \
   fail "server.py: expected exactly eleven public MCP tools (5 Work Item + 6 artifact), found $tool_count"
 
-# CRITICAL TYPED UPDATE INVARIANT — DO NOT REMOVE OR WEAKEN THIS CHECK.
-# The generic dict[str, Any] update surface caused repeated agent retries with wrong
-# question/blocker/change/next-action shapes. MCP must expose the canonical patch schema.
+# CRITICAL TYPED INCREMENTAL UPDATE INVARIANT — DO NOT REMOVE OR WEAKEN THIS CHECK.
+# Historical semantic collections must not return to public full-array replacement. The
+# MCP exposes one typed mutation envelope so state + semantic commands commit atomically.
 if ! SERVER_PATH="$server" python3 - <<'PY'
 import ast
 import os
@@ -113,16 +121,18 @@ funcs = {
     if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
 }
 update = funcs["work_item_update"]
-changes_arg = next(arg for arg in update.args.args if arg.arg == "changes")
+mutation_arg = next(arg for arg in update.args.args if arg.arg == "mutation")
 source = ast.get_source_segment(text, update) or ""
-assert isinstance(changes_arg.annotation, ast.Name)
-assert changes_arg.annotation.id == "WorkItemPatch"
-assert "changes.to_merge_patch()" in source
+assert isinstance(mutation_arg.annotation, ast.Name)
+assert mutation_arg.annotation.id == "WorkItemMutation"
+assert "mutation.to_core_mutation()" in source
+assert "mutate_work_item(" in source
+assert "update_work_item(" not in source
 assert "_work_item_update_error_result" in source
 assert "except (ValidationError, ConflictError, NotFoundError)" in source
 PY
 then
-  fail 'server.py: work_item_update must expose WorkItemPatch and return structured expected-domain failures'
+  fail 'server.py: work_item_update must expose WorkItemMutation and route only through incremental mutation engine'
 fi
 
 # CRITICAL BOUNDED READ INVARIANT — public GET must never regress to raw full-document
@@ -190,8 +200,8 @@ then
 fi
 
 # CRITICAL MUTATION RESPONSE INVARIANT — DO NOT REMOVE OR WEAKEN THIS CHECK.
-# A Work Item mutation is committed by core. Its MCP success/failure must not depend
-# on a second post-commit artifact query, otherwise a committed write can look failed.
+# A committed Work Item update returns the bounded receipt produced by the mutation
+# transaction and never depends on a second artifact/snapshot query.
 if ! SERVER_PATH="$server" python3 - <<'PY'
 import ast
 import os
@@ -208,9 +218,11 @@ funcs = {
 assert "_with_artifacts" in funcs["work_item_get"]
 assert "_with_artifacts" not in funcs["work_item_create"]
 assert "_with_artifacts" not in funcs["work_item_update"]
+assert "get_work_item_snapshot" not in funcs["work_item_update"]
+assert "read_work_item_history" not in funcs["work_item_update"]
 PY
 then
-  fail 'server.py: only work_item_get may enrich with artifact index; create/update must return committed mutation result directly'
+  fail 'server.py: update must return its compact committed receipt without post-commit enrichment/history hydration'
 fi
 
 for pattern in \
@@ -240,11 +252,40 @@ for pattern in \
   'PRAGMA user_version' \
   'WORK_ITEM_DATA_VERSION = 1' \
   '_migrate_legacy_lifecycle_statuses'; do
-  rg -q "$pattern" "$core" || fail "core.py: missing contract: $pattern"
+  rg -q "$pattern" "$core" || fail "core.py: missing read/storage contract: $pattern"
 done
 
 for pattern in \
-  'class WorkItemPatch' \
+  'MUTATION_OPERATION_MAX = 50' \
+  'STATE_FIELDS' \
+  'LIFECYCLE_TRANSITIONS' \
+  'IMMUTABLE_FIELDS' \
+  'WRITE_ONCE_FIELDS' \
+  'question_upsert' \
+  'decision_upsert' \
+  'change_upsert' \
+  'blocker_upsert' \
+  'handoff_upsert' \
+  'checkpoint_append' \
+  'duplicate target' \
+  '_validate_cross_record_references' \
+  'BEGIN IMMEDIATE' \
+  'revision conflict' \
+  'validate_document(current)' \
+  'validate_document(candidate)' \
+  'mutation does not change canonical Work Item state' \
+  '"updated": True' \
+  '"changed": changed'; do
+  rg -F -q "$pattern" "$mutations" || fail "mutations.py: missing incremental mutation invariant: $pattern"
+done
+
+# Mutation write path must stay one whole-document optimistic transaction. It must not
+# call bounded read/history helpers or silently retry/rebase a stale operation.
+if rg -q 'get_work_item_snapshot|read_work_item_history|while .*revision|retry' "$mutations"; then
+  fail 'mutations.py: mutation engine must not hydrate public reads or auto-retry/rebase stale operations'
+fi
+
+for pattern in \
   'class QuestionRecord' \
   'class DecisionRecord' \
   'class RequirementChangeRecord' \
@@ -254,54 +295,86 @@ for pattern in \
   'class CheckpointRecord' \
   'class WorkItemSnapshot' \
   'class WorkItemHistoryPage' \
-  'class QuestionPatch' \
-  'class DecisionPatch' \
-  'class RequirementChangePatch' \
-  'class RepoPatch' \
-  'class BlockerPatch' \
-  'class HandoffPatch' \
-  'class NextActionPatch' \
-  'class CheckpointPatch' \
+  'class WorkItemStatePatch' \
+  'class QuestionMutation' \
+  'class DecisionMutation' \
+  'class RequirementChangeMutation' \
+  'class BlockerMutation' \
+  'class HandoffMutation' \
+  'class CheckpointAppendOperation' \
+  'class QuestionUpsertOperation' \
+  'class DecisionUpsertOperation' \
+  'class ChangeUpsertOperation' \
+  'class BlockerUpsertOperation' \
+  'class HandoffUpsertOperation' \
+  'class WorkItemMutation' \
+  'MUTATION_OPERATION_MAX = 50' \
   'Required canonical question lifecycle' \
   'Required canonical decision lifecycle' \
   'extra="forbid"' \
   'extra="allow"' \
   'to_merge_patch' \
+  'to_core_mutation' \
   'exclude_unset=True' \
   'by_alias=True' \
-  'not free-form notes or strings' \
-  'requirement/scope evolution history only' \
-  'not generic risks or notes' \
-  'do not send plain strings' \
-  'not terminal' \
   'Current effective repository contribution/state' \
   'not a narrative of the latest session' \
   'kind: str | None' \
   'artifact_id: str | None' \
   'not an enum or workflow FSM' \
-  'current effective repo truth' \
-  'accumulated material phase/milestone history'; do
-  rg -F -q "$pattern" "$models" || fail "models.py: missing typed patch/read contract: $pattern"
+  'Partial semantic command' \
+  'Historical semantic collections are intentionally not replaceable here'; do
+  rg -F -q "$pattern" "$models" || fail "models.py: missing typed read/mutation contract: $pattern"
 done
 
-# Explicit null is JSON merge-patch deletion while omitted fields mean no change.
-# This distinction and optional checkpoint phase metadata must survive serialization.
+# Public mutation schema must make historical full-array replacement unrepresentable.
+# Current-state null/omission merge semantics remain available only inside state patch;
+# semantic record commands reject explicit null and use typed incremental operations.
 if ! PYTHONPATH="$project" uv run --project "$project" python - <<'PY'
 from pydantic import ValidationError
-from models import DecisionRecord, QuestionRecord, WorkItemPatch
-assert WorkItemPatch.model_validate({}).to_merge_patch() == {}
-assert WorkItemPatch.model_validate({"summary": None}).to_merge_patch() == {"summary": None}
-assert WorkItemPatch.model_validate({"repos": {"old": None}}).to_merge_patch() == {"repos": {"old": None}}
-checkpoint = WorkItemPatch.model_validate({
-    "checkpoints": [{
-        "repo": "repo-a",
-        "kind": "implementation-rework",
-        "artifact_id": "review:2",
-        "summary": "Fixed review finding and reverified.",
+from models import (
+    DecisionRecord,
+    MUTATION_OPERATION_MAX,
+    QuestionRecord,
+    WorkItemMutation,
+    WorkItemStatePatch,
+)
+assert WorkItemStatePatch.model_validate({}).to_merge_patch() == {}
+assert WorkItemMutation.model_validate({"state": {"repos": {"old": None}}}).to_core_mutation() == {
+    "state": {"repos": {"old": None}}
+}
+partial = WorkItemMutation.model_validate({
+    "operations": [{
+        "op": "question_upsert",
+        "value": {"id": "q1", "status": "resolved", "decision_id": "d2"},
     }]
-}).to_merge_patch()["checkpoints"][0]
+}).to_core_mutation()
+assert partial["operations"][0]["value"] == {
+    "id": "q1", "status": "resolved", "decision_id": "d2"
+}
+checkpoint = WorkItemMutation.model_validate({
+    "operations": [{
+        "op": "checkpoint_append",
+        "value": {
+            "repo": "repo-a",
+            "kind": "implementation-rework",
+            "artifact_id": "review:2",
+            "summary": "Fixed review finding and reverified.",
+        },
+    }]
+}).to_core_mutation()["operations"][0]["value"]
 assert checkpoint["kind"] == "implementation-rework"
 assert checkpoint["artifact_id"] == "review:2"
+state_properties = WorkItemStatePatch.model_json_schema()["properties"]
+for historical in ("questions", "decisions", "changes", "blockers", "handoffs", "checkpoints"):
+    assert historical not in state_properties
+assert WorkItemMutation.model_json_schema()["properties"]["operations"]["maxItems"] == MUTATION_OPERATION_MAX
+try:
+    WorkItemMutation.model_validate({"operations": [{"op": "question_upsert", "value": {"id": "q1", "answer": None}}]})
+except ValidationError:
+    pass
+else:
+    raise AssertionError("incremental semantic mutation must reject explicit null")
 try:
     QuestionRecord.model_validate({"id": "q1", "question": "missing status"})
 except ValidationError:
@@ -316,7 +389,7 @@ else:
     raise AssertionError("DecisionRecord.status must be required")
 PY
 then
-  fail 'models.py: WorkItemPatch/read models must preserve merge-patch semantics and explicit lifecycle status'
+  fail 'models.py: bounded state + typed incremental mutation schema invariants failed'
 fi
 
 for pattern in \
