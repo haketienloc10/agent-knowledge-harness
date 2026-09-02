@@ -150,7 +150,7 @@ class WorkItemBoundedReadTests(unittest.TestCase):
         with self.assertRaisesRegex(ValidationError, "repository filter is not supported"):
             read_work_item_history(self.db, seeded["id"], collection="decisions", repository="api")
 
-    def test_history_cursor_is_bound_to_query_and_whole_work_item_revision(self) -> None:
+    def test_history_cursor_is_bound_to_item_query_and_whole_work_item_revision(self) -> None:
         seeded = self._seed_history()
         first = read_work_item_history(
             self.db, seeded["id"], collection="decisions", status="superseded", limit=3
@@ -164,6 +164,37 @@ class WorkItemBoundedReadTests(unittest.TestCase):
                 seeded["id"],
                 collection="decisions",
                 status="active",
+                cursor=cursor,
+                limit=3,
+            )
+
+        other = create_work_item(
+            self.db,
+            new_document(item_id="redmine:other", title="Other work item"),
+        )
+        other = update_work_item(
+            self.db,
+            other["id"],
+            other["revision"],
+            {
+                "decisions": [
+                    {
+                        "id": f"other-d{i}",
+                        "status": "superseded",
+                        "summary": f"Other decision {i}",
+                        "superseded_by": "other-next",
+                    }
+                    for i in range(6)
+                ]
+            },
+        )
+        self.assertEqual(other["revision"], seeded["revision"])
+        with self.assertRaisesRegex(ValidationError, "does not match Work Item"):
+            read_work_item_history(
+                self.db,
+                other["id"],
+                collection="decisions",
+                status="superseded",
                 cursor=cursor,
                 limit=3,
             )
@@ -195,7 +226,7 @@ class WorkItemBoundedReadTests(unittest.TestCase):
 
 
 class LegacyLifecycleMigrationTests(unittest.TestCase):
-    def test_legacy_missing_statuses_are_persisted_once_and_revision_advances(self) -> None:
+    def test_legacy_missing_and_null_statuses_are_persisted_once_and_revision_advances(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             db = Path(temp) / "legacy.sqlite3"
             conn = sqlite3.connect(db)
@@ -218,8 +249,14 @@ class LegacyLifecycleMigrationTests(unittest.TestCase):
                 "phase": "investigation",
                 "summary": "",
                 "current_requirements": [],
-                "questions": [{"id": "q1", "question": "Legacy question"}],
-                "decisions": [{"id": "d1", "summary": "Legacy decision"}],
+                "questions": [
+                    {"id": "q1", "question": "Legacy missing question"},
+                    {"id": "q2", "status": None, "question": "Legacy null question"},
+                ],
+                "decisions": [
+                    {"id": "d1", "summary": "Legacy missing decision"},
+                    {"id": "d2", "status": None, "summary": "Legacy null decision"},
+                ],
                 "changes": [],
                 "repos": {},
                 "blockers": [],
@@ -243,8 +280,8 @@ class LegacyLifecycleMigrationTests(unittest.TestCase):
 
             loaded = load_work_item_document(db, "redmine:legacy")
             self.assertEqual(loaded["revision"], 8)
-            self.assertEqual(loaded["questions"][0]["status"], "open")
-            self.assertEqual(loaded["decisions"][0]["status"], "active")
+            self.assertEqual([item["status"] for item in loaded["questions"]], ["open", "open"])
+            self.assertEqual([item["status"] for item in loaded["decisions"]], ["active", "active"])
             self.assertEqual(load_work_item_document(db, "redmine:legacy")["revision"], 8)
 
 
