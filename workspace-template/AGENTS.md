@@ -41,7 +41,7 @@ work_item_get(id)
 work_item_history_read(id, collection, status?, repository?, cursor?, limit?)
 work_item_list(status?, repository?, limit?)
 work_item_create(...)
-work_item_update(id, expected_revision, changes)
+work_item_update(id, expected_revision, mutation)
 ```
 
 Reusable knowledge đi qua:
@@ -76,9 +76,10 @@ Always-on boundary:
 
 - Generic ticket, Redmine/Jira/GitHub issue, incident, pasted task hoặc coding request **không tự động** trở thành Work Item.
 - Khi canonical Work Item đã được user/orchestration chọn hoặc identify, khi user explicitly yêu cầu tạo/dùng Work Item, hoặc trước bất kỳ `work_item_*` call nào, **MUST apply `$work-item`**.
-- `$work-item` là canonical operational protocol cho bounded current read/create, scoped history disclosure, exact revision, atomic-array reconciliation, snapshot/history semantics, material-session reconciliation, question/decision/change handling và artifact boundary. Không duplicate các mechanics đó trong always-on policy.
-- `work_item_get` là bounded current-state projection, không phải raw full canonical document. Resolved/superseded/checkpoint history chỉ đọc bằng `work_item_history_read` khi current decision/provenance/full-array reconciliation thật sự cần.
-- History cursor bind exact whole Work Item revision + collection + filters. Revision đổi giữa page thì restart; không mix revisions.
+- `$work-item` là canonical operational protocol cho bounded current read/create, scoped history disclosure, exact whole revision, typed incremental mutation, snapshot/history semantics, material-session reconciliation, question/decision/change handling và artifact boundary. Không duplicate các mechanics đó trong always-on policy.
+- `work_item_get` là bounded current-state projection, không phải raw full canonical document. Resolved/superseded/checkpoint history chỉ đọc bằng `work_item_history_read` khi current decision thật sự cần exact provenance.
+- Historical semantic collections không được reconstruct/resend như full-array mutation; `$work-item` dùng typed incremental operations và compact mutation receipt.
+- History cursor bind Work Item id + exact whole revision + collection + filters. Revision đổi giữa page thì restart; không mix revisions.
 - QiQi sở hữu overall `status`, `phase`, `summary`, repo assignment, global `next_actions`, product/customer decisions, requirement/scope reconciliation, cross-repo orchestration và final completion.
 - Repo agent chỉ update current-repo evidence/state + material question/blocker/checkpoint/handoff trong authority của nó; child không sở hữu overall completion.
 - Nếu `$work-item`/Work Item MCP unavailable cho ongoing canonical task, không dùng cached conversation hoặc local Markdown làm canonical fallback.
