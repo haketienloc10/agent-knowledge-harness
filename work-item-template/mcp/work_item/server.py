@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Any, Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from mcp.server import MCPServer
 from pydantic import Field
@@ -35,16 +35,16 @@ from core import (
     new_document,
     read_work_item_history,
     resolve_db_path,
-    update_work_item,
 )
 from models import (
     HistoryCollection,
     HistoryStatus,
     WorkItemHistoryPage,
-    WorkItemPatch,
+    WorkItemMutation,
     WorkItemSnapshot,
     WorkItemStatus,
 )
+from mutations import mutate_work_item
 
 ArtifactType = Literal["intake", "investigation", "plan", "review", "report"]
 WorkItemId = Annotated[
@@ -125,9 +125,9 @@ def _work_item_update_error_result(
                 "code": "work_item_validation",
                 "message": str(exc),
                 "action": (
-                    "fix the patch to match the WorkItemPatch schema; historical semantic arrays are "
-                    "full replacements, so read the complete target collection with "
-                    "work_item_history_read before replacing it"
+                    "fix the mutation to match WorkItemMutation: current effective fields belong in "
+                    "state, while questions/decisions/changes/blockers/handoffs/checkpoints use typed "
+                    "incremental operations"
                 ),
             },
         }
@@ -139,9 +139,9 @@ def _work_item_update_error_result(
                 "code": "revision_conflict",
                 "message": str(exc),
                 "action": (
-                    "call work_item_get again for the current revision; if retrying a full historical "
-                    "array replacement, reread that complete collection with work_item_history_read, "
-                    "then reconcile and retry with the exact current revision"
+                    "call work_item_get again for the current whole Work Item revision, reconcile the "
+                    "intended state/semantic operation against current canonical state, then retry; "
+                    "the server never auto-rebases stale operations"
                 ),
             },
         }
@@ -185,8 +185,7 @@ def _raise_actionable_error(exc: WorkItemError) -> None:
         if "revision conflict" in message:
             raise ValueError(
                 "code=revision_conflict; "
-                f"{message}; action=call work_item_get again; if reconciling a historical full-array "
-                "replacement, reread that complete collection with work_item_history_read before retrying"
+                f"{message}; action=call work_item_get again and restart the dependent read/reconciliation"
             ) from exc
         raise ValueError(f"code=work_item_conflict; {message}") from exc
     if isinstance(exc, NotFoundError):
@@ -218,23 +217,25 @@ mcp = MCPServer(
         "work_item_get is a bounded current-state projection: it returns current requirements, current "
         "repo state, open questions/blockers, active decisions, pending handoffs, next actions, compact "
         "history counts and thin artifact metadata; it intentionally does not hydrate resolved, "
-        "superseded or checkpoint history. Use work_item_history_read only when provenance/history is "
-        "material to the current decision or when a legacy full-array mutation requires the complete "
-        "target historical collection. Each history call reads exactly one semantic collection and its "
-        "opaque cursor is bound to the whole Work Item revision plus collection and filters; if the "
-        "Work Item changes between pages, restart the history read rather than mixing revisions. QiQi "
-        "owns global orchestration state such as overall status/phase, repo assignment, next actions and "
-        "task completion. A repository agent must only execute work in its current Git root and only "
-        "update evidence/state it actually established for that repository, plus blockers, open questions, "
-        "checkpoints or handoffs it discovered. Cross-repo remaining work is recorded and returned to QiQi; "
-        "child agents must not modify sibling repositories. Work Item state is task truth, not reusable "
-        "system knowledge and not runtime session state. Updates use optimistic concurrency: always pass "
-        "the exact revision returned by work_item_get/list and reread on conflict. work_item_update exposes "
-        "a typed WorkItemPatch. Use canonical record objects for questions, decisions, requirement/scope "
-        "changes, blockers, handoffs, next actions and checkpoints; do not encode those semantic collections "
-        "as plain strings or generic activity logs. Historical semantic arrays still replace atomically "
-        "until incremental mutations are available, so never construct those arrays from the bounded "
-        "snapshot; use work_item_history_read to hydrate the complete target collection first. A missing "
+        "superseded or checkpoint history. Use work_item_history_read only when exact provenance/history "
+        "is material to the current decision. Each history call reads exactly one semantic collection "
+        "and its opaque cursor is bound to Work Item id, whole revision, collection and filters; if the "
+        "Work Item changes between pages, restart rather than mixing revisions. QiQi owns global "
+        "orchestration state such as overall status/phase, repo assignment, next actions and task "
+        "completion. A repository agent must only execute work in its current Git root and only update "
+        "evidence/state it actually established for that repository, plus blockers, open questions, "
+        "checkpoints or handoffs it discovered. Cross-repo remaining work is recorded and returned to "
+        "QiQi; child agents must not modify sibling repositories. Work Item state is task truth, not "
+        "reusable system knowledge and not runtime session state. Updates use optimistic concurrency: "
+        "always pass the exact whole revision returned by work_item_get/list and reread on conflict; "
+        "stale semantic operations are never automatically rebased. work_item_update exposes one typed "
+        "WorkItemMutation with a bounded current-state patch plus up to 50 typed operations. Historical "
+        "semantic arrays are not public replacement fields: use question_upsert, decision_upsert, "
+        "change_upsert, blocker_upsert, handoff_upsert, and checkpoint_append. Stable-id lifecycle "
+        "records advance monotonically and existing identity/provenance cannot be silently rewritten. "
+        "All operations in one call apply in caller order and commit all-or-nothing under one Work Item "
+        "revision. Successful update returns only a compact receipt with id, new revision, and changed "
+        "labels; reread work_item_get only when the caller needs the resulting current state. A missing "
         "work_item_get is normal startup control flow and returns found=false so QiQi can create the item. "
         "Optional task artifacts provide progressive-disclosure detail for explicit user-requested intake, "
         "investigation, plan, review or report material. Do not create artifacts merely as normal progress "
@@ -272,8 +273,8 @@ async def work_item_history_read(
     """Read one bounded canonical history collection page bound to one Work Item revision.
 
     `status` is valid only for lifecycle collections. `repository` is valid only for checkpoints.
-    A cursor is opaque and bound to revision, collection and filters. If the Work Item revision
-    changes between pages, restart without the stale cursor.
+    A cursor is opaque and bound to Work Item id, revision, collection and filters. If the Work Item
+    revision changes between pages, restart without the stale cursor.
     """
     try:
         result = read_work_item_history(
@@ -333,19 +334,23 @@ async def work_item_create(
 async def work_item_update(
     id: WorkItemId,
     expected_revision: Revision,
-    changes: WorkItemPatch,
+    mutation: WorkItemMutation,
 ) -> dict[str, Any]:
-    """Atomically merge a typed WorkItemPatch using exact optimistic revision control.
+    """Atomically apply current-state changes plus typed incremental semantic operations.
 
-    Nested objects merge. Historical semantic arrays are full replacements until incremental
-    mutations are available. Never rebuild them from work_item_get because that surface is a
-    current-state projection; read the complete target collection with work_item_history_read,
-    reconcile the intended replacement, then update using that exact whole Work Item revision.
-    `artifacts` is derived metadata reserved by core and cannot be persisted.
+    `mutation.state` may patch only current effective fields. Historical collections are changed only
+    through typed operations; full-array replacement is not part of this public mutation contract.
+    Operations are applied in caller order, duplicate stable-id targets are rejected, lifecycle records
+    cannot move backward or silently rewrite identity/provenance, and the whole call commits under the
+    exact expected Work Item revision. Success returns a compact mutation receipt, never the full document.
     """
     try:
-        patch = changes.to_merge_patch()
-        return update_work_item(_db_path(), id, expected_revision, patch)
+        return mutate_work_item(
+            _db_path(),
+            id,
+            expected_revision,
+            mutation.to_core_mutation(),
+        )
     except (ValidationError, ConflictError, NotFoundError) as exc:
         return _work_item_update_error_result(id, exc)
     except WorkItemError as exc:
