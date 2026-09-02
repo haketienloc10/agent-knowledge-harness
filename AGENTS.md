@@ -25,11 +25,11 @@ Không nhân bản một loại truth sang nơi khác để tạo source of trut
 - QiQi là coordinator, không phải coding agent của repo con.
 - Mọi repo-local work từ QiQi đi qua `delegate_repo_task`.
 - TaskPacket giữ original `user_request`, repo-local objective, scope, required context + provenance, constraints, acceptance, verification và known unknowns.
-- Khi delegation thuộc product Work Item, TaskPacket identify canonical Work Item + revision; child đọc current task state trực tiếp từ Work Item MCP.
+- Khi delegation thuộc product Work Item, TaskPacket identify canonical Work Item + revision; child đọc bounded current task state trực tiếp từ Work Item MCP và chỉ đọc scoped history khi cần provenance/reconciliation.
 - Child chỉ investigation/implementation/verification trong current Git root; không tự sửa/delegate sibling repo và không tự mark overall Work Item done.
 - QiQi sở hữu global Work Item orchestration: overall status/phase/summary, repo assignment, product/customer decisions, global next action và completion.
 - Cross-repo remaining work được ghi thành Work Item handoff khi phù hợp rồi trả QiQi để điều phối consumer repo.
-- Work Item update bắt buộc optimistic `expected_revision`; stale writer phải reread/reconcile.
+- Work Item update bắt buộc optimistic `expected_revision`; stale writer phải reread/reconcile. History pagination cũng bind exact whole Work Item revision và phải restart nếu revision đổi giữa pages.
 - Shared reusable knowledge dùng progressive lifecycle `knowledge_search → exact scoped read → knowledge_write/knowledge_update`.
 - Search card chỉ là candidate-routing surface; không dùng search card như full durable evidence và không lấy revision từ search.
 - Existing knowledge update target phải exact-read ở sufficient semantic scope để lấy canonical evidence/provenance cần thiết + exact whole-document revision.
@@ -45,6 +45,7 @@ Public MVP tools:
 
 ```text
 work_item_get(id)
+work_item_history_read(id, collection, status?, repository?, cursor?, limit?)
 work_item_list(status?, repository?, limit?)
 work_item_create(id, title, summary?, status?, phase?, current_requirements?, repositories?)
 work_item_update(id, expected_revision, changes)
@@ -52,7 +53,7 @@ work_item_update(id, expected_revision, changes)
 
 Canonical ID dùng dạng `<source>:<external-id>`, ví dụ `redmine:116655`.
 
-Một Work Item giữ snapshot hiện tại và material history:
+Stored Work Item giữ full canonical snapshot + material history:
 
 ```text
 status / phase / summary
@@ -68,13 +69,19 @@ checkpoints
 revision
 ```
 
+Public `work_item_get` không expose raw full document. Nó trả bounded current-state projection gồm current requirements/repos, `open_questions`, `active_decisions`, `open_blockers`, `pending_handoffs`, current `next_actions`, deterministic history counts và thin artifact metadata. Resolved/superseded/checkpoint history đọc exact một collection qua `work_item_history_read` khi thực sự cần.
+
+History read giữ canonical array order; cursor opaque bind whole Work Item revision + collection + filters. Không silently mix pages từ hai revisions. `status` filter chỉ dùng cho lifecycle collection; `repository` hiện chỉ dùng cho checkpoints; filter không hợp lệ phải fail validation.
+
+Canonical question/decision lifecycle status là required. Legacy missing status chỉ được migrate một lần thành question=`open`, decision=`active`; runtime không dựa vào implicit default lâu dài.
+
 `phase` là descriptive state, không phải hard FSM. Loop `uat -> implementation -> unit_test -> it -> uat` là hợp lệ.
 
 Work Item không phải transcript. Không lưu command-by-command activity hoặc hidden reasoning.
 
 Question được resolve thành decision; nếu requirement/scope thực sự đổi thì reconcile `current_requirements` và ghi `changes[]`. Decision cũ bị thay không bị silent rewrite; mark `superseded` + `superseded_by`.
 
-SQLite user-scope dùng atomic transaction + optimistic revision. Arrays trong update replace nguyên tử; nested objects merge theo JSON merge-patch semantics.
+SQLite user-scope dùng atomic transaction + optimistic revision. Storage vẫn one canonical `document_json`/whole Work Item revision; bounded read là read projection, không tạo chunk store. Historical arrays trong update hiện replace nguyên tử cho đến khi incremental mutation API được triển khai, nên caller phải hydrate complete target collection bằng `work_item_history_read` trước full replacement; không rebuild từ bounded GET.
 
 ## Shared Knowledge contract
 
@@ -163,7 +170,7 @@ Session ownership persist ngay khi native identity known. Capture fail closed: k
 
 1. Giữ QiQi orchestration, dependency waves và Delegation Silence.
 2. `.codex/config.toml` chỉ project-scope `qiqi_delegate`; `work_item` và `knowledge` là user/global scope.
-3. QiQi read/reconcile canonical Work Item trước orchestration và sau repo turn khi task thuộc Work Item.
+3. QiQi `work_item_get` bounded current state trước orchestration và sau repo turn khi task thuộc Work Item; scoped history chỉ khi decision/provenance cần.
 4. TaskPacket identify Work Item + revision; external fact ngoài Work Item mà QiQi dùng cho semantics vẫn phải inline với provenance.
 5. `SYSTEM_MAP.md` vẫn là live topology artifact; Work Item không thay System Map.
 6. Workspace Knowledge policy phải dùng search-first/exact-scoped-read progressive disclosure; search không cấp revision.
@@ -174,7 +181,7 @@ Session ownership persist ngay khi native identity known. Capture fail closed: k
 
 1. Giữ Git-root boundary và cấm đọc/sửa sibling source/runtime state.
 2. Work Item MCP là task-state tool exception; Knowledge MCP là reusable-context tool exception; cả hai không phải filesystem exception.
-3. Nếu TaskPacket identify Work Item, child `work_item_get` trước substantive work và chỉ update evidence/state thuộc current repo.
+3. Nếu TaskPacket identify Work Item, child `work_item_get` bounded current state trước substantive work; scoped history only when needed; chỉ update evidence/state thuộc current repo.
 4. Search cards chỉ dùng chọn knowledge document; material use/update phải exact-read sufficient semantic scope.
 5. Live owner source/test thắng stale shared knowledge.
 6. Cross-repo remaining work quay lại QiQi; child không tự sửa/delegate sibling repo.
@@ -183,13 +190,14 @@ Session ownership persist ngay khi native identity known. Capture fail closed: k
 ## Khi thay đổi Work Item Template
 
 1. Giữ one canonical task store independent workspace/repo/CWD.
-2. MVP API nhỏ: get/list/create/update.
-3. `expected_revision` là mandatory concurrency boundary.
-4. Schema giữ current requirements + material questions/decisions/changes, repo state, blockers, handoffs, next actions và checkpoints.
-5. Validation reject malformed semantic objects và immutable metadata changes.
-6. Concurrent writers từ cùng revision không được cùng commit.
-7. Không biến Work Item thành activity transcript hoặc reusable knowledge store.
-8. Fresh-session smoke phải chứng minh QiQi và repo child thấy cùng database.
+2. MVP API nhỏ: bounded get + scoped history read + list/create/update.
+3. `expected_revision` là mandatory mutation concurrency boundary; history cursor cũng bind exact whole Work Item revision.
+4. Internal raw canonical document và public read models là boundary riêng: GET chỉ current projection; history read một collection/call.
+5. Schema giữ current requirements + material questions/decisions/changes, repo state, blockers, handoffs, next actions và checkpoints; canonical lifecycle status explicit.
+6. Validation reject malformed semantic objects, invalid collection filters và immutable metadata changes.
+7. Concurrent writers từ cùng revision không được cùng commit; history pagination không được mix revisions.
+8. Không biến Work Item thành activity transcript, reusable knowledge store hoặc chunk/event store để phục vụ read projection.
+9. Fresh-session smoke phải chứng minh QiQi và repo child tiếp tục task từ bounded current state, chỉ history-read khi cần.
 
 ## Khi thay đổi Knowledge Template
 
@@ -208,7 +216,7 @@ Session ownership persist ngay khi native identity known. Capture fail closed: k
 
 Public contract change phải có migration cho workspace/repo đã tồn tại. Migration framework dùng per-file `replace`, `merge`, `delete`, `manual_review`, pin exact `from_ref`/`to_ref`, preflight trước mutate và lưu migration state dưới `.qiqi/`.
 
-Global Work Item migration phải đứng sau Knowledge progressive-disclosure migration hiện tại; không tự ghi user MCP config. Operator cài `work_item` user scope explicitly từ `work-item-template/`.
+Global Work Item migration phải đứng sau Knowledge progressive-disclosure migration hiện tại; không tự ghi user MCP config. Operator cài/refresh `work_item` user scope explicitly từ `work-item-template/` để fresh session discover bounded GET + history tool. Canonical DB lifecycle migration chạy trong Work Item core bằng `PRAGMA user_version`, không tạo task store thứ hai.
 
 ## Review tối thiểu
 
@@ -216,7 +224,9 @@ Review phải xác nhận:
 
 - bốn nguồn truth không bị trộn;
 - Global Work Item là canonical mutable task state duy nhất;
-- QiQi và child cùng đọc Work Item nhưng child chỉ execute current Git root;
+- QiQi và child dùng bounded current Work Item state mặc định và scoped exact history on demand;
+- default GET không tăng tuyến tính theo accumulated resolved/checkpoint history;
+- history cursor/filter/revision semantics deterministic và không mix revisions;
 - Q&A/decision/requirement changes đủ để resume không hỏi lại;
 - stale/concurrent Work Item update không silent overwrite;
 - Knowledge search result thin, exact read bounded và revision chỉ đến từ exact read surface;
