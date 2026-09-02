@@ -2,7 +2,7 @@
   "version": 12,
   "from_ref": "a65061716184c60845935ebbccf98231074fc6c9",
   "to_ref": "42694684c04f69195f443121fab930b01b117caf",
-  "description": "adopt bounded Work Item current-state reads and revision-bound scoped history disclosure while preserving one canonical Work Item document/revision",
+  "description": "adopt bounded Work Item current-state reads and revision-bound scoped history disclosure while preserving one canonical Work Item document/revision; rerun work-item-template/scripts/install-user-mcp.sh after migration to refresh the user-scoped MCP/skill",
   "workspace": {
     "merge": [
       "workspace-template/AGENTS.md"
