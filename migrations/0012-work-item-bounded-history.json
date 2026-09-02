@@ -1,0 +1,20 @@
+{
+  "version": 12,
+  "from_ref": "a65061716184c60845935ebbccf98231074fc6c9",
+  "to_ref": "42694684c04f69195f443121fab930b01b117caf",
+  "description": "adopt bounded Work Item current-state reads and revision-bound scoped history disclosure while preserving one canonical Work Item document/revision",
+  "workspace": {
+    "merge": [
+      "workspace-template/AGENTS.md"
+    ],
+    "replace": [],
+    "delete": [],
+    "manual_review": []
+  },
+  "repo": {
+    "merge": [],
+    "replace": [],
+    "delete": [],
+    "manual_review": []
+  }
+}
