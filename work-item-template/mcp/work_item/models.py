@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -23,6 +23,7 @@ HistoryCollection = Literal[
 HistoryStatus = Literal[
     "open", "resolved", "active", "superseded", "proposed", "accepted", "rejected", "pending"
 ]
+MUTATION_OPERATION_MAX = 50
 
 
 class _SemanticRecord(BaseModel):
@@ -42,10 +43,7 @@ class QuestionRecord(_SemanticRecord):
     status: QuestionStatus = Field(
         description="Required canonical question lifecycle: open or resolved."
     )
-    answer: str | None = Field(
-        default=None,
-        description="Resolved answer when known.",
-    )
+    answer: str | None = Field(default=None, description="Resolved answer when known.")
     decision_id: str | None = Field(
         default=None,
         description="Decision id that resolves this question when resolution is captured as a decision.",
@@ -53,7 +51,11 @@ class QuestionRecord(_SemanticRecord):
 
     @model_validator(mode="after")
     def _resolved_question_has_resolution(self) -> "QuestionRecord":
-        if self.status == "resolved" and not (self.answer or self.decision_id):
+        if self.status == "resolved" and not (
+            isinstance(self.answer, str) and self.answer.strip()
+        ) and not (
+            isinstance(self.decision_id, str) and self.decision_id.strip()
+        ):
             raise ValueError("resolved question requires answer or decision_id")
         return self
 
@@ -73,7 +75,9 @@ class DecisionRecord(_SemanticRecord):
 
     @model_validator(mode="after")
     def _superseded_decision_has_successor(self) -> "DecisionRecord":
-        if self.status == "superseded" and not self.superseded_by:
+        if self.status == "superseded" and not (
+            isinstance(self.superseded_by, str) and self.superseded_by.strip()
+        ):
             raise ValueError("superseded decision requires superseded_by")
         return self
 
@@ -163,39 +167,8 @@ class CheckpointRecord(_SemanticRecord):
     )
 
 
-# Mutation models deliberately remain distinct names/types from canonical read records.
-# Full-array mutation currently supplies complete canonical records; issue #32 can replace
-# this algebra without changing WorkItemSnapshot/WorkItemHistoryPage read models.
-class QuestionPatch(QuestionRecord):
-    """Question supplied in a full-array replacement mutation."""
-
-
-class DecisionPatch(DecisionRecord):
-    """Decision supplied in a full-array replacement mutation."""
-
-
-class RequirementChangePatch(RequirementChangeRecord):
-    """Requirement change supplied in a full-array replacement mutation."""
-
-
-class BlockerPatch(BlockerRecord):
-    """Blocker supplied in a full-array replacement mutation."""
-
-
-class HandoffPatch(HandoffRecord):
-    """Handoff supplied in a full-array replacement mutation."""
-
-
-class NextActionPatch(NextActionRecord):
-    """Current next action supplied in an atomic current-array replacement."""
-
-
-class CheckpointPatch(CheckpointRecord):
-    """Checkpoint supplied in a full-array replacement mutation."""
-
-
 class RepoPatch(_SemanticRecord):
-    """Partial nested repository mutation; unlike canonical read state its fields are optional."""
+    """Partial nested current-repository mutation."""
 
     status: RepoStatus | None = Field(
         default=None,
@@ -275,8 +248,8 @@ class WorkItemHistoryPage(BaseModel):
     next_cursor: str | None = None
 
 
-class WorkItemPatch(BaseModel):
-    """Agent-facing typed JSON merge-patch for canonical Work Item state."""
+class WorkItemStatePatch(BaseModel):
+    """Patch only the bounded current-state portion of a canonical Work Item."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -303,77 +276,232 @@ class WorkItemPatch(BaseModel):
         default=None,
         description=(
             "Full replacement of the effective requirements that are true now, not original intake "
-            "history. Arrays replace atomically."
-        ),
-    )
-    questions: list[QuestionPatch] | None = Field(
-        default=None,
-        description=(
-            "Full replacement of material external/product ambiguities; not free-form notes or strings. "
-            "Each canonical record requires id, question, and explicit lifecycle status; arrays replace "
-            "atomically. Read the complete questions collection through work_item_history_read before "
-            "replacing it."
-        ),
-    )
-    decisions: list[DecisionPatch] | None = Field(
-        default=None,
-        description=(
-            "Full replacement of material decisions explaining current requirements/state, not generic "
-            "observations or next actions. Each canonical record requires explicit lifecycle status; "
-            "arrays replace atomically. Read the complete decisions collection through "
-            "work_item_history_read before replacing it."
-        ),
-    )
-    changes: list[RequirementChangePatch] | None = Field(
-        default=None,
-        description=(
-            "Full replacement of requirement/scope evolution history only. Do not record generic code "
-            "changes or progress here. Arrays replace atomically; read the complete collection through "
-            "work_item_history_read before replacement."
+            "history. This bounded current-state array replaces atomically."
         ),
     )
     repos: dict[str, RepoPatch | None] | None = Field(
         default=None,
         description=(
-            "Repository map keyed by repo name. Each repo summary is the current effective repo truth, "
-            "not a narrative of the latest session. Nested repo objects merge; only supplied repo "
-            "fields are patched. A repo value of null requests deletion through JSON merge-patch semantics."
+            "Repository map keyed by repo name. Nested repo objects merge by supplied fields; each repo "
+            "summary remains current effective repo truth. A repo value of null explicitly removes that "
+            "repository entry through JSON merge-patch semantics."
         ),
     )
-    blockers: list[BlockerPatch] | None = Field(
+    next_actions: list[NextActionRecord] | None = Field(
         default=None,
         description=(
-            "Full replacement of conditions materially blocking progress; not generic risks or notes. "
-            "Arrays replace atomically; read the complete collection through work_item_history_read "
-            "before replacement."
-        ),
-    )
-    handoffs: list[HandoffPatch] | None = Field(
-        default=None,
-        description=(
-            "Full replacement of explicit remaining-work transfers between repositories/owners. "
-            "Arrays replace atomically; read the complete collection through work_item_history_read "
-            "before replacement."
-        ),
-    )
-    next_actions: list[NextActionPatch] | None = Field(
-        default=None,
-        description=(
-            "Full replacement of concrete current next actions. Each item is an object with action and "
-            "repo or owner; do not send plain strings."
-        ),
-    )
-    checkpoints: list[CheckpointPatch] | None = Field(
-        default=None,
-        description=(
-            "Full replacement of accumulated material phase/milestone history. Preserve existing material "
-            "checkpoints and append one when the current substantive session establishes a new milestone. "
-            "Use optional kind/artifact_id to make major progress reconstructable; do not record terminal "
-            "logs or routine activity. Read the complete checkpoints collection through "
-            "work_item_history_read before replacement."
+            "Full replacement of concrete current next actions. This is bounded current state rather than "
+            "history; each item has action plus repo or owner."
         ),
     )
 
     def to_merge_patch(self) -> dict[str, Any]:
         """Preserve explicit null while omitting fields the caller did not provide."""
         return self.model_dump(exclude_unset=True, by_alias=True, mode="python")
+
+
+class _RecordMutation(BaseModel):
+    """Partial semantic command for one stable-id canonical record."""
+
+    model_config = ConfigDict(extra="allow")
+
+    @model_validator(mode="after")
+    def _reject_explicit_null(self) -> "_RecordMutation":
+        for field_name in self.model_fields_set:
+            if field_name in self.__class__.model_fields and getattr(self, field_name) is None:
+                raise ValueError(
+                    f"{field_name} cannot be null in an incremental semantic mutation; omit it instead"
+                )
+        for key, value in (self.__pydantic_extra__ or {}).items():
+            if value is None:
+                raise ValueError(
+                    f"{key} cannot be null in an incremental semantic mutation; omit it instead"
+                )
+        return self
+
+
+class QuestionMutation(_RecordMutation):
+    id: str = Field(description="Stable question id to create or advance.")
+    question: str | None = Field(
+        default=None,
+        description="Required on create; immutable once the question id exists.",
+    )
+    status: QuestionStatus | None = Field(
+        default=None,
+        description="Create lifecycle or monotonic transition; resolved cannot return to open.",
+    )
+    answer: str | None = Field(
+        default=None,
+        description="Write-once resolution answer; resolving requires answer or decision_id.",
+    )
+    decision_id: str | None = Field(
+        default=None,
+        description="Write-once resolving decision reference validated against the final candidate document.",
+    )
+
+
+class DecisionMutation(_RecordMutation):
+    id: str = Field(description="Stable decision id to create or advance.")
+    summary: str | None = Field(
+        default=None,
+        description="Required on create; immutable once the decision id exists.",
+    )
+    status: DecisionStatus | None = Field(
+        default=None,
+        description="Create lifecycle or monotonic transition; superseded cannot return to active.",
+    )
+    superseded_by: str | None = Field(
+        default=None,
+        description="Write-once replacement decision id when superseding this decision.",
+    )
+
+
+class RequirementChangeMutation(_RecordMutation):
+    id: str = Field(description="Stable requirement/scope change id to create or advance.")
+    type: ChangeType | None = Field(
+        default=None,
+        description="Required on create and immutable once this change id exists.",
+    )
+    status: ChangeStatus | None = Field(
+        default=None,
+        description=(
+            "Controlled lifecycle transition: proposed may become accepted/rejected/superseded; "
+            "accepted may become superseded; terminal states do not reopen."
+        ),
+    )
+    summary: str | None = Field(
+        default=None,
+        description="Required on create and immutable once this change id exists.",
+    )
+
+
+class BlockerMutation(_RecordMutation):
+    id: str = Field(description="Stable blocker id to create or advance.")
+    status: BlockerStatus | None = Field(
+        default=None,
+        description="Create lifecycle or monotonic transition; resolved cannot reopen.",
+    )
+    summary: str | None = Field(
+        default=None,
+        description="Required on create and immutable once this blocker id exists.",
+    )
+
+
+class HandoffMutation(_RecordMutation):
+    model_config = ConfigDict(extra="allow", populate_by_name=True)
+
+    id: str = Field(description="Stable handoff id to create or advance.")
+    from_: str | None = Field(
+        default=None,
+        alias="from",
+        description="Required on create and immutable once this handoff id exists.",
+    )
+    to: str | None = Field(
+        default=None,
+        description="Required on create and immutable once this handoff id exists.",
+    )
+    status: HandoffStatus | None = Field(
+        default=None,
+        description="Create lifecycle or monotonic transition; resolved cannot become pending.",
+    )
+    summary: str | None = Field(
+        default=None,
+        description="Required on create and immutable once this handoff id exists.",
+    )
+
+
+class CheckpointAppendOperation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    op: Literal["checkpoint_append"]
+    value: CheckpointRecord = Field(
+        description="One new material milestone appended to canonical checkpoint history."
+    )
+
+
+class QuestionUpsertOperation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    op: Literal["question_upsert"]
+    value: QuestionMutation
+
+
+class DecisionUpsertOperation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    op: Literal["decision_upsert"]
+    value: DecisionMutation
+
+
+class ChangeUpsertOperation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    op: Literal["change_upsert"]
+    value: RequirementChangeMutation
+
+
+class BlockerUpsertOperation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    op: Literal["blocker_upsert"]
+    value: BlockerMutation
+
+
+class HandoffUpsertOperation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    op: Literal["handoff_upsert"]
+    value: HandoffMutation
+
+
+WorkItemOperation = Annotated[
+    CheckpointAppendOperation
+    | QuestionUpsertOperation
+    | DecisionUpsertOperation
+    | ChangeUpsertOperation
+    | BlockerUpsertOperation
+    | HandoffUpsertOperation,
+    Field(discriminator="op"),
+]
+
+
+class WorkItemMutation(BaseModel):
+    """Atomic current-state patch plus typed incremental semantic operations."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    state: WorkItemStatePatch | None = Field(
+        default=None,
+        description=(
+            "Current effective state patch only: title/status/phase/summary/current_requirements/repos/"
+            "next_actions. Historical semantic collections are intentionally not replaceable here."
+        ),
+    )
+    operations: list[WorkItemOperation] = Field(
+        default_factory=list,
+        max_length=MUTATION_OPERATION_MAX,
+        description=(
+            "Up to 50 typed semantic operations applied in caller order and committed atomically under "
+            "one exact whole Work Item revision."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _require_material_mutation(self) -> "WorkItemMutation":
+        state_patch = self.state.to_merge_patch() if self.state is not None else {}
+        if not state_patch and not self.operations:
+            raise ValueError("mutation must contain a non-empty state patch or at least one operation")
+        return self
+
+    def to_core_mutation(self) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        if self.state is not None:
+            state_patch = self.state.to_merge_patch()
+            if state_patch:
+                result["state"] = state_patch
+        if self.operations:
+            result["operations"] = [
+                operation.model_dump(mode="python", by_alias=True, exclude_none=True)
+                for operation in self.operations
+            ]
+        return result
