@@ -26,7 +26,7 @@ HistoryStatus = Literal[
 
 
 class _SemanticRecord(BaseModel):
-    """Typed canonical fields plus open provenance/evidence extensions."""
+    """Canonical semantic record with open provenance/evidence extensions."""
 
     model_config = ConfigDict(extra="allow")
 
@@ -44,16 +44,18 @@ class QuestionRecord(_SemanticRecord):
     )
     answer: str | None = Field(
         default=None,
-        description="Resolved answer when known. Core enforces resolved-question invariants.",
+        description="Resolved answer when known.",
     )
     decision_id: str | None = Field(
         default=None,
         description="Decision id that resolves this question when resolution is captured as a decision.",
     )
 
-
-class QuestionPatch(QuestionRecord):
-    """Compatibility name for a canonical question supplied in a full-array replacement."""
+    @model_validator(mode="after")
+    def _resolved_question_has_resolution(self) -> "QuestionRecord":
+        if self.status == "resolved" and not (self.answer or self.decision_id):
+            raise ValueError("resolved question requires answer or decision_id")
+        return self
 
 
 class DecisionRecord(_SemanticRecord):
@@ -69,12 +71,14 @@ class DecisionRecord(_SemanticRecord):
         description="Replacement decision id when status is superseded.",
     )
 
+    @model_validator(mode="after")
+    def _superseded_decision_has_successor(self) -> "DecisionRecord":
+        if self.status == "superseded" and not self.superseded_by:
+            raise ValueError("superseded decision requires superseded_by")
+        return self
 
-class DecisionPatch(DecisionRecord):
-    """Compatibility name for a canonical decision supplied in a full-array replacement."""
 
-
-class RequirementChangePatch(_SemanticRecord):
+class RequirementChangeRecord(_SemanticRecord):
     id: str = Field(description="Stable requirement/scope change id, for example c1.")
     type: ChangeType = Field(
         description=(
@@ -88,28 +92,7 @@ class RequirementChangePatch(_SemanticRecord):
     summary: str = Field(description="What requirement or scope changed and how.")
 
 
-class RepoPatch(_SemanticRecord):
-    status: RepoStatus | None = Field(
-        default=None,
-        description="State of this repository's task contribution, not the overall Work Item status.",
-    )
-    summary: str | None = Field(
-        default=None,
-        description=(
-            "Current effective repository contribution/state after all work known so far. This snapshot "
-            "is not a narrative of the latest session. Describe what is true now, including implemented "
-            "outcome, verified boundary, and remaining repo work when material. Do not replace this "
-            "snapshot with a narrative of the latest investigation, review, report, command sequence, "
-            "or agent session; historical phase findings belong in checkpoints or optional artifacts."
-        ),
-    )
-    verification: list[str] | None = Field(
-        default=None,
-        description="Concrete verification evidence established for this repository.",
-    )
-
-
-class BlockerPatch(_SemanticRecord):
+class BlockerRecord(_SemanticRecord):
     id: str = Field(description="Stable blocker id within the Work Item, for example b1.")
     status: BlockerStatus = Field(description="Blocker lifecycle: open or resolved.")
     summary: str = Field(
@@ -117,7 +100,7 @@ class BlockerPatch(_SemanticRecord):
     )
 
 
-class HandoffPatch(_SemanticRecord):
+class HandoffRecord(_SemanticRecord):
     model_config = ConfigDict(extra="allow", populate_by_name=True)
 
     id: str = Field(description="Stable handoff id within the Work Item, for example h1.")
@@ -130,7 +113,7 @@ class HandoffPatch(_SemanticRecord):
     summary: str = Field(description="Remaining cross-repo/owner work being handed off.")
 
 
-class NextActionPatch(_SemanticRecord):
+class NextActionRecord(_SemanticRecord):
     action: str = Field(description="Concrete next action to perform.")
     repo: str | None = Field(
         default=None,
@@ -142,13 +125,13 @@ class NextActionPatch(_SemanticRecord):
     )
 
     @model_validator(mode="after")
-    def _require_target(self) -> "NextActionPatch":
+    def _require_target(self) -> "NextActionRecord":
         if self.repo is None and self.owner is None:
             raise ValueError("next action must identify either repo or owner")
         return self
 
 
-class CheckpointPatch(_SemanticRecord):
+class CheckpointRecord(_SemanticRecord):
     summary: str = Field(
         description=(
             "Material milestone/evidence summary established by a substantive phase; not terminal "
@@ -180,6 +163,70 @@ class CheckpointPatch(_SemanticRecord):
     )
 
 
+# Mutation models deliberately remain distinct names/types from canonical read records.
+# Full-array mutation currently supplies complete canonical records; issue #32 can replace
+# this algebra without changing WorkItemSnapshot/WorkItemHistoryPage read models.
+class QuestionPatch(QuestionRecord):
+    """Question supplied in a full-array replacement mutation."""
+
+
+class DecisionPatch(DecisionRecord):
+    """Decision supplied in a full-array replacement mutation."""
+
+
+class RequirementChangePatch(RequirementChangeRecord):
+    """Requirement change supplied in a full-array replacement mutation."""
+
+
+class BlockerPatch(BlockerRecord):
+    """Blocker supplied in a full-array replacement mutation."""
+
+
+class HandoffPatch(HandoffRecord):
+    """Handoff supplied in a full-array replacement mutation."""
+
+
+class NextActionPatch(NextActionRecord):
+    """Current next action supplied in an atomic current-array replacement."""
+
+
+class CheckpointPatch(CheckpointRecord):
+    """Checkpoint supplied in a full-array replacement mutation."""
+
+
+class RepoPatch(_SemanticRecord):
+    """Partial nested repository mutation; unlike canonical read state its fields are optional."""
+
+    status: RepoStatus | None = Field(
+        default=None,
+        description="State of this repository's task contribution, not the overall Work Item status.",
+    )
+    summary: str | None = Field(
+        default=None,
+        description=(
+            "Current effective repository contribution/state after all work known so far. This snapshot "
+            "is not a narrative of the latest session. Describe what is true now, including implemented "
+            "outcome, verified boundary, and remaining repo work when material. Do not replace this "
+            "snapshot with a narrative of the latest investigation, review, report, command sequence, "
+            "or agent session; historical phase findings belong in checkpoints or optional artifacts."
+        ),
+    )
+    verification: list[str] | None = Field(
+        default=None,
+        description="Concrete verification evidence established for this repository.",
+    )
+
+
+HistoryRecord = (
+    QuestionRecord
+    | DecisionRecord
+    | RequirementChangeRecord
+    | CheckpointRecord
+    | BlockerRecord
+    | HandoffRecord
+)
+
+
 class HistoryCollectionSummary(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -205,9 +252,9 @@ class WorkItemSnapshot(BaseModel):
     repos: dict[str, dict[str, Any]]
     open_questions: list[QuestionRecord]
     active_decisions: list[DecisionRecord]
-    open_blockers: list[BlockerPatch]
-    pending_handoffs: list[HandoffPatch]
-    next_actions: list[NextActionPatch]
+    open_blockers: list[BlockerRecord]
+    pending_handoffs: list[HandoffRecord]
+    next_actions: list[NextActionRecord]
     history: dict[str, HistoryCollectionSummary]
     artifacts: list[dict[str, Any]] = Field(default_factory=list)
 
@@ -222,7 +269,7 @@ class WorkItemHistoryPage(BaseModel):
     collection: HistoryCollection
     status: HistoryStatus | None = None
     repository: str | None = None
-    items: list[dict[str, Any]]
+    items: list[HistoryRecord]
     returned: int = Field(ge=0)
     total: int = Field(ge=0)
     next_cursor: str | None = None
@@ -259,7 +306,7 @@ class WorkItemPatch(BaseModel):
             "history. Arrays replace atomically."
         ),
     )
-    questions: list[QuestionRecord] | None = Field(
+    questions: list[QuestionPatch] | None = Field(
         default=None,
         description=(
             "Full replacement of material external/product ambiguities; not free-form notes or strings. "
@@ -268,7 +315,7 @@ class WorkItemPatch(BaseModel):
             "replacing it."
         ),
     )
-    decisions: list[DecisionRecord] | None = Field(
+    decisions: list[DecisionPatch] | None = Field(
         default=None,
         description=(
             "Full replacement of material decisions explaining current requirements/state, not generic "
