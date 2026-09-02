@@ -17,6 +17,12 @@ ChangeType = Literal[
 ChangeStatus = Literal["proposed", "accepted", "rejected", "superseded"]
 BlockerStatus = Literal["open", "resolved"]
 HandoffStatus = Literal["pending", "resolved"]
+HistoryCollection = Literal[
+    "questions", "decisions", "changes", "checkpoints", "blockers", "handoffs"
+]
+HistoryStatus = Literal[
+    "open", "resolved", "active", "superseded", "proposed", "accepted", "rejected", "pending"
+]
 
 
 class _SemanticRecord(BaseModel):
@@ -25,7 +31,7 @@ class _SemanticRecord(BaseModel):
     model_config = ConfigDict(extra="allow")
 
 
-class QuestionPatch(_SemanticRecord):
+class QuestionRecord(_SemanticRecord):
     id: str = Field(description="Stable question id within the Work Item, for example q1.")
     question: str = Field(
         description=(
@@ -33,9 +39,8 @@ class QuestionPatch(_SemanticRecord):
             "and do not encode status markers such as '[open]' into this string."
         )
     )
-    status: QuestionStatus | None = Field(
-        default=None,
-        description="Question lifecycle when recorded: open or resolved.",
+    status: QuestionStatus = Field(
+        description="Required canonical question lifecycle: open or resolved."
     )
     answer: str | None = Field(
         default=None,
@@ -47,19 +52,26 @@ class QuestionPatch(_SemanticRecord):
     )
 
 
-class DecisionPatch(_SemanticRecord):
+class QuestionPatch(QuestionRecord):
+    """Compatibility name for a canonical question supplied in a full-array replacement."""
+
+
+class DecisionRecord(_SemanticRecord):
     id: str = Field(description="Stable decision id within the Work Item, for example d1.")
     summary: str = Field(
         description="Material decision that explains current task requirements or behavior."
     )
-    status: DecisionStatus | None = Field(
-        default=None,
-        description="Decision lifecycle: active or superseded.",
+    status: DecisionStatus = Field(
+        description="Required canonical decision lifecycle: active or superseded."
     )
     superseded_by: str | None = Field(
         default=None,
         description="Replacement decision id when status is superseded.",
     )
+
+
+class DecisionPatch(DecisionRecord):
+    """Compatibility name for a canonical decision supplied in a full-array replacement."""
 
 
 class RequirementChangePatch(_SemanticRecord):
@@ -168,15 +180,60 @@ class CheckpointPatch(_SemanticRecord):
     )
 
 
+class HistoryCollectionSummary(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    total: int = Field(ge=0)
+    current: int | None = Field(default=None, ge=0)
+    hidden: int | None = Field(default=None, ge=0)
+
+
+class WorkItemSnapshot(BaseModel):
+    """Bounded current-state projection returned by work_item_get."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    revision: int = Field(ge=1)
+    created_at: str
+    updated_at: str
+    title: str
+    status: WorkItemStatus
+    phase: str
+    summary: str
+    current_requirements: list[str]
+    repos: dict[str, dict[str, Any]]
+    open_questions: list[QuestionRecord]
+    active_decisions: list[DecisionRecord]
+    open_blockers: list[BlockerPatch]
+    pending_handoffs: list[HandoffPatch]
+    next_actions: list[NextActionPatch]
+    history: dict[str, HistoryCollectionSummary]
+    artifacts: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class WorkItemHistoryPage(BaseModel):
+    """One revision-bound page from exactly one canonical historical collection."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    revision: int = Field(ge=1)
+    collection: HistoryCollection
+    status: HistoryStatus | None = None
+    repository: str | None = None
+    items: list[dict[str, Any]]
+    returned: int = Field(ge=0)
+    total: int = Field(ge=0)
+    next_cursor: str | None = None
+
+
 class WorkItemPatch(BaseModel):
     """Agent-facing typed JSON merge-patch for canonical Work Item state."""
 
     model_config = ConfigDict(extra="forbid")
 
-    title: str | None = Field(
-        default=None,
-        description="Current human-readable task title.",
-    )
+    title: str | None = Field(default=None, description="Current human-readable task title.")
     status: WorkItemStatus | None = Field(
         default=None,
         description=(
@@ -202,25 +259,30 @@ class WorkItemPatch(BaseModel):
             "history. Arrays replace atomically."
         ),
     )
-    questions: list[QuestionPatch] | None = Field(
+    questions: list[QuestionRecord] | None = Field(
         default=None,
         description=(
             "Full replacement of material external/product ambiguities; not free-form notes or strings. "
-            "Each record requires id and question; arrays replace atomically."
+            "Each canonical record requires id, question, and explicit lifecycle status; arrays replace "
+            "atomically. Read the complete questions collection through work_item_history_read before "
+            "replacing it."
         ),
     )
-    decisions: list[DecisionPatch] | None = Field(
+    decisions: list[DecisionRecord] | None = Field(
         default=None,
         description=(
             "Full replacement of material decisions explaining current requirements/state, not generic "
-            "observations or next actions. Arrays replace atomically."
+            "observations or next actions. Each canonical record requires explicit lifecycle status; "
+            "arrays replace atomically. Read the complete decisions collection through "
+            "work_item_history_read before replacing it."
         ),
     )
     changes: list[RequirementChangePatch] | None = Field(
         default=None,
         description=(
             "Full replacement of requirement/scope evolution history only. Do not record generic code "
-            "changes or progress here. Arrays replace atomically."
+            "changes or progress here. Arrays replace atomically; read the complete collection through "
+            "work_item_history_read before replacement."
         ),
     )
     repos: dict[str, RepoPatch | None] | None = Field(
@@ -235,21 +297,23 @@ class WorkItemPatch(BaseModel):
         default=None,
         description=(
             "Full replacement of conditions materially blocking progress; not generic risks or notes. "
-            "Arrays replace atomically."
+            "Arrays replace atomically; read the complete collection through work_item_history_read "
+            "before replacement."
         ),
     )
     handoffs: list[HandoffPatch] | None = Field(
         default=None,
         description=(
             "Full replacement of explicit remaining-work transfers between repositories/owners. "
-            "Arrays replace atomically."
+            "Arrays replace atomically; read the complete collection through work_item_history_read "
+            "before replacement."
         ),
     )
     next_actions: list[NextActionPatch] | None = Field(
         default=None,
         description=(
-            "Full replacement of concrete next actions. Each item is an object with action and repo "
-            "or owner; do not send plain strings. Arrays replace atomically."
+            "Full replacement of concrete current next actions. Each item is an object with action and "
+            "repo or owner; do not send plain strings."
         ),
     )
     checkpoints: list[CheckpointPatch] | None = Field(
@@ -258,11 +322,11 @@ class WorkItemPatch(BaseModel):
             "Full replacement of accumulated material phase/milestone history. Preserve existing material "
             "checkpoints and append one when the current substantive session establishes a new milestone. "
             "Use optional kind/artifact_id to make major progress reconstructable; do not record terminal "
-            "logs or routine activity. Arrays replace atomically."
+            "logs or routine activity. Read the complete checkpoints collection through "
+            "work_item_history_read before replacement."
         ),
     )
 
     def to_merge_patch(self) -> dict[str, Any]:
         """Preserve explicit null while omitting fields the caller did not provide."""
-
         return self.model_dump(exclude_unset=True, by_alias=True, mode="python")
