@@ -28,13 +28,19 @@ class WorkItemSkillContractTests(unittest.TestCase):
             "workitemmutation",
             "mutation.state",
             "mutation.operations",
-            "question_upsert",
-            "decision_upsert",
-            "change_upsert",
-            "blocker_upsert",
-            "handoff_upsert",
-            "checkpoint_append",
-            "operations are applied in caller order",
+            "grouped semantic operations",
+            "there is **no `op` discriminator and no `value` wrapper**",
+            "decision_upsert[]",
+            "question_upsert[]",
+            "change_upsert[]",
+            "blocker_upsert[]",
+            "handoff_upsert[]",
+            "checkpoint_append[]",
+            "at most 50 semantic records total",
+            "cross-group ordering is **not** part of the public contract",
+            "final candidate",
+            "construct a valid mutation from the",
+            "instead of probing it with intentionally incomplete/invalid",
             "all-or-nothing",
             "server never auto-rebases",
             "compact mutation receipt",
@@ -53,6 +59,8 @@ class WorkItemSkillContractTests(unittest.TestCase):
             self.assertIn(required, lowered)
 
         self.assertNotIn("ticket-work-item", lowered)
+        self.assertNotIn("operations are applied in caller order", lowered)
+        self.assertNotIn('"op": "checkpoint_append"', lowered)
         self.assertNotIn("read the complete target collection through `work_item_history_read` first", lowered)
         self.assertNotIn("historical semantic arrays", lowered)
         self.assertIn("historical semantic collections are intentionally **not** public full-array replacement", lowered)
