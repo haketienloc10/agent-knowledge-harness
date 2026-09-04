@@ -87,7 +87,14 @@ Smoke progressive disclosure:
 
 ## 3. Registry và System Map
 
-Xác nhận mỗi `repos.yaml` path là exact Git root. `SYSTEM_MAP.md` giữ live topology/ownership/dependency; Work Item không thay System Map.
+`repos.yaml` là canonical owner của workspace/repository registry: workspace name, repository
+name, exact Git-root path, role, `required_for` và dependency basics (`depends_on`). Xác nhận
+mọi path là exact Git root và mọi dependency reference trỏ tới repository đã khai báo.
+
+`SYSTEM_MAP.md` chỉ giữ cross-repo semantic facts không suy ra được từ registry: contract,
+ownership/data boundary, non-trivial integration behavior, compatibility/deprecation/rollback
+và shared-infrastructure facts. Không copy full repository list/path/role/dependency sang
+System Map. Dependency-only repository selection/wave không cần đọc `SYSTEM_MAP.md`.
 
 ## 4. Herdr/qiqi_delegate
 
@@ -205,7 +212,9 @@ Trên repo test an toàn:
 10. Knowledge search card thin + metadata/section/full exact reads đúng scope;
 11. partial Knowledge update preserve untouched canonical state và stale revision bị reject;
 12. child không mở sibling repo/physical DB/store;
-13. qiqi_delegate native hook/RESUME smoke pass cho agent family thực sự dùng.
+13. qiqi_delegate native hook/RESUME smoke pass cho agent family thực sự dùng;
+14. dependency-only orchestration chọn repo/wave từ `repos.yaml` mà không hydrate `SYSTEM_MAP.md`;
+15. contract/ownership/compatibility-impact task đọc `SYSTEM_MAP.md` và lấy đúng semantic fact ngoài registry.
 
 Happy-path acceptance có **zero intentionally-invalid schema discovery calls**. Validation errors dùng để reject bad input, không phải runtime discovery protocol.
 
