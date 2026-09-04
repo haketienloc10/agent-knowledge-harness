@@ -26,6 +26,14 @@ STATE_FIELDS = {
     "repos",
     "next_actions",
 }
+OPERATION_GROUP_ORDER = (
+    "decision_upsert",
+    "question_upsert",
+    "change_upsert",
+    "blocker_upsert",
+    "handoff_upsert",
+    "checkpoint_append",
+)
 OPERATION_COLLECTION = {
     "question_upsert": "questions",
     "decision_upsert": "decisions",
@@ -78,7 +86,9 @@ def _append_changed(changed: list[str], label: str) -> None:
         changed.append(label)
 
 
-def _validate_mutation_envelope(mutation: Any) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+def _validate_mutation_envelope(
+    mutation: Any,
+) -> tuple[dict[str, Any], dict[str, list[dict[str, Any]]]]:
     if not isinstance(mutation, dict):
         raise ValidationError("mutation must be an object")
     unknown = sorted(set(mutation) - {"state", "operations"})
@@ -86,21 +96,15 @@ def _validate_mutation_envelope(mutation: Any) -> tuple[dict[str, Any], list[dic
         raise ValidationError("mutation contains unknown fields: " + ", ".join(unknown))
 
     state = mutation.get("state", {})
-    operations = mutation.get("operations", [])
+    operations = mutation.get("operations", {})
     if state is None:
         state = {}
     if operations is None:
-        operations = []
+        operations = {}
     if not isinstance(state, dict):
         raise ValidationError("mutation.state must be an object")
-    if not isinstance(operations, list):
-        raise ValidationError("mutation.operations must be a list")
-    if len(operations) > MUTATION_OPERATION_MAX:
-        raise ValidationError(
-            f"mutation.operations must contain at most {MUTATION_OPERATION_MAX} operations"
-        )
-    if not state and not operations:
-        raise ValidationError("mutation must change current state or contain semantic operations")
+    if not isinstance(operations, dict):
+        raise ValidationError("mutation.operations must be a grouped object")
 
     unknown_state = sorted(set(state) - STATE_FIELDS)
     if unknown_state:
@@ -108,7 +112,30 @@ def _validate_mutation_envelope(mutation: Any) -> tuple[dict[str, Any], list[dic
             "mutation.state may only change bounded current-state fields; unsupported: "
             + ", ".join(unknown_state)
         )
-    return state, operations
+
+    unknown_groups = sorted(set(operations) - set(OPERATION_GROUP_ORDER))
+    if unknown_groups:
+        raise ValidationError(
+            "mutation.operations contains unsupported groups: " + ", ".join(unknown_groups)
+        )
+
+    normalized: dict[str, list[dict[str, Any]]] = {}
+    total = 0
+    for group in OPERATION_GROUP_ORDER:
+        values = operations.get(group, [])
+        if not isinstance(values, list):
+            raise ValidationError(f"mutation.operations.{group} must be a list")
+        total += len(values)
+        if total > MUTATION_OPERATION_MAX:
+            raise ValidationError(
+                f"mutation.operations must contain at most {MUTATION_OPERATION_MAX} total records"
+            )
+        if values:
+            normalized[group] = values
+
+    if not state and not normalized:
+        raise ValidationError("mutation must change current state or contain semantic operations")
+    return state, normalized
 
 
 def _apply_state_patch(
@@ -125,8 +152,6 @@ def _apply_state_patch(
 
         repos_patch = state.get("repos")
         if not isinstance(repos_patch, dict):
-            # Final canonical validation will also reject an invalid repos shape, but this
-            # keeps changed-label calculation deterministic and actionable.
             raise ValidationError("mutation.state.repos must be an object")
         current_repos = current.get("repos", {})
         candidate_repos = candidate.get("repos", {})
@@ -151,11 +176,13 @@ def _apply_upsert(
     value: Any,
     *,
     op_name: str,
+    operation_index: int,
     changed: list[str],
 ) -> None:
+    location = f"mutation.operations.{op_name}[{operation_index}]"
     if not isinstance(value, dict):
-        raise ValidationError(f"{op_name}.value must be an object")
-    record_id = _required_text(value.get("id"), f"{op_name}.value.id", max_chars=128)
+        raise ValidationError(f"{location} must be an object")
+    record_id = _required_text(value.get("id"), f"{location}.id", max_chars=128)
     items = document.get(collection)
     if not isinstance(items, list):
         raise ValidationError(f"canonical {collection} must be a list")
@@ -204,8 +231,6 @@ def _apply_upsert(
             result[key] = copy.deepcopy(incoming)
             continue
 
-        # Open provenance/evidence extensions remain additive. Existing evidence is not
-        # silently rewritten by an incremental lifecycle command.
         if key in existing and existing[key] != incoming:
             raise ValidationError(
                 f"{op_name} cannot rewrite existing provenance field {collection}:{record_id}.{key}"
@@ -231,10 +256,11 @@ def _apply_upsert(
 
 
 def _apply_checkpoint_append(
-    document: dict[str, Any], value: Any, changed: list[str]
+    document: dict[str, Any], value: Any, operation_index: int, changed: list[str]
 ) -> None:
+    location = f"mutation.operations.checkpoint_append[{operation_index}]"
     if not isinstance(value, dict):
-        raise ValidationError("checkpoint_append.value must be an object")
+        raise ValidationError(f"{location} must be an object")
     if "id" in value:
         raise ValidationError("checkpoint_append does not use stable checkpoint ids")
     checkpoints = document.get("checkpoints")
@@ -245,42 +271,38 @@ def _apply_checkpoint_append(
 
 
 def _apply_operations(
-    document: dict[str, Any], operations: list[dict[str, Any]], changed: list[str]
+    document: dict[str, Any],
+    operations: dict[str, list[dict[str, Any]]],
+    changed: list[str],
 ) -> None:
     seen_targets: set[tuple[str, str]] = set()
-    for index, operation in enumerate(operations):
-        if not isinstance(operation, dict):
-            raise ValidationError(f"mutation.operations[{index}] must be an object")
-        if set(operation) != {"op", "value"}:
-            raise ValidationError(
-                f"mutation.operations[{index}] must contain exactly op and value"
-            )
-        op_name = operation.get("op")
-        value = operation.get("value")
+    for op_name in OPERATION_GROUP_ORDER:
+        values = operations.get(op_name, [])
         if op_name == "checkpoint_append":
-            _apply_checkpoint_append(document, value, changed)
+            for index, value in enumerate(values):
+                _apply_checkpoint_append(document, value, index, changed)
             continue
-        if op_name not in OPERATION_COLLECTION:
-            raise ValidationError(f"unsupported semantic operation: {op_name!r}")
-        if not isinstance(value, dict):
-            raise ValidationError(f"{op_name}.value must be an object")
-        record_id = _required_text(
-            value.get("id"), f"mutation.operations[{index}].value.id", max_chars=128
-        )
+
         collection = OPERATION_COLLECTION[op_name]
-        target = (collection, record_id)
-        if target in seen_targets:
-            raise ValidationError(
-                f"mutation contains duplicate target {collection}:{record_id}; use one deterministic operation per record"
+        for index, value in enumerate(values):
+            location = f"mutation.operations.{op_name}[{index}]"
+            if not isinstance(value, dict):
+                raise ValidationError(f"{location} must be an object")
+            record_id = _required_text(value.get("id"), f"{location}.id", max_chars=128)
+            target = (collection, record_id)
+            if target in seen_targets:
+                raise ValidationError(
+                    f"mutation contains duplicate target {collection}:{record_id}; use one deterministic operation per record"
+                )
+            seen_targets.add(target)
+            _apply_upsert(
+                document,
+                collection,
+                value,
+                op_name=op_name,
+                operation_index=index,
+                changed=changed,
             )
-        seen_targets.add(target)
-        _apply_upsert(
-            document,
-            collection,
-            value,
-            op_name=op_name,
-            changed=changed,
-        )
 
 
 def _validate_cross_record_references(document: dict[str, Any]) -> None:
@@ -317,11 +339,11 @@ def mutate_work_item(
     expected_revision: int,
     mutation: dict[str, Any],
 ) -> dict[str, Any]:
-    """Apply one bounded state patch plus typed semantic operations atomically.
+    """Apply one bounded state patch plus grouped typed semantic mutations atomically.
 
     The canonical persistence model remains one document and one optimistic revision. No
-    stale semantic operation is automatically rebased: a caller must reread/reconcile and
-    retry against the exact latest revision.
+    stale semantic mutation is automatically rebased. Semantic groups build one final
+    candidate document; cross-group ordering is not part of the public contract.
     """
     item_id = _required_text(item_id, "id", max_chars=256)
     if (
