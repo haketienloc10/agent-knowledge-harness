@@ -1,8 +1,8 @@
 {
   "version": 13,
   "from_ref": "5f688cc444623a3fb90107fb1ea614f4fdd85cb9",
-  "to_ref": "2745406957cf2c9ea493ac4c0598aeb66de3c895",
-  "description": "make repos.yaml the canonical repository registry, remove registry duplication from SYSTEM_MAP, narrow System Map activation to cross-repo semantics, and validate registry dependency references; SYSTEM_MAP uses three-way merge so local semantic content is never silently replaced",
+  "to_ref": "601941e690ea873f45acb6e40e43bb7ebd2d3184",
+  "description": "make repos.yaml the canonical repository registry, remove registry duplication from SYSTEM_MAP, narrow System Map activation to cross-repo semantics, validate repository dependency references/cycles, and require manual review of legacy repos.yaml metadata because pre-v13 checker accepted registries that may omit role/required_for/depends_on; SYSTEM_MAP uses three-way merge so local semantic content is never silently replaced",
   "workspace": {
     "merge": [
       "workspace-template/AGENTS.md",
@@ -14,7 +14,9 @@
       "workspace-template/scripts/workspace-check.sh"
     ],
     "delete": [],
-    "manual_review": []
+    "manual_review": [
+      "workspace-template/repos.yaml"
+    ]
   },
   "repo": {
     "merge": [
