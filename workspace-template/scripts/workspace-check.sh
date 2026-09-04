@@ -371,6 +371,7 @@ repositories = data.get("repositories")
 assert isinstance(repositories, list) and repositories, "repositories must be a non-empty list"
 
 names = []
+graph = {}
 for index, repository in enumerate(repositories):
     prefix = f"repositories[{index}]"
     assert isinstance(repository, dict), f"{prefix} must be a map"
@@ -384,14 +385,36 @@ for index, repository in enumerate(repositories):
         assert isinstance(values, list), f"{name}.{key} must be a list"
         assert all(isinstance(value, str) and value.strip() for value in values), f"{name}.{key} entries must be non-empty strings"
         assert len(values) == len(set(values)), f"{name}.{key} contains duplicate entries"
+    graph[name] = list(repository["depends_on"])
 
 assert len(names) == len(set(names)), "repository names must be unique"
 known = set(names)
-for repository in repositories:
-    name = repository["name"]
-    for dependency in repository["depends_on"]:
+for name, dependencies in graph.items():
+    for dependency in dependencies:
         assert dependency != name, f"{name}.depends_on must not reference itself"
         assert dependency in known, f"{name}.depends_on references unknown repository: {dependency}"
+
+visiting = set()
+visited = set()
+stack = []
+
+def visit(name):
+    if name in visited:
+        return
+    if name in visiting:
+        start = stack.index(name)
+        cycle = stack[start:] + [name]
+        raise AssertionError("repository dependency cycle: " + " -> ".join(cycle))
+    visiting.add(name)
+    stack.append(name)
+    for dependency in graph[name]:
+        visit(dependency)
+    stack.pop()
+    visiting.remove(name)
+    visited.add(name)
+
+for name in names:
+    visit(name)
 PY
   fail 'repos.yaml: structured registry validation failed'
 fi
