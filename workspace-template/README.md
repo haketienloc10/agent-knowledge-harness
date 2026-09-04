@@ -31,6 +31,17 @@ docs/WORKSPACE_SETUP.md
 
 Workspace không sở hữu task DB, Knowledge Store hoặc bản copy Work Item protocol.
 
+## Registry và System Map
+
+`repos.yaml` là canonical repository registry cho workspace/repository identity, exact
+Git-root path, role, `required_for` và `depends_on`. QiQi dùng registry này để chọn
+repository và dependency wave.
+
+`SYSTEM_MAP.md` không lặp repository registry. Nó chỉ giữ cross-repo semantic facts mà
+registry không trả lời được: contracts, ownership/data boundaries, non-trivial integration
+behavior, compatibility/deprecation/rollback và shared-infrastructure facts. Task chỉ cần
+repository/dependency basics không hydrate System Map.
+
 ## Work Item operational skill
 
 `$work-item` là user-scoped skill được cài cùng Global Work Item MCP và dùng chung bởi
@@ -51,8 +62,10 @@ lo phần canonical get-or-create/reconciliation protocol.
 QiQi
   ↓ apply $work-item khi canonical Work Item được dùng
   ↓ work_item_get/create theo explicit Work Item intent
+  ↓ repos.yaml → repository/dependency wave
+  ↓ SYSTEM_MAP only khi cần cross-repo semantic fact ngoài registry
   ↓ knowledge_search → exact scoped knowledge read khi cần durable context
-  ↓ SYSTEM_MAP + Work Item + required external facts
+  ↓ Work Item + required external facts
   ↓ structured TaskPacket
 qiqi_delegate
   ↓ Herdr START/RESUME exact Git root
