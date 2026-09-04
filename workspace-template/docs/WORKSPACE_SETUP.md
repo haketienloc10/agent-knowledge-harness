@@ -94,7 +94,7 @@ mọi path là exact Git root và mọi dependency reference trỏ tới reposit
 `SYSTEM_MAP.md` chỉ giữ cross-repo semantic facts không suy ra được từ registry: contract,
 ownership/data boundary, non-trivial integration behavior, compatibility/deprecation/rollback
 và shared-infrastructure facts. Không copy full repository list/path/role/dependency sang
-System Map. Dependency-only repository selection/wave không cần đọc `SYSTEM_MAP.md`.
+System Map. dependency-only repository selection/wave không cần đọc `SYSTEM_MAP.md`.
 
 ## 4. Herdr/qiqi_delegate
 
