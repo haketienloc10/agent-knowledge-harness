@@ -38,7 +38,7 @@ class IncrementalMutationTests(unittest.TestCase):
             mutation,
         )
 
-    def test_mixed_state_and_semantic_operations_commit_once_with_compact_receipt(self) -> None:
+    def test_mixed_state_and_grouped_semantic_mutations_commit_once_with_compact_receipt(self) -> None:
         receipt = self._mutate(
             {
                 "state": {
@@ -53,54 +53,49 @@ class IncrementalMutationTests(unittest.TestCase):
                     },
                     "next_actions": [{"repo": "web", "action": "Consume paymentStatus"}],
                 },
-                "operations": [
-                    {
-                        "op": "decision_upsert",
-                        "value": {
+                "operations": {
+                    "decision_upsert": [
+                        {
                             "id": "d1",
                             "status": "active",
                             "summary": "Unknown paymentStatus is represented as null",
                             "decided_by": "customer",
-                        },
-                    },
-                    {
-                        "op": "question_upsert",
-                        "value": {
+                        }
+                    ],
+                    "question_upsert": [
+                        {
                             "id": "q1",
                             "status": "resolved",
                             "question": "How is an unknown value represented?",
                             "decision_id": "d1",
                             "source": "customer Q&A",
-                        },
-                    },
-                    {
-                        "op": "change_upsert",
-                        "value": {
+                        }
+                    ],
+                    "change_upsert": [
+                        {
                             "id": "c1",
                             "type": "requirement_added",
                             "status": "accepted",
                             "summary": "Expose paymentStatus on list API",
-                        },
-                    },
-                    {
-                        "op": "handoff_upsert",
-                        "value": {
+                        }
+                    ],
+                    "handoff_upsert": [
+                        {
                             "id": "h1",
                             "from": "api",
                             "to": "web",
                             "status": "pending",
                             "summary": "Consume paymentStatus",
-                        },
-                    },
-                    {
-                        "op": "checkpoint_append",
-                        "value": {
+                        }
+                    ],
+                    "checkpoint_append": [
+                        {
                             "repo": "api",
                             "kind": "verification",
                             "summary": "API implementation verified",
-                        },
-                    },
-                ],
+                        }
+                    ],
+                },
             }
         )
 
@@ -133,15 +128,14 @@ class IncrementalMutationTests(unittest.TestCase):
         self.assertEqual(stored["repos"]["api"]["status"], "done")
 
     def test_append_one_checkpoint_does_not_require_or_return_existing_history(self) -> None:
-        operations = [
-            {
-                "op": "checkpoint_append",
-                "value": {"repo": "api", "summary": f"Checkpoint {index}"},
-            }
-            for index in range(MUTATION_OPERATION_MAX)
-        ]
+        operations = {
+            "checkpoint_append": [
+                {"repo": "api", "summary": f"Checkpoint {index}"}
+                for index in range(MUTATION_OPERATION_MAX)
+            ]
+        }
         revision = self.item["revision"]
-        for batch_start in range(0, 200, MUTATION_OPERATION_MAX):
+        for _ in range(0, 200, MUTATION_OPERATION_MAX):
             receipt = mutate_work_item(
                 self.db,
                 self.item["id"],
@@ -153,16 +147,15 @@ class IncrementalMutationTests(unittest.TestCase):
         before = load_work_item_document(self.db, self.item["id"])
         self.assertEqual(len(before["checkpoints"]), 200)
         request = {
-            "operations": [
-                {
-                    "op": "checkpoint_append",
-                    "value": {"repo": "api", "summary": "Checkpoint 200"},
-                }
-            ]
+            "operations": {
+                "checkpoint_append": [
+                    {"repo": "api", "summary": "Checkpoint 200"}
+                ]
+            }
         }
         receipt = mutate_work_item(self.db, self.item["id"], revision, request)
         self.assertEqual(receipt["changed"], ["checkpoints"])
-        self.assertLess(len(json.dumps(request)), 250)
+        self.assertLess(len(json.dumps(request)), 220)
         self.assertLess(len(json.dumps(receipt)), 200)
         after = load_work_item_document(self.db, self.item["id"])
         self.assertEqual(len(after["checkpoints"]), 201)
@@ -171,16 +164,15 @@ class IncrementalMutationTests(unittest.TestCase):
     def test_question_resolution_is_partial_monotonic_and_write_once(self) -> None:
         created = self._mutate(
             {
-                "operations": [
-                    {
-                        "op": "question_upsert",
-                        "value": {
+                "operations": {
+                    "question_upsert": [
+                        {
                             "id": "q1",
                             "question": "Which behavior is required?",
                             "status": "open",
-                        },
-                    }
-                ]
+                        }
+                    ]
+                }
             }
         )
         resolved = mutate_work_item(
@@ -188,12 +180,11 @@ class IncrementalMutationTests(unittest.TestCase):
             self.item["id"],
             created["revision"],
             {
-                "operations": [
-                    {
-                        "op": "question_upsert",
-                        "value": {"id": "q1", "status": "resolved", "answer": "Behavior A"},
-                    }
-                ]
+                "operations": {
+                    "question_upsert": [
+                        {"id": "q1", "status": "resolved", "answer": "Behavior A"}
+                    ]
+                }
             },
         )
         question = load_work_item_document(self.db, self.item["id"])["questions"][0]
@@ -205,35 +196,30 @@ class IncrementalMutationTests(unittest.TestCase):
                 self.db,
                 self.item["id"],
                 resolved["revision"],
-                {"operations": [{"op": "question_upsert", "value": {"id": "q1", "status": "open"}}]},
+                {"operations": {"question_upsert": [{"id": "q1", "status": "open"}]}},
             )
         with self.assertRaisesRegex(ValidationError, "write-once"):
             mutate_work_item(
                 self.db,
                 self.item["id"],
                 resolved["revision"],
-                {
-                    "operations": [
-                        {"op": "question_upsert", "value": {"id": "q1", "answer": "Behavior B"}}
-                    ]
-                },
+                {"operations": {"question_upsert": [{"id": "q1", "answer": "Behavior B"}]}},
             )
         self.assertEqual(load_work_item_document(self.db, self.item["id"])["revision"], resolved["revision"])
 
     def test_existing_semantic_identity_and_provenance_cannot_be_rewritten(self) -> None:
         created = self._mutate(
             {
-                "operations": [
-                    {
-                        "op": "decision_upsert",
-                        "value": {
+                "operations": {
+                    "decision_upsert": [
+                        {
                             "id": "d1",
                             "status": "active",
                             "summary": "Original decision",
                             "source": "customer",
-                        },
-                    }
-                ]
+                        }
+                    ]
+                }
             }
         )
         with self.assertRaisesRegex(ValidationError, "immutable"):
@@ -241,33 +227,24 @@ class IncrementalMutationTests(unittest.TestCase):
                 self.db,
                 self.item["id"],
                 created["revision"],
-                {
-                    "operations": [
-                        {"op": "decision_upsert", "value": {"id": "d1", "summary": "Rewritten"}}
-                    ]
-                },
+                {"operations": {"decision_upsert": [{"id": "d1", "summary": "Rewritten"}]}},
             )
         with self.assertRaisesRegex(ValidationError, "provenance"):
             mutate_work_item(
                 self.db,
                 self.item["id"],
                 created["revision"],
-                {
-                    "operations": [
-                        {"op": "decision_upsert", "value": {"id": "d1", "source": "different"}}
-                    ]
-                },
+                {"operations": {"decision_upsert": [{"id": "d1", "source": "different"}]}},
             )
 
-    def test_cross_record_references_validate_after_entire_operation_batch(self) -> None:
+    def test_cross_record_references_validate_against_final_candidate_across_groups(self) -> None:
         first = self._mutate(
             {
-                "operations": [
-                    {
-                        "op": "decision_upsert",
-                        "value": {"id": "d1", "status": "active", "summary": "Old decision"},
-                    }
-                ]
+                "operations": {
+                    "decision_upsert": [
+                        {"id": "d1", "status": "active", "summary": "Old decision"}
+                    ]
+                }
             }
         )
         receipt = mutate_work_item(
@@ -275,30 +252,26 @@ class IncrementalMutationTests(unittest.TestCase):
             self.item["id"],
             first["revision"],
             {
-                "operations": [
-                    {
-                        "op": "decision_upsert",
-                        "value": {"id": "d1", "status": "superseded", "superseded_by": "d2"},
-                    },
-                    {
-                        "op": "decision_upsert",
-                        "value": {"id": "d2", "status": "active", "summary": "New decision"},
-                    },
-                    {
-                        "op": "question_upsert",
-                        "value": {
+                "operations": {
+                    "question_upsert": [
+                        {
                             "id": "q1",
                             "question": "Which decision applies?",
                             "status": "resolved",
                             "decision_id": "d2",
-                        },
-                    },
-                ]
+                        }
+                    ],
+                    "decision_upsert": [
+                        {"id": "d1", "status": "superseded", "superseded_by": "d2"},
+                        {"id": "d2", "status": "active", "summary": "New decision"},
+                    ],
+                }
             },
         )
         stored = load_work_item_document(self.db, self.item["id"])
         self.assertEqual(receipt["revision"], 3)
         self.assertEqual(stored["decisions"][0]["superseded_by"], "d2")
+        self.assertEqual(stored["questions"][0]["decision_id"], "d2")
 
         with self.assertRaisesRegex(ValidationError, "missing decision_id"):
             mutate_work_item(
@@ -307,17 +280,16 @@ class IncrementalMutationTests(unittest.TestCase):
                 receipt["revision"],
                 {
                     "state": {"summary": "must roll back"},
-                    "operations": [
-                        {
-                            "op": "question_upsert",
-                            "value": {
+                    "operations": {
+                        "question_upsert": [
+                            {
                                 "id": "q2",
                                 "question": "Missing decision?",
                                 "status": "resolved",
                                 "decision_id": "d404",
-                            },
-                        }
-                    ],
+                            }
+                        ]
+                    },
                 },
             )
         stored_after = load_work_item_document(self.db, self.item["id"])
@@ -328,17 +300,28 @@ class IncrementalMutationTests(unittest.TestCase):
     def test_blocker_handoff_and_change_lifecycles_do_not_reopen(self) -> None:
         first = self._mutate(
             {
-                "operations": [
-                    {"op": "blocker_upsert", "value": {"id": "b1", "status": "open", "summary": "Blocked"}},
-                    {
-                        "op": "handoff_upsert",
-                        "value": {"id": "h1", "from": "api", "to": "web", "status": "pending", "summary": "Handoff"},
-                    },
-                    {
-                        "op": "change_upsert",
-                        "value": {"id": "c1", "type": "scope_changed", "status": "proposed", "summary": "Change"},
-                    },
-                ]
+                "operations": {
+                    "blocker_upsert": [
+                        {"id": "b1", "status": "open", "summary": "Blocked"}
+                    ],
+                    "handoff_upsert": [
+                        {
+                            "id": "h1",
+                            "from": "api",
+                            "to": "web",
+                            "status": "pending",
+                            "summary": "Handoff",
+                        }
+                    ],
+                    "change_upsert": [
+                        {
+                            "id": "c1",
+                            "type": "scope_changed",
+                            "status": "proposed",
+                            "summary": "Change",
+                        }
+                    ],
+                }
             }
         )
         second = mutate_work_item(
@@ -346,14 +329,14 @@ class IncrementalMutationTests(unittest.TestCase):
             self.item["id"],
             first["revision"],
             {
-                "operations": [
-                    {"op": "blocker_upsert", "value": {"id": "b1", "status": "resolved"}},
-                    {"op": "handoff_upsert", "value": {"id": "h1", "status": "resolved"}},
-                    {"op": "change_upsert", "value": {"id": "c1", "status": "accepted"}},
-                ]
+                "operations": {
+                    "blocker_upsert": [{"id": "b1", "status": "resolved"}],
+                    "handoff_upsert": [{"id": "h1", "status": "resolved"}],
+                    "change_upsert": [{"id": "c1", "status": "accepted"}],
+                }
             },
         )
-        for op, value in (
+        for group, value in (
             ("blocker_upsert", {"id": "b1", "status": "open"}),
             ("handoff_upsert", {"id": "h1", "status": "pending"}),
             ("change_upsert", {"id": "c1", "status": "proposed"}),
@@ -363,17 +346,19 @@ class IncrementalMutationTests(unittest.TestCase):
                     self.db,
                     self.item["id"],
                     second["revision"],
-                    {"operations": [{"op": op, "value": value}]},
+                    {"operations": {group: [value]}},
                 )
 
-    def test_duplicate_target_and_operation_overflow_are_rejected(self) -> None:
+    def test_duplicate_target_total_overflow_and_legacy_list_shape_are_rejected(self) -> None:
         with self.assertRaisesRegex(ValidationError, "duplicate target"):
             self._mutate(
                 {
-                    "operations": [
-                        {"op": "blocker_upsert", "value": {"id": "b1", "status": "open", "summary": "A"}},
-                        {"op": "blocker_upsert", "value": {"id": "b1", "status": "resolved"}},
-                    ]
+                    "operations": {
+                        "blocker_upsert": [
+                            {"id": "b1", "status": "open", "summary": "A"},
+                            {"id": "b1", "status": "resolved"},
+                        ]
+                    }
                 }
             )
         self.assertEqual(load_work_item_document(self.db, self.item["id"])["revision"], 1)
@@ -381,38 +366,36 @@ class IncrementalMutationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValidationError, "at most 50"):
             self._mutate(
                 {
-                    "operations": [
-                        {"op": "checkpoint_append", "value": {"summary": f"Checkpoint {i}"}}
-                        for i in range(MUTATION_OPERATION_MAX + 1)
-                    ]
+                    "operations": {
+                        "checkpoint_append": [
+                            {"summary": f"Checkpoint {i}"} for i in range(30)
+                        ],
+                        "blocker_upsert": [
+                            {"id": f"b{i}", "status": "open", "summary": f"Blocker {i}"}
+                            for i in range(MUTATION_OPERATION_MAX - 29)
+                        ],
+                    }
                 }
             )
 
-    def test_checkpoint_history_has_append_only_public_operation(self) -> None:
-        with self.assertRaisesRegex(ValidationError, "unsupported semantic operation"):
+        with self.assertRaisesRegex(ValidationError, "grouped object"):
             self._mutate(
-                {
-                    "operations": [
-                        {"op": "checkpoint_upsert", "value": {"id": "cp1", "summary": "rewrite"}}
-                    ]
-                }
+                {"operations": [{"op": "checkpoint_append", "value": {"summary": "legacy"}}]}
+            )
+
+    def test_checkpoint_history_has_append_only_public_group(self) -> None:
+        with self.assertRaisesRegex(ValidationError, "unsupported groups"):
+            self._mutate(
+                {"operations": {"checkpoint_upsert": [{"id": "cp1", "summary": "rewrite"}]}}
             )
         with self.assertRaisesRegex(ValidationError, "does not use stable checkpoint ids"):
             self._mutate(
-                {
-                    "operations": [
-                        {"op": "checkpoint_append", "value": {"id": "cp1", "summary": "append"}}
-                    ]
-                }
+                {"operations": {"checkpoint_append": [{"id": "cp1", "summary": "append"}]}}
             )
 
     def test_stale_writer_conflicts_even_when_touching_different_semantics(self) -> None:
         first = self._mutate(
-            {
-                "operations": [
-                    {"op": "checkpoint_append", "value": {"summary": "Writer A checkpoint"}}
-                ]
-            }
+            {"operations": {"checkpoint_append": [{"summary": "Writer A checkpoint"}]}}
         )
         self.assertEqual(first["revision"], 2)
         with self.assertRaises(ConflictError):
@@ -421,9 +404,11 @@ class IncrementalMutationTests(unittest.TestCase):
                 self.item["id"],
                 1,
                 {
-                    "operations": [
-                        {"op": "blocker_upsert", "value": {"id": "b1", "status": "open", "summary": "Writer B blocker"}}
-                    ]
+                    "operations": {
+                        "blocker_upsert": [
+                            {"id": "b1", "status": "open", "summary": "Writer B blocker"}
+                        ]
+                    }
                 },
             )
 
@@ -438,11 +423,7 @@ class IncrementalMutationTests(unittest.TestCase):
                     self.db,
                     self.item["id"],
                     self.item["revision"],
-                    {
-                        "operations": [
-                            {"op": "checkpoint_append", "value": {"summary": f"writer-{index}"}}
-                        ]
-                    },
+                    {"operations": {"checkpoint_append": [{"summary": f"writer-{index}"}]}},
                 )
                 outcomes.append("ok")
             except ConflictError:
