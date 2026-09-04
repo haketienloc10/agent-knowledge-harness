@@ -79,7 +79,6 @@ for pattern in \
   'checkpoint_append' \
   'grouped typed operations object' \
   'do not send op/value envelopes' \
-  'cross-group ordering is not part of the public contract' \
   'compact receipt' \
   'work_item_artifact_list' \
   'work_item_artifact_get' \
@@ -109,7 +108,8 @@ tool_count="$(rg -c '^@mcp\.tool\(\)$' "$server" || true)"
 
 # CRITICAL TYPED GROUPED UPDATE INVARIANT — DO NOT REMOVE OR WEAKEN THIS CHECK.
 # Historical semantic collections must not return to public full-array replacement or
-# nested discriminated-union op/value envelopes.
+# nested discriminated-union op/value envelopes. Semantic prose is checked through AST/
+# generated schema below so source line wrapping cannot create false failures.
 if ! SERVER_PATH="$server" python3 - <<'PY'
 import ast
 import os
@@ -357,7 +357,6 @@ for pattern in \
   'not an enum or workflow FSM' \
   'Partial semantic command' \
   'there is no op/value envelope' \
-  'cross-group order is not part of the public contract' \
   'Historical semantic collections are intentionally not replaceable here'; do
   rg -F -q "$pattern" "$models" || fail "models.py: missing typed grouped mutation contract: $pattern"
 done
@@ -417,6 +416,9 @@ assert "WorkItemOperation" not in defs
 assert "CheckpointAppendOperation" not in defs
 for prop in operation_properties.values():
     assert prop["maxItems"] == MUTATION_OPERATION_MAX
+operations_description = schema["properties"]["operations"]["description"].lower()
+assert "there is no op/value envelope" in operations_description
+assert "cross-group order is not part of the public contract" in operations_description
 try:
     WorkItemMutation.model_validate({
         "operations": [{"op": "question_upsert", "value": {"id": "q1"}}]
