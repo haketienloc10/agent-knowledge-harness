@@ -28,13 +28,14 @@ class WorkItemUpdateServerContractTests(unittest.TestCase):
         }
         self.assertEqual(args["mutation"], "WorkItemMutation")
         source = ast.get_source_segment(text, update) or ""
+        source_lower = source.lower()
         self.assertIn("mutation.to_core_mutation()", source)
         self.assertIn("mutate_work_item", source)
         self.assertNotIn("update_work_item(", source)
-        self.assertIn("direct typed groups", source)
-        self.assertIn("there is no op/value envelope", source)
-        self.assertIn("cross-group ordering is not", source)
-        self.assertNotIn("applied in caller order", source)
+        self.assertIn("direct typed groups", source_lower)
+        self.assertIn("there is no op/value envelope", source_lower)
+        self.assertIn("cross-group ordering is not", source_lower)
+        self.assertNotIn("applied in caller order", source_lower)
 
     def test_validation_failure_is_structured(self) -> None:
         result = _work_item_update_error_result(
