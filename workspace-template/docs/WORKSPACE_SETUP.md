@@ -50,10 +50,12 @@ Smoke DB test/non-production:
 
 1. create test Work Item;
 2. `work_item_get` revision 1 và xác nhận response là bounded current-state projection;
-3. `work_item_update` bằng revision 1 với `mutation.operations=[checkpoint_append]` → compact receipt revision 2;
+3. `work_item_update` bằng revision 1 với `mutation.operations.checkpoint_append=[{summary: ...}]` → compact receipt revision 2 ngay lần gọi hợp lệ đầu tiên;
 4. receipt không chứa full canonical Work Item/checkpoint history;
 5. stale revision 1 phải conflict;
 6. `work_item_history_read(collection="checkpoints")` vẫn đọc exact stored history khi cần provenance.
+
+`mutation.operations` là **grouped typed object**, không phải list `{op,value}`. Fresh-agent happy path không được probe schema bằng intentionally-invalid `work_item_update` calls.
 
 ## 2. Cài Shared Knowledge MCP
 
@@ -110,32 +112,32 @@ Với task có stable ID như `redmine:116655`:
 4. reconcile current requirements/repo state/open lifecycle state/next actions;
 5. choose repo/wave;
 6. TaskPacket truyền Work Item ID + exact whole revision;
-7. child `work_item_get`, làm current repo, persist current repo state bằng `mutation.state` + smallest typed operations (`checkpoint_append`, blocker/question/handoff upsert);
+7. child `work_item_get`, làm current repo, persist current repo state bằng `mutation.state` + smallest direct groups dưới `mutation.operations` (`checkpoint_append`, blocker/question/handoff upsert);
 8. QiQi đọc full native response rồi reread bounded Work Item khi dependent orchestration decision cần resulting state;
 9. QiQi reconcile global phase/status/next action bằng exact latest revision.
 
-Historical semantic collections không được reconstruct/resend như full-array mutation. Mutation operation list tối đa 50/call, commit all-or-nothing, và stale writer không được server auto-rebase.
+Historical semantic collections không được reconstruct/resend như full-array mutation. `mutation.operations` có direct typed groups, tối đa 50 semantic records tổng cộng/call, commit all-or-nothing trên một final candidate, và stale writer không được server auto-rebase. Cross-group caller order không phải public semantics.
 
 `phase` không phải FSM cứng; UAT → fix → UT → IT → UAT hợp lệ.
 
 ## 6. Questions/decisions/requirement changes
 
-Ambiguity chưa chốt → `question_upsert` tạo open question. User/customer Q&A chốt có thể dùng một atomic mutation:
+Ambiguity chưa chốt → `operations.question_upsert` tạo open question. User/customer Q&A chốt có thể dùng một atomic grouped mutation:
 
 ```text
-decision_upsert(new active decision)
-question_upsert(open -> resolved)
+operations.decision_upsert = [new active decision, old decision -> superseded nếu cần]
+operations.question_upsert = [open -> resolved]
 state.current_requirements nếu effective semantics đổi
-change_upsert nếu requirement/scope thực sự đổi
+operations.change_upsert nếu requirement/scope thực sự đổi
 ```
 
-Decision bị thay dùng monotonic `active -> superseded` + `superseded_by`; không rewrite historical summary/provenance. Cross-record reference validate trên final candidate document nên create successor + supersede old + resolve question có thể commit trong cùng revision.
+Decision bị thay dùng monotonic `active -> superseded` + `superseded_by`; không rewrite historical summary/provenance. Cross-record reference validate trên final candidate document nên create successor + supersede old + resolve question có thể commit trong cùng revision mà không phụ thuộc cross-group execution order.
 
 ## 7. Cross-repo behavior
 
 ```text
 repo A evidence
-→ handoff_upsert pending
+→ operations.handoff_upsert pending
 → native response về QiQi
 → QiQi reread/reconcile
 → delegate repo B
@@ -191,18 +193,21 @@ START không có session ID; RESUME dùng exact native ID của cùng repo/agent
 
 Trên repo test an toàn:
 
-1. QiQi thấy `work_item_*` gồm scoped history + typed incremental update và đủ 6 Knowledge tools;
+1. QiQi thấy `work_item_*` gồm scoped history + grouped typed incremental update và đủ 6 Knowledge tools;
 2. QiQi create/get test Work Item; GET không hydrate accumulated history;
-3. append checkpoint không gửi historical checkpoints và nhận compact receipt;
-4. partial question resolve không resend immutable question body/full collection;
-5. history cursor stale/cross-item bị reject đúng contract;
-6. delegate TaskPacket identify task/revision;
-7. child đọc cùng Work Item và chỉ mutate current-repo authority;
-8. stale Work Item writer conflict dù target khác collection;
-9. Knowledge search card thin + metadata/section/full exact reads đúng scope;
-10. partial Knowledge update preserve untouched canonical state và stale revision bị reject;
-11. child không mở sibling repo/physical DB/store;
-12. qiqi_delegate native hook/RESUME smoke pass cho agent family thực sự dùng.
+3. fresh agent append checkpoint bằng `operations.checkpoint_append` thành công ở **first valid attempt**, không schema-probing, không gửi historical checkpoints, receipt compact;
+4. fresh agent partial-resolve blocker/question bằng direct group thành công ở **first valid attempt**, không resend immutable body/full collection;
+5. old `operations:[{op,value}]` shape bị schema reject và không xuất hiện trong declared public schema/skill;
+6. history cursor stale/cross-item bị reject đúng contract;
+7. delegate TaskPacket identify task/revision;
+8. child đọc cùng Work Item và chỉ mutate current-repo authority;
+9. stale Work Item writer conflict dù target khác collection;
+10. Knowledge search card thin + metadata/section/full exact reads đúng scope;
+11. partial Knowledge update preserve untouched canonical state và stale revision bị reject;
+12. child không mở sibling repo/physical DB/store;
+13. qiqi_delegate native hook/RESUME smoke pass cho agent family thực sự dùng.
+
+Happy-path acceptance có **zero intentionally-invalid schema discovery calls**. Validation errors dùng để reject bad input, không phải runtime discovery protocol.
 
 ## 12. Workspace đã cài harness
 
@@ -223,7 +228,7 @@ Cài user-scoped Work Item/Knowledge MCP là explicit operator step; migration k
 work-item-template checker PASS
 knowledge-template checker PASS
 workspace-check PASS
-fresh QiQi Work Item discovery/read/incremental-update PASS
+fresh QiQi Work Item discovery/read/grouped-update PASS without schema probing
 fresh child Work Item discovery/update PASS
 Knowledge scoped progressive-disclosure smoke PASS
 native qiqi_delegate smoke PASS
