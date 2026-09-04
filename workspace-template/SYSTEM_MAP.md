@@ -1,32 +1,21 @@
 # System Map
 
-Tệp này mô tả **live topology** giữa các Git repository trong local workspace. Nó
-không thay thế `ARCHITECTURE.md` của từng repository và không phải Shared Knowledge
-Store.
+Tệp này chỉ mô tả **semantic contract và boundary liên repository** mà `repos.yaml`
+không thể suy ra. `repos.yaml` là canonical repository registry cho workspace name,
+repository name, Git-root path, role, workflow membership (`required_for`) và dependency
+basics (`depends_on`).
 
-## Hình dạng Hệ thống
+Không lặp full repository list, Git-root path, role hoặc dependency registry trong file
+này. Khi chỉ cần chọn repository hoặc dependency wave, dùng `repos.yaml` mà không đọc
+`SYSTEM_MAP.md`.
 
-- Sản phẩm: `{{PRODUCT_NAME}}`
-- Local workspace root: `{{WORKSPACE_ROOT}}`
+## Hạ tầng và Tích hợp Dùng chung
+
 - Hạ tầng dùng chung: `{{SHARED_INFRASTRUCTURE}}`
 - Command integration chính: `{{INTEGRATION_COMMAND}}`
 
-## Danh sách Repository
-
-| Repository | Vai trò | Git root | Runtime/entrypoint | Phụ thuộc |
-|---|---|---|---|---|
-| `{{MODULE_1}}` | `{{MODULE_1_ROLE}}` | `{{MODULE_1_PATH}}` | `{{MODULE_1_ENTRYPOINT}}` | `{{MODULE_1_DEPENDENCIES}}` |
-| `{{MODULE_2}}` | `{{MODULE_2_ROLE}}` | `{{MODULE_2_PATH}}` | `{{MODULE_2_ENTRYPOINT}}` | `{{MODULE_2_DEPENDENCIES}}` |
-
-Danh sách phải khớp với `repos.yaml`. Không đưa hạ tầng không phải Git repository
-vào registry.
-
-## Thứ tự Khởi động Local
-
-1. `{{INFRASTRUCTURE_STEP}}`
-2. `{{PRODUCER_OR_FOUNDATION_MODULE}}`
-3. `{{DEPENDENT_MODULE}}`
-4. `{{FRONTEND_OR_EDGE_MODULE}}`
+Chỉ ghi facts ở đây khi chúng là shared-infrastructure/integration semantics, không phải
+một repository registry khác.
 
 ## Contract Liên Repository
 
@@ -34,7 +23,7 @@ vào registry.
 |---|---|---|---|---|---|
 | `{{CONTRACT_NAME}}` | `{{PRODUCER}}` | `{{CONSUMERS}}` | `HTTP / event / schema` | `{{COMPATIBILITY_RULE}}` | `{{SPEC_OR_CODE_PATH}}` |
 
-Bảng này giữ producer–consumer map và link tới live owner source. Durable reusable
+Bảng này giữ producer–consumer semantics và link tới live owner source. Durable reusable
 conclusion về contract/flow có thể được distill vào **Shared Knowledge Store** qua
 Knowledge MCP, nhưng không được dùng để thay thế live source-of-truth link tại đây.
 
@@ -46,6 +35,14 @@ Knowledge MCP, nhưng không được dùng để thay thế live source-of-trut
 
 Không truy cập trực tiếp database, bảng, queue hoặc internal endpoint của repo khác
 trừ khi bảng này cho phép rõ ràng.
+
+## Luồng Tích hợp Không Suy ra từ Registry
+
+Chỉ ghi flow/order khi `depends_on` không đủ để xác định behavior hoặc sequencing.
+
+| Flow | Trigger | Order/constraint | Source of truth |
+|---|---|---|---|
+| `{{INTEGRATION_FLOW}}` | `{{FLOW_TRIGGER}}` | `{{FLOW_ORDER_OR_CONSTRAINT}}` | `{{FLOW_SOURCE}}` |
 
 ## Kiểm thử Integration
 
