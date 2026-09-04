@@ -1,7 +1,8 @@
 # Architecture
 
-Tài liệu này mô tả **live architecture nội bộ** của repository. Quan hệ tổng thể
-giữa nhiều repository thuộc `SYSTEM_MAP.md` tại workspace. Durable reusable
+Tài liệu này mô tả **live architecture nội bộ** của repository. Repository registry và
+dependency topology cơ bản thuộc workspace `repos.yaml`; cross-repo contracts, ownership
+boundaries và integration semantics thuộc workspace `SYSTEM_MAP.md`. Durable reusable
 conclusion được distill qua Shared Knowledge MCP; không copy Shared Knowledge Store
 vào file này.
 
@@ -33,9 +34,10 @@ kiểm tra.
 
 ## External boundaries
 
-Chỉ mô tả phần boundary mà repo này trực tiếp sở hữu hoặc tiêu thụ. Live cross-repo
-topology đầy đủ thuộc workspace `SYSTEM_MAP.md`; reusable distilled context có thể
-nằm trong Shared Knowledge Store.
+Chỉ mô tả phần boundary mà repo này trực tiếp sở hữu hoặc tiêu thụ. Registry/dependency
+basics của toàn workspace thuộc `repos.yaml`; live cross-repo contract/ownership/integration
+semantics thuộc `SYSTEM_MAP.md`. Reusable distilled context có thể nằm trong Shared
+Knowledge Store.
 
 | Boundary | Direction | Contract owner | Local source |
 |---|---|---|---|

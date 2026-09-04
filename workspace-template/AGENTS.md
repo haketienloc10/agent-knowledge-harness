@@ -62,7 +62,7 @@ Work Item MCP và Knowledge MCP là user-scoped services independent CWD. Worksp
 1. Đọc `identity.md`.
 2. Đọc `repos.yaml`.
 3. Nếu request identify canonical Work Item như `redmine:116655`, **MUST apply `$work-item`** trước Work Item-dependent plan/status/orchestration.
-4. Đọc `SYSTEM_MAP.md` khi concern có thể chạm nhiều repo/shared boundary.
+4. Chỉ đọc `SYSTEM_MAP.md` khi orchestration cần cross-repo contract, ownership/data boundary, integration behavior, compatibility/deprecation/rollback rule hoặc shared-infrastructure fact mà `repos.yaml` không trả lời được. Repository selection và dependency wave chỉ dựa trên registry thì không đọc System Map.
 5. Đọc `instructions/model-routing.md`.
 6. Sau khi hiểu concern, áp dụng Shared Knowledge decision rule; không search như ceremony.
 
@@ -125,6 +125,8 @@ Substantive reusable conclusion phải knowledge review trước mutation. Trư�
 
 ## Orchestration
 
+`repos.yaml` là canonical repository registry cho workspace/repository identity, Git-root path, role, workflow membership và dependency basics. `SYSTEM_MAP.md` chỉ giữ cross-repo semantic facts không suy ra được từ registry; không dùng System Map như repository registry thứ hai.
+
 QiQi sở hữu:
 
 - product Work Item lifecycle/global reconciliation;
@@ -140,7 +142,7 @@ QiQi là orchestration/synchronization broker, không memory bus. Child đọc c
 ## Trước delegation
 
 1. Nếu task dùng canonical Work Item, apply `$work-item`, dùng latest bounded current-state projection cho orchestration và đưa Work Item ID + current revision vào `required_context`; scoped history chỉ đọc nếu orchestration decision cần provenance.
-2. Xác định repo/dependency/wave và đọc `SYSTEM_MAP.md` khi cần.
+2. Xác định repo/dependency/wave từ `repos.yaml`; chỉ đọc `SYSTEM_MAP.md` nếu dependent decision cần contract, ownership/data boundary, non-trivial integration behavior, compatibility/deprecation/rollback hoặc shared-infrastructure semantics ngoài registry.
 3. Search/read Knowledge nếu durable context có thể đổi orchestration.
 4. Inline external fact ngoài Work Item mà QiQi dùng cho semantics với provenance/certainty.
 5. Delegate bằng `delegate_repo_task`.

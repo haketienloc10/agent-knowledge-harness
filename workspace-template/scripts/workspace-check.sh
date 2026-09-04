@@ -67,6 +67,13 @@ if rg -n 'result_path|QiQi MCP result handoff protocol|### Outcome|### Repo-loca
   fail 'legacy Markdown result-handoff contract found in active workspace policy'
 fi
 
+system_map="$workspace_root/SYSTEM_MAP.md"
+if rg -q '^## Danh sách Repository$|Danh sách phải khớp với `repos\.yaml`|\| Repository \| Vai trò \| Git root' "$system_map"; then
+  fail 'SYSTEM_MAP.md: repository registry duplication is forbidden; repos.yaml is canonical'
+fi
+rg -q 'repos\.yaml.*canonical repository registry' "$system_map" || \
+  fail 'SYSTEM_MAP.md: must identify repos.yaml as the canonical repository registry'
+
 agents_md="$workspace_root/AGENTS.md"
 for pattern in \
   'Chief of Staff' \
@@ -99,6 +106,8 @@ for pattern in \
   rg -U -q "$pattern" "$agents_md" || fail "AGENTS.md: missing required policy: $pattern"
 done
 
+rg -q 'Repository selection và dependency wave chỉ dựa trên registry thì không đọc System Map' "$agents_md" || \
+  fail 'AGENTS.md: dependency-only orchestration must not hydrate SYSTEM_MAP.md'
 rg -U -q 'native response established material repo state.*latest Work Item thiếu.*không silently tiếp tục' "$agents_md" || \
   fail 'AGENTS.md: QiQi must detect missing repo persistence after material delegation'
 rg -U -q 'Work Item read/update/persistence failure.*\$work-item.*không local Markdown/cached-conversation fallback' "$agents_md" || \
@@ -181,8 +190,8 @@ for pattern in \
 done
 
 workspace_setup="$workspace_root/docs/WORKSPACE_SETUP.md"
-for pattern in 'knowledge_read_metadata' 'knowledge_read_section' 'knowledge_update' 'whole-document revision'; do
-  rg -q "$pattern" "$workspace_setup" || fail "docs/WORKSPACE_SETUP.md: missing scoped Knowledge guidance: $pattern"
+for pattern in 'knowledge_read_metadata' 'knowledge_read_section' 'knowledge_update' 'whole-document revision' 'canonical owner' 'dependency-only'; do
+  rg -q "$pattern" "$workspace_setup" || fail "docs/WORKSPACE_SETUP.md: missing workspace capability guidance: $pattern"
 done
 
 codex_config="$workspace_root/.codex/config.toml"
@@ -345,6 +354,70 @@ fi
 
 rg -q '^state/$' "$workspace_root/.qiqi/.gitignore" || fail '.qiqi/.gitignore: state/ must be ignored'
 rg -q '^runs/$' "$workspace_root/.qiqi/.gitignore" || fail '.qiqi/.gitignore: legacy runs/ path must remain ignored'
+
+if ! uv run --project "$mcp_project" python - "$workspace_root/repos.yaml" <<'PY'; then
+from pathlib import Path
+import sys
+import yaml
+
+path = Path(sys.argv[1])
+data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+workspace = data.get("workspace")
+assert isinstance(workspace, dict), "workspace must be a map"
+workspace_name = workspace.get("name")
+assert isinstance(workspace_name, str) and workspace_name.strip(), "workspace.name must be a non-empty string"
+
+repositories = data.get("repositories")
+assert isinstance(repositories, list) and repositories, "repositories must be a non-empty list"
+
+names = []
+graph = {}
+for index, repository in enumerate(repositories):
+    prefix = f"repositories[{index}]"
+    assert isinstance(repository, dict), f"{prefix} must be a map"
+    for key in ("name", "path", "role"):
+        value = repository.get(key)
+        assert isinstance(value, str) and value.strip(), f"{prefix}.{key} must be a non-empty string"
+    name = repository["name"]
+    names.append(name)
+    for key in ("required_for", "depends_on"):
+        values = repository.get(key)
+        assert isinstance(values, list), f"{name}.{key} must be a list"
+        assert all(isinstance(value, str) and value.strip() for value in values), f"{name}.{key} entries must be non-empty strings"
+        assert len(values) == len(set(values)), f"{name}.{key} contains duplicate entries"
+    graph[name] = list(repository["depends_on"])
+
+assert len(names) == len(set(names)), "repository names must be unique"
+known = set(names)
+for name, dependencies in graph.items():
+    for dependency in dependencies:
+        assert dependency != name, f"{name}.depends_on must not reference itself"
+        assert dependency in known, f"{name}.depends_on references unknown repository: {dependency}"
+
+visiting = set()
+visited = set()
+stack = []
+
+def visit(name):
+    if name in visited:
+        return
+    if name in visiting:
+        start = stack.index(name)
+        cycle = stack[start:] + [name]
+        raise AssertionError("repository dependency cycle: " + " -> ".join(cycle))
+    visiting.add(name)
+    stack.append(name)
+    for dependency in graph[name]:
+        visit(dependency)
+    stack.pop()
+    visiting.remove(name)
+    visited.add(name)
+
+for name in names:
+    visit(name)
+PY
+  fail 'repos.yaml: structured registry validation failed'
+fi
 
 if yq -e '.repositories | type == "!!seq" and length > 0' "$workspace_root/repos.yaml" >/dev/null 2>&1; then
   mapfile -t repository_names < <(yq -r '.repositories[].name' "$workspace_root/repos.yaml")
