@@ -35,7 +35,8 @@ Workspace không sở hữu task DB, Knowledge Store hoặc bản copy Work Item
 
 `repos.yaml` là canonical repository registry cho workspace/repository identity, exact
 Git-root path, role, `required_for` và `depends_on`. QiQi dùng registry này để chọn
-repository và dependency wave.
+repository và dependency wave. `depends_on` biểu diễn orchestration precedence và phải
+là directed acyclic graph; cycle không tạo được executable dependency wave và bị checker reject.
 
 `SYSTEM_MAP.md` không lặp repository registry. Nó chỉ giữ cross-repo semantic facts mà
 registry không trả lời được: contracts, ownership/data boundaries, non-trivial integration
