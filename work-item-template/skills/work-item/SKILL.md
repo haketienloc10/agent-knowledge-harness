@@ -84,7 +84,7 @@ Every Work Item update uses one typed `WorkItemMutation` plus optimistic concurr
 
 ```text
 work_item_get -> latest revision/current state
-→ build current-state patch + smallest typed semantic operations
+→ build current-state patch + smallest grouped semantic mutations
 → work_item_update(id, expected_revision, mutation)
 → revision conflict: reread → reconcile → retry
 ```
@@ -96,8 +96,11 @@ mutation.state
   = current effective fields only
 
 mutation.operations
-  = typed incremental mutation of semantic lifecycle/history records
+  = grouped typed mutation of semantic lifecycle/history records
 ```
+
+Either branch may be omitted when unused. Do not send an empty `state` object merely as
+boilerplate.
 
 ### Current-state patch
 
@@ -120,35 +123,58 @@ Rules:
 - Historical semantic collections are intentionally **not** public full-array replacement
   fields in `mutation.state`.
 
-### Typed semantic operations
+### Grouped semantic operations
 
-Use the smallest operation that expresses the material change:
+`mutation.operations` is a typed object whose field names are the operation meaning
+itself. There is **no `op` discriminator and no `value` wrapper**:
+
+```json
+{
+  "operations": {
+    "blocker_upsert": [
+      {"id": "b1", "status": "resolved"}
+    ],
+    "checkpoint_append": [
+      {"repo": "backend", "summary": "Focused verification passed."}
+    ]
+  }
+}
+```
+
+Available groups:
 
 ```text
-checkpoint_append
-question_upsert
-decision_upsert
-change_upsert
-blocker_upsert
-handoff_upsert
+decision_upsert[]
+question_upsert[]
+change_upsert[]
+blocker_upsert[]
+handoff_upsert[]
+checkpoint_append[]
 ```
+
+Use only groups needed by the material change; omit empty groups. The declared MCP schema
+for each group exposes its record fields directly, so construct a valid mutation from the
+schema instead of probing it with intentionally incomplete/invalid `work_item_update`
+calls.
 
 Rules:
 
-- Up to 50 operations may be sent in one call.
-- Operations are applied in caller order and commit all-or-nothing under one whole Work
-  Item revision.
+- At most 50 semantic records total may be sent across all groups in one call.
+- All groups commit all-or-nothing under one whole Work Item revision and build one final
+  candidate document.
+- Cross-group ordering is **not** part of the public contract. Cross-record references are
+  validated against the final candidate, so related decision/question transitions may be
+  grouped in the same atomic call without relying on heterogeneous caller order.
+- List order inside a group is preserved where canonical ordering matters, including
+  checkpoint append order.
 - Do not target the same stable-id record twice in one mutation; reconcile it into one
-  deterministic operation.
+  deterministic record mutation.
 - A stale writer always conflicts, even when it targets a different collection/record.
-  The server never auto-rebases semantic operations.
+  The server never auto-rebases semantic mutations.
 - Existing stable-id records keep semantic identity/provenance. Upsert means create or
   monotonic lifecycle advance, not arbitrary historical rewrite.
 - Existing provenance/evidence extensions are additive: do not silently replace an
   established value.
-- Cross-record references are validated against the **final candidate document**, so one
-  atomic mutation may create a decision, supersede an old decision to it, and resolve a
-  question to it.
 
 Lifecycle contract:
 
@@ -273,8 +299,9 @@ Generic mapping:
 
 Implementation **must reconcile the Work Item even when no artifact is created**.
 Persist current implemented outcome and verification through `mutation.state`; append one
-material implementation checkpoint through `checkpoint_append` when a new milestone was
-established. Do not read/resend historical checkpoints for this common path.
+material implementation checkpoint through `mutation.operations.checkpoint_append` when a
+new milestone was established. Do not read/resend historical checkpoints for this common
+path.
 
 ### Review guardrail
 
@@ -309,19 +336,19 @@ Default `work_item_get` exposes only `open_questions`, `active_decisions`,
 canonical and audit-readable through scoped history.
 
 When a user/customer answer resolves a material question and the current role owns the
-reconciliation, prefer one atomic mutation:
+reconciliation, prefer one atomic grouped mutation:
 
 ```text
-decision_upsert(new active decision when appropriate)
-+ decision_upsert(old decision -> superseded when applicable)
-+ question_upsert(open -> resolved)
-+ mutation.state.current_requirements when semantics changed
-+ change_upsert when effective requirement/scope actually changed
-+ blocker_upsert / handoff_upsert / mutation.state.next_actions when applicable
+operations.decision_upsert = [new active decision, old decision -> superseded if needed]
+operations.question_upsert = [open question -> resolved]
+operations.change_upsert   = [effective requirement/scope change when one occurred]
+operations.blocker_upsert / handoff_upsert when applicable
+state.current_requirements / next_actions when current state changed
 ```
 
 Because references validate on the final candidate document, the new decision and the
-question/decision transitions may be in the same call.
+question/decision transitions may be in the same call without depending on cross-group
+execution order.
 
 A repository execution agent does not use these mechanics to exceed current-repo
 authority; product/customer decisions and global orchestration remain with QiQi when
@@ -370,8 +397,9 @@ For a substantive turn with a canonical Work Item:
 1. Ensure decisions/actions used the latest relevant bounded Work Item state.
 2. Read scoped history only when exact provenance is materially needed.
 3. Persist current effective fields through `mutation.state` within role authority.
-4. Persist semantic lifecycle/history changes with the smallest typed operations; never
-   reconstruct or resend a historical collection for a local record change.
+4. Persist semantic lifecycle/history changes with the smallest direct groups under
+   `mutation.operations`; never reconstruct or resend a historical collection for a local
+   record change, and never probe the schema by submitting intentionally invalid mutations.
 5. Add/update verification and append one material checkpoint when applicable.
 6. Persist blocker/question/handoff/next action when materially required.
 7. If a revision conflict occurs, reread current state, reconcile the intended mutation,
