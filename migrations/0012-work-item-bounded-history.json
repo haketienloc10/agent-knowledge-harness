@@ -1,8 +1,8 @@
 {
   "version": 12,
   "from_ref": "ebdda009b8cced791d5f56716653155be49fb828",
-  "to_ref": "3152feef4d15858ad328b39fe5508f970da53109",
-  "description": "adopt bounded Work Item current-state/history reads plus typed incremental semantic mutations and compact receipts while carrying forward the strict Delegation Silence workspace invariant; rerun work-item-template/scripts/install-user-mcp.sh after migration to refresh the user-scoped MCP/skill",
+  "to_ref": "55ce6ad93aef931ebb94e6e15201f32b856f15fd",
+  "description": "adopt bounded Work Item current-state/history reads plus grouped typed incremental semantic mutations and compact receipts while carrying forward the strict Delegation Silence workspace invariant; rerun work-item-template/scripts/install-user-mcp.sh after migration to refresh the user-scoped MCP/skill and discover direct mutation.operations groups without the legacy op/value envelope",
   "workspace": {
     "merge": [
       "workspace-template/AGENTS.md"
