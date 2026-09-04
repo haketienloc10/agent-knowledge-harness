@@ -45,54 +45,51 @@ class WorkItemBoundedReadTests(unittest.TestCase):
         receipt = self._apply(
             revision,
             {
-                "operations": [
-                    {
-                        "op": "decision_upsert",
-                        "value": {
+                "operations": {
+                    "decision_upsert": [
+                        {
                             "id": f"d{i}",
                             "status": "active" if i >= 25 else "superseded",
                             "summary": f"Decision {i}",
                             **({"superseded_by": "d25"} if i < 25 else {}),
-                        },
-                    }
-                    for i in range(30)
-                ]
+                        }
+                        for i in range(30)
+                    ]
+                }
             },
         )
         revision = receipt["revision"]
         receipt = self._apply(
             revision,
             {
-                "operations": [
-                    {
-                        "op": "question_upsert",
-                        "value": {
+                "operations": {
+                    "question_upsert": [
+                        {
                             "id": f"q{i}",
                             "status": "open" if i >= 28 else "resolved",
                             "question": f"Question {i}?",
                             **({"answer": f"Answer {i}"} if i < 28 else {}),
-                        },
-                    }
-                    for i in range(30)
-                ]
+                        }
+                        for i in range(30)
+                    ]
+                }
             },
         )
         revision = receipt["revision"]
         receipt = self._apply(
             revision,
             {
-                "operations": [
-                    {
-                        "op": "change_upsert",
-                        "value": {
+                "operations": {
+                    "change_upsert": [
+                        {
                             "id": f"c{i}",
                             "type": "scope_changed",
                             "status": "accepted",
                             "summary": f"Change {i}",
-                        },
-                    }
-                    for i in range(30)
-                ]
+                        }
+                        for i in range(30)
+                    ]
+                }
             },
         )
         revision = receipt["revision"]
@@ -100,17 +97,16 @@ class WorkItemBoundedReadTests(unittest.TestCase):
             receipt = self._apply(
                 revision,
                 {
-                    "operations": [
-                        {
-                            "op": "checkpoint_append",
-                            "value": {
+                    "operations": {
+                        "checkpoint_append": [
+                            {
                                 "repo": "api" if i % 2 == 0 else "web",
                                 "summary": f"Checkpoint {i}",
                                 "kind": "verification",
-                            },
-                        }
-                        for i in range(start, start + 50)
-                    ]
+                            }
+                            for i in range(start, start + 50)
+                        ]
+                    }
                 },
             )
             revision = receipt["revision"]
@@ -120,36 +116,28 @@ class WorkItemBoundedReadTests(unittest.TestCase):
                 "state": {
                     "next_actions": [{"repo": "web", "action": "Continue implementation"}]
                 },
-                "operations": [
-                    {
-                        "op": "blocker_upsert",
-                        "value": {"id": "b1", "status": "resolved", "summary": "Old blocker"},
-                    },
-                    {
-                        "op": "blocker_upsert",
-                        "value": {"id": "b2", "status": "open", "summary": "Current blocker"},
-                    },
-                    {
-                        "op": "handoff_upsert",
-                        "value": {
+                "operations": {
+                    "blocker_upsert": [
+                        {"id": "b1", "status": "resolved", "summary": "Old blocker"},
+                        {"id": "b2", "status": "open", "summary": "Current blocker"},
+                    ],
+                    "handoff_upsert": [
+                        {
                             "id": "h1",
                             "from": "api",
                             "to": "web",
                             "status": "resolved",
                             "summary": "Old handoff",
                         },
-                    },
-                    {
-                        "op": "handoff_upsert",
-                        "value": {
+                        {
                             "id": "h2",
                             "from": "api",
                             "to": "web",
                             "status": "pending",
                             "summary": "Current handoff",
                         },
-                    },
-                ],
+                    ],
+                },
             },
         )
         return receipt
@@ -238,28 +226,24 @@ class WorkItemBoundedReadTests(unittest.TestCase):
             other["id"],
             other["revision"],
             {
-                "operations": [
-                    {
-                        "op": "decision_upsert",
-                        "value": {
+                "operations": {
+                    "decision_upsert": [
+                        {
                             "id": "other-next",
                             "status": "active",
                             "summary": "Current decision",
                         },
-                    },
-                    *[
-                        {
-                            "op": "decision_upsert",
-                            "value": {
+                        *[
+                            {
                                 "id": f"other-d{i}",
                                 "status": "superseded",
                                 "summary": f"Other decision {i}",
                                 "superseded_by": "other-next",
-                            },
-                        }
-                        for i in range(6)
-                    ],
-                ]
+                            }
+                            for i in range(6)
+                        ],
+                    ]
+                }
             },
         )
         # Bring the second item to the same whole revision to reproduce the dangerous
