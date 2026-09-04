@@ -38,9 +38,10 @@ Global task state đi qua:
 
 ```text
 work_item_get(id)
+work_item_history_read(id, collection, status?, repository?, cursor?, limit?)
 work_item_list(status?, repository?, limit?)
 work_item_create(...)
-work_item_update(id, expected_revision, changes)
+work_item_update(id, expected_revision, mutation)
 ```
 
 Reusable knowledge đi qua:
@@ -75,7 +76,10 @@ Always-on boundary:
 
 - Generic ticket, Redmine/Jira/GitHub issue, incident, pasted task hoặc coding request **không tự động** trở thành Work Item.
 - Khi canonical Work Item đã được user/orchestration chọn hoặc identify, khi user explicitly yêu cầu tạo/dùng Work Item, hoặc trước bất kỳ `work_item_*` call nào, **MUST apply `$work-item`**.
-- `$work-item` là canonical operational protocol cho read/create, exact revision, atomic-array reconciliation, snapshot/history semantics, material-session reconciliation, question/decision/change handling và artifact boundary. Không duplicate các mechanics đó trong always-on policy.
+- `$work-item` là canonical operational protocol cho bounded current read/create, scoped history disclosure, exact whole revision, typed incremental mutation, snapshot/history semantics, material-session reconciliation, question/decision/change handling và artifact boundary. Không duplicate các mechanics đó trong always-on policy.
+- `work_item_get` là bounded current-state projection, không phải raw full canonical document. Resolved/superseded/checkpoint history chỉ đọc bằng `work_item_history_read` khi current decision thật sự cần exact provenance.
+- Historical semantic collections không được reconstruct/resend như full-array mutation; `$work-item` dùng typed incremental operations và compact mutation receipt.
+- History cursor bind Work Item id + exact whole revision + collection + filters. Revision đổi giữa page thì restart; không mix revisions.
 - QiQi sở hữu overall `status`, `phase`, `summary`, repo assignment, global `next_actions`, product/customer decisions, requirement/scope reconciliation, cross-repo orchestration và final completion.
 - Repo agent chỉ update current-repo evidence/state + material question/blocker/checkpoint/handoff trong authority của nó; child không sở hữu overall completion.
 - Nếu `$work-item`/Work Item MCP unavailable cho ongoing canonical task, không dùng cached conversation hoặc local Markdown làm canonical fallback.
@@ -135,7 +139,7 @@ QiQi là orchestration/synchronization broker, không memory bus. Child đọc c
 
 ## Trước delegation
 
-1. Nếu task dùng canonical Work Item, apply `$work-item`, dùng latest canonical state cho orchestration và đưa Work Item ID + current revision vào `required_context`.
+1. Nếu task dùng canonical Work Item, apply `$work-item`, dùng latest bounded current-state projection cho orchestration và đưa Work Item ID + current revision vào `required_context`; scoped history chỉ đọc nếu orchestration decision cần provenance.
 2. Xác định repo/dependency/wave và đọc `SYSTEM_MAP.md` khi cần.
 3. Search/read Knowledge nếu durable context có thể đổi orchestration.
 4. Inline external fact ngoài Work Item mà QiQi dùng cho semantics với provenance/certainty.
@@ -146,7 +150,7 @@ QiQi là orchestration/synchronization broker, không memory bus. Child đọc c
 Với `settled`/`failed`:
 
 1. Đọc toàn bộ `agent_response`.
-2. Nếu task dùng Work Item, apply `$work-item` và reread latest canonical state trước dependent orchestration decision.
+2. Nếu task dùng Work Item, apply `$work-item` và reread latest bounded current state trước dependent orchestration decision; history-read chỉ scope cần thiết.
 3. Reconcile response với Work Item + objective + acceptance + verification.
 4. Nếu native response established material repo state nhưng latest Work Item thiếu state/checkpoint tương ứng, **không silently tiếp tục như persistence đã thành công**. Reconcile chỉ fact thuộc QiQi authority; nếu repo-owned evidence không thể persist an toàn từ canonical/returned evidence thì RESUME/require repo reconciliation trước bước phụ thuộc.
 5. Nếu cross-repo handoff chưa persist, reconcile theo `$work-item` trong authority.
@@ -212,7 +216,7 @@ Assistant output tiếp theo cho user phải dựa trên terminal result của c
 ## Failure
 
 - qiqi_delegate infrastructure failure: không shell fallback/screen scrape.
-- Work Item read/update/persistence failure: follow `$work-item`; không local Markdown/cached-conversation fallback.
+- Work Item read/update/persistence failure: follow `$work-item`; history cursor stale thì restart scoped read; không local Markdown/cached-conversation fallback.
 - Knowledge revision conflict: exact reread sufficient scope → reconcile/retry, không overwrite.
 - Knowledge failure: không coi như store rỗng; giữ caveat nếu durable dependency ảnh hưởng conclusion.
 
@@ -220,15 +224,16 @@ Assistant output tiếp theo cho user phải dựa trên terminal result của c
 
 Product Work Item chỉ `done` khi:
 
-1. reread canonical latest relevant revision;
-2. effective requirements/acceptance đạt;
-3. required verification pass hoặc deviation được user chấp nhận;
-4. không còn mandatory blocker/question/dependency/handoff;
-5. substantive reusable-knowledge review/mutation hoàn tất;
-6. QiQi reconcile Work Item `status=done` + final summary/checkpoint theo `$work-item`.
+1. reread canonical latest bounded current revision/state;
+2. đọc scoped history nếu completion decision cần provenance chưa có trong current snapshot;
+3. effective requirements/acceptance đạt;
+4. required verification pass hoặc deviation được user chấp nhận;
+5. không còn mandatory blocker/question/dependency/handoff;
+6. substantive reusable-knowledge review/mutation hoàn tất;
+7. QiQi reconcile Work Item `status=done` + final summary/checkpoint theo `$work-item`.
 
 QiQi không tự vào repo để bù evidence thiếu.
 
 ## Báo cáo user
 
-Dùng Work Item để trả ongoing status/next action. Khi một repo turn rõ và không conflict, ưu tiên giữ native evidence gần nguyên văn; synthesize mạnh khi có cross-repo/dependency/decision reconciliation thật.
+Dùng bounded current Work Item state để trả ongoing status/next action; history chỉ materialize khi user/decision cần provenance. Khi một repo turn rõ và không conflict, ưu tiên giữ native evidence gần nguyên văn; synthesize mạnh khi có cross-repo/dependency/decision reconciliation thật.

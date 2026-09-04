@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import copy
 import json
 import re
@@ -22,6 +23,24 @@ CHANGE_TYPES = {
 CHANGE_STATUSES = {"proposed", "accepted", "rejected", "superseded"}
 BLOCKER_STATUSES = {"open", "resolved"}
 HANDOFF_STATUSES = {"pending", "resolved"}
+HISTORY_COLLECTIONS = {
+    "questions",
+    "decisions",
+    "changes",
+    "checkpoints",
+    "blockers",
+    "handoffs",
+}
+HISTORY_STATUS_BY_COLLECTION = {
+    "questions": QUESTION_STATUSES,
+    "decisions": DECISION_STATUSES,
+    "changes": CHANGE_STATUSES,
+    "blockers": BLOCKER_STATUSES,
+    "handoffs": HANDOFF_STATUSES,
+}
+HISTORY_REPOSITORY_FILTER_COLLECTIONS = {"checkpoints"}
+HISTORY_LIMIT_MAX = 200
+WORK_ITEM_DATA_VERSION = 1
 
 REQUIRED_COLLECTIONS = (
     "current_requirements",
@@ -65,6 +84,68 @@ def resolve_db_path(value: str | Path) -> Path:
     return path
 
 
+def _migrate_legacy_lifecycle_statuses(conn: sqlite3.Connection) -> None:
+    """One-time canonical migration for pre-v1 question/decision lifecycle records.
+
+    Earlier stores allowed question/decision records without an explicit lifecycle status.
+    The old effective semantics were open/active. Persist those semantics explicitly and
+    advance the whole Work Item revision because canonical JSON changed.
+    """
+    current_version = int(conn.execute("PRAGMA user_version").fetchone()[0])
+    if current_version >= WORK_ITEM_DATA_VERSION:
+        return
+
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        current_version = int(conn.execute("PRAGMA user_version").fetchone()[0])
+        if current_version >= WORK_ITEM_DATA_VERSION:
+            conn.execute("COMMIT")
+            return
+
+        rows = conn.execute(
+            "SELECT id, revision, document_json FROM work_items ORDER BY id ASC"
+        ).fetchall()
+        for row in rows:
+            document = json.loads(row["document_json"])
+            changed = False
+            for question in document.get("questions", []):
+                if isinstance(question, dict) and question.get("status") is None:
+                    question["status"] = "open"
+                    changed = True
+            for decision in document.get("decisions", []):
+                if isinstance(decision, dict) and decision.get("status") is None:
+                    decision["status"] = "active"
+                    changed = True
+            if not changed:
+                continue
+            encoded = json.dumps(
+                document,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            conn.execute(
+                """
+                UPDATE work_items
+                SET revision = ?, document_json = ?, updated_at = ?
+                WHERE id = ? AND revision = ?
+                """,
+                (
+                    int(row["revision"]) + 1,
+                    encoded,
+                    _now_iso(),
+                    row["id"],
+                    row["revision"],
+                ),
+            )
+        conn.execute(f"PRAGMA user_version = {WORK_ITEM_DATA_VERSION}")
+        conn.execute("COMMIT")
+    except Exception:
+        if conn.in_transaction:
+            conn.execute("ROLLBACK")
+        raise
+
+
 def _connect(db_path: str | Path) -> sqlite3.Connection:
     path = resolve_db_path(db_path)
     conn = sqlite3.connect(path, timeout=5.0, isolation_level=None)
@@ -87,6 +168,7 @@ def _connect(db_path: str | Path) -> sqlite3.Connection:
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_work_items_status ON work_items(status)"
     )
+    _migrate_legacy_lifecycle_statuses(conn)
     return conn
 
 
@@ -206,7 +288,9 @@ def validate_document(document: Any) -> dict[str, Any]:
     )
     for index, question in enumerate(document["questions"]):
         _required_text(question.get("question"), f"questions[{index}].question")
-        status_value = question.get("status")
+        if "status" not in question:
+            raise ValidationError(f"questions[{index}].status is required")
+        status_value = question["status"]
         if status_value == "resolved" and not (
             isinstance(question.get("answer"), str) and question["answer"].strip()
         ) and not (
@@ -220,7 +304,9 @@ def validate_document(document: Any) -> dict[str, Any]:
     )
     for index, decision in enumerate(document["decisions"]):
         _required_text(decision.get("summary"), f"decisions[{index}].summary")
-        if decision.get("status") == "superseded":
+        if "status" not in decision:
+            raise ValidationError(f"decisions[{index}].status is required")
+        if decision["status"] == "superseded":
             _required_text(
                 decision.get("superseded_by"),
                 f"decisions[{index}].superseded_by",
@@ -368,7 +454,8 @@ def create_work_item(db_path: str | Path, document: dict[str, Any]) -> dict[str,
         conn.close()
 
 
-def get_work_item(db_path: str | Path, item_id: str) -> dict[str, Any]:
+def load_work_item_document(db_path: str | Path, item_id: str) -> dict[str, Any]:
+    """Load the complete canonical stored document for internal core/mutation use."""
     item_id = _required_text(item_id, "id", max_chars=256)
     conn = _connect(db_path)
     try:
@@ -378,6 +465,188 @@ def get_work_item(db_path: str | Path, item_id: str) -> dict[str, Any]:
         return _row_to_result(row)
     finally:
         conn.close()
+
+
+def get_work_item(db_path: str | Path, item_id: str) -> dict[str, Any]:
+    """Compatibility alias for internal callers that still need the full canonical document."""
+    return load_work_item_document(db_path, item_id)
+
+
+def _collection_summary(total: int, current: int | None = None) -> dict[str, int]:
+    result = {"total": total}
+    if current is not None:
+        result["current"] = current
+        result["hidden"] = total - current
+    return result
+
+
+def project_work_item_snapshot(document: dict[str, Any]) -> dict[str, Any]:
+    """Project one full canonical document into the bounded current-state read model."""
+    open_questions = [item for item in document["questions"] if item["status"] == "open"]
+    active_decisions = [item for item in document["decisions"] if item["status"] == "active"]
+    open_blockers = [item for item in document["blockers"] if item["status"] == "open"]
+    pending_handoffs = [item for item in document["handoffs"] if item["status"] == "pending"]
+
+    return {
+        "id": document["id"],
+        "revision": document["revision"],
+        "created_at": document["created_at"],
+        "updated_at": document["updated_at"],
+        "title": document["title"],
+        "status": document["status"],
+        "phase": document["phase"],
+        "summary": document["summary"],
+        "current_requirements": copy.deepcopy(document["current_requirements"]),
+        "repos": copy.deepcopy(document["repos"]),
+        "open_questions": copy.deepcopy(open_questions),
+        "active_decisions": copy.deepcopy(active_decisions),
+        "open_blockers": copy.deepcopy(open_blockers),
+        "pending_handoffs": copy.deepcopy(pending_handoffs),
+        "next_actions": copy.deepcopy(document["next_actions"]),
+        "history": {
+            "questions": _collection_summary(len(document["questions"]), len(open_questions)),
+            "decisions": _collection_summary(len(document["decisions"]), len(active_decisions)),
+            "changes": _collection_summary(len(document["changes"])),
+            "checkpoints": _collection_summary(len(document["checkpoints"])),
+            "blockers": _collection_summary(len(document["blockers"]), len(open_blockers)),
+            "handoffs": _collection_summary(len(document["handoffs"]), len(pending_handoffs)),
+        },
+    }
+
+
+def get_work_item_snapshot(db_path: str | Path, item_id: str) -> dict[str, Any]:
+    return project_work_item_snapshot(load_work_item_document(db_path, item_id))
+
+
+def _encode_history_cursor(payload: dict[str, Any]) -> str:
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return base64.urlsafe_b64encode(encoded).decode("ascii").rstrip("=")
+
+
+def _decode_history_cursor(cursor: str) -> dict[str, Any]:
+    cursor = _required_text(cursor, "cursor", max_chars=4096)
+    try:
+        padding = "=" * (-len(cursor) % 4)
+        decoded = base64.urlsafe_b64decode((cursor + padding).encode("ascii"))
+        payload = json.loads(decoded.decode("utf-8"))
+    except (UnicodeEncodeError, UnicodeDecodeError, ValueError, json.JSONDecodeError) as exc:
+        raise ValidationError("history cursor is malformed") from exc
+    if not isinstance(payload, dict):
+        raise ValidationError("history cursor is malformed")
+    required = {"v", "id", "revision", "collection", "status", "repository", "next_index"}
+    if set(payload) != required or payload.get("v") != 1:
+        raise ValidationError("history cursor is malformed or unsupported")
+    item_id = _required_text(payload["id"], "history cursor id", max_chars=256)
+    if not WORK_ITEM_ID_RE.fullmatch(item_id):
+        raise ValidationError("history cursor id is invalid")
+    if not isinstance(payload["revision"], int) or isinstance(payload["revision"], bool):
+        raise ValidationError("history cursor revision is invalid")
+    if not isinstance(payload["next_index"], int) or isinstance(payload["next_index"], bool) or payload["next_index"] < 0:
+        raise ValidationError("history cursor offset is invalid")
+    return payload
+
+
+def _validate_history_query(
+    collection: str,
+    status: str | None,
+    repository: str | None,
+    limit: int,
+) -> tuple[str, str | None, str | None, int]:
+    collection = _required_text(collection, "collection", max_chars=64)
+    if collection not in HISTORY_COLLECTIONS:
+        allowed = ", ".join(sorted(HISTORY_COLLECTIONS))
+        raise ValidationError(f"collection must be one of: {allowed}")
+    if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= HISTORY_LIMIT_MAX:
+        raise ValidationError(f"limit must be an integer between 1 and {HISTORY_LIMIT_MAX}")
+
+    if status is not None:
+        status = _required_text(status, "status", max_chars=64)
+        allowed_statuses = HISTORY_STATUS_BY_COLLECTION.get(collection)
+        if allowed_statuses is None:
+            raise ValidationError(f"status filter is not supported for {collection}")
+        if status not in allowed_statuses:
+            allowed = ", ".join(sorted(allowed_statuses))
+            raise ValidationError(f"status for {collection} must be one of: {allowed}")
+
+    if repository is not None:
+        repository = _required_text(repository, "repository", max_chars=256)
+        if collection not in HISTORY_REPOSITORY_FILTER_COLLECTIONS:
+            raise ValidationError(f"repository filter is not supported for {collection}")
+
+    return collection, status, repository, limit
+
+
+def read_work_item_history(
+    db_path: str | Path,
+    item_id: str,
+    *,
+    collection: str,
+    status: str | None = None,
+    repository: str | None = None,
+    cursor: str | None = None,
+    limit: int = 50,
+) -> dict[str, Any]:
+    collection, status, repository, limit = _validate_history_query(
+        collection, status, repository, limit
+    )
+    document = load_work_item_document(db_path, item_id)
+    start = 0
+    if cursor is not None:
+        payload = _decode_history_cursor(cursor)
+        if payload["id"] != document["id"]:
+            raise ValidationError("history cursor does not match Work Item")
+        if payload["revision"] != document["revision"]:
+            raise ConflictError(
+                f"history revision conflict for {item_id}: cursor revision "
+                f"{payload['revision']}, current {document['revision']}; restart history read"
+            )
+        expected_query = {
+            "collection": collection,
+            "status": status,
+            "repository": repository,
+        }
+        actual_query = {
+            "collection": payload["collection"],
+            "status": payload["status"],
+            "repository": payload["repository"],
+        }
+        if actual_query != expected_query:
+            raise ValidationError("history cursor does not match collection or filters")
+        start = payload["next_index"]
+
+    items = document[collection]
+    if status is not None:
+        items = [item for item in items if item.get("status") == status]
+    if repository is not None:
+        items = [item for item in items if item.get("repo") == repository]
+
+    page_items = items[start : start + limit]
+    next_index = start + len(page_items)
+    next_cursor = None
+    if next_index < len(items):
+        next_cursor = _encode_history_cursor(
+            {
+                "v": 1,
+                "id": document["id"],
+                "revision": document["revision"],
+                "collection": collection,
+                "status": status,
+                "repository": repository,
+                "next_index": next_index,
+            }
+        )
+
+    return {
+        "id": document["id"],
+        "revision": document["revision"],
+        "collection": collection,
+        "status": status,
+        "repository": repository,
+        "items": copy.deepcopy(page_items),
+        "returned": len(page_items),
+        "total": len(items),
+        "next_cursor": next_cursor,
+    }
 
 
 def _merge_patch(target: Any, patch: Any) -> Any:
@@ -434,7 +703,7 @@ def update_work_item(
         now = _now_iso()
         new_revision = expected_revision + 1
         encoded = json.dumps(merged, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-        cursor = conn.execute(
+        db_cursor = conn.execute(
             """
             UPDATE work_items
             SET revision = ?, status = ?, document_json = ?, updated_at = ?
@@ -442,7 +711,7 @@ def update_work_item(
             """,
             (new_revision, merged["status"], encoded, now, item_id, expected_revision),
         )
-        if cursor.rowcount != 1:
+        if db_cursor.rowcount != 1:
             raise ConflictError(f"revision conflict for {item_id}; reread before retrying")
         updated = conn.execute("SELECT * FROM work_items WHERE id = ?", (item_id,)).fetchone()
         conn.execute("COMMIT")
