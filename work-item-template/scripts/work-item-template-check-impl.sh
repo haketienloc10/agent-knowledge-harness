@@ -126,6 +126,7 @@ funcs = {
 update = funcs["work_item_update"]
 mutation_arg = next(arg for arg in update.args.args if arg.arg == "mutation")
 source = ast.get_source_segment(text, update) or ""
+source_lower = source.lower()
 assert isinstance(mutation_arg.annotation, ast.Name)
 assert mutation_arg.annotation.id == "WorkItemMutation"
 assert "mutation.to_core_mutation()" in source
@@ -133,10 +134,10 @@ assert "mutate_work_item(" in source
 assert "update_work_item(" not in source
 assert "_work_item_update_error_result" in source
 assert "except (ValidationError, ConflictError, NotFoundError)" in source
-assert "direct typed groups" in source
-assert "there is no op/value envelope" in source
-assert "Cross-group ordering is not" in source
-assert "applied in caller order" not in source
+assert "direct typed groups" in source_lower
+assert "there is no op/value envelope" in source_lower
+assert "cross-group ordering is not" in source_lower
+assert "applied in caller order" not in source_lower
 PY
 then
   fail 'server.py: work_item_update must expose grouped WorkItemMutation and route only through incremental mutation engine'
@@ -278,8 +279,6 @@ for pattern in \
   '_validate_cross_record_references' \
   'BEGIN IMMEDIATE' \
   'revision conflict' \
-  'validate_document(current)' \
-  'validate_document(candidate)' \
   'cross-group ordering is not part of the public contract' \
   'mutation does not change canonical Work Item state' \
   '"updated": True' \
@@ -288,7 +287,10 @@ for pattern in \
 done
 
 # Mutation write path must stay one whole-document optimistic transaction. It must not
-# hydrate public read surfaces, loop on conflicts, or recursively re-enter itself.
+# hydrate public read surfaces, loop on conflicts, or recursively re-enter itself. The
+# current canonical document and final candidate must both pass validate_document before
+# mutation continuation/persistence; pin those semantics structurally rather than through
+# regex over Python call syntax.
 if ! MUTATIONS_PATH="$mutations" python3 - <<'PY'
 import ast
 import os
@@ -306,6 +308,21 @@ call_names = {
     for node in ast.walk(mutate)
     if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
 }
+validation_targets = set()
+for node in ast.walk(mutate):
+    if not isinstance(node, ast.Assign) or len(node.targets) != 1:
+        continue
+    target = node.targets[0]
+    value = node.value
+    if not isinstance(target, ast.Name) or not isinstance(value, ast.Call):
+        continue
+    if not isinstance(value.func, ast.Name) or value.func.id != "validate_document":
+        continue
+    if len(value.args) != 1 or not isinstance(value.args[0], ast.Name):
+        continue
+    if value.args[0].id == target.id:
+        validation_targets.add(target.id)
+assert {"current", "candidate"} <= validation_targets
 assert "get_work_item_snapshot" not in call_names
 assert "read_work_item_history" not in call_names
 assert "mutate_work_item" not in call_names
@@ -318,7 +335,7 @@ assert not any(
 )
 PY
 then
-  fail 'mutations.py: mutation engine must not hydrate public reads or auto-retry/rebase stale operations'
+  fail 'mutations.py: mutation engine must validate current/final documents and must not hydrate public reads or auto-retry/rebase stale operations'
 fi
 
 for pattern in \
