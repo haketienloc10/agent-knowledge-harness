@@ -12,9 +12,10 @@ from server import _work_item_update_error_result
 
 
 class WorkItemUpdateServerContractTests(unittest.TestCase):
-    def test_update_tool_exposes_typed_mutation(self) -> None:
+    def test_update_tool_exposes_typed_grouped_mutation(self) -> None:
         server_path = Path(__file__).resolve().parents[1] / "server.py"
-        tree = ast.parse(server_path.read_text(encoding="utf-8"))
+        text = server_path.read_text(encoding="utf-8")
+        tree = ast.parse(text)
         update = next(
             node
             for node in tree.body
@@ -26,10 +27,14 @@ class WorkItemUpdateServerContractTests(unittest.TestCase):
             if arg.annotation is not None
         }
         self.assertEqual(args["mutation"], "WorkItemMutation")
-        source = ast.get_source_segment(server_path.read_text(encoding="utf-8"), update) or ""
+        source = ast.get_source_segment(text, update) or ""
         self.assertIn("mutation.to_core_mutation()", source)
         self.assertIn("mutate_work_item", source)
         self.assertNotIn("update_work_item(", source)
+        self.assertIn("direct typed groups", source)
+        self.assertIn("there is no op/value envelope", source)
+        self.assertIn("cross-group ordering is not", source)
+        self.assertNotIn("applied in caller order", source)
 
     def test_validation_failure_is_structured(self) -> None:
         result = _work_item_update_error_result(
@@ -41,7 +46,8 @@ class WorkItemUpdateServerContractTests(unittest.TestCase):
         self.assertEqual(result["error"]["code"], "work_item_validation")
         self.assertIn("question_upsert", result["error"]["message"])
         self.assertIn("WorkItemMutation", result["error"]["action"])
-        self.assertIn("typed incremental operations", result["error"]["action"])
+        self.assertIn("grouped fields", result["error"]["action"])
+        self.assertIn("op/value", result["error"]["action"])
 
     def test_revision_conflict_is_structured_without_full_history_retry_guidance(self) -> None:
         result = _work_item_update_error_result(
