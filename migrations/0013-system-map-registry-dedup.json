@@ -1,7 +1,7 @@
 {
   "version": 13,
   "from_ref": "5f688cc444623a3fb90107fb1ea614f4fdd85cb9",
-  "to_ref": "acd27006cebcad591cc5e0a2d4c9daa45151cefd",
+  "to_ref": "5fdec3697332b38d63ab98032ad30494b0e7dcbb",
   "description": "make repos.yaml the canonical repository registry, remove registry duplication from SYSTEM_MAP, narrow System Map activation to cross-repo semantics, and validate registry dependency references; SYSTEM_MAP uses three-way merge so local semantic content is never silently replaced",
   "workspace": {
     "merge": [
@@ -9,6 +9,7 @@
       "workspace-template/SYSTEM_MAP.md"
     ],
     "replace": [
+      "workspace-template/README.md",
       "workspace-template/docs/WORKSPACE_SETUP.md",
       "workspace-template/scripts/workspace-check.sh"
     ],
