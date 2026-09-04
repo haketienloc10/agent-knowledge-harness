@@ -77,6 +77,9 @@ for pattern in \
   'blocker_upsert' \
   'handoff_upsert' \
   'checkpoint_append' \
+  'grouped typed operations object' \
+  'do not send op/value envelopes' \
+  'cross-group ordering is not part of the public contract' \
   'compact receipt' \
   'work_item_artifact_list' \
   'work_item_artifact_get' \
@@ -104,9 +107,9 @@ tool_count="$(rg -c '^@mcp\.tool\(\)$' "$server" || true)"
 [[ "$tool_count" == "11" ]] || \
   fail "server.py: expected exactly eleven public MCP tools (5 Work Item + 6 artifact), found $tool_count"
 
-# CRITICAL TYPED INCREMENTAL UPDATE INVARIANT — DO NOT REMOVE OR WEAKEN THIS CHECK.
-# Historical semantic collections must not return to public full-array replacement. The
-# MCP exposes one typed mutation envelope so state + semantic commands commit atomically.
+# CRITICAL TYPED GROUPED UPDATE INVARIANT — DO NOT REMOVE OR WEAKEN THIS CHECK.
+# Historical semantic collections must not return to public full-array replacement or
+# nested discriminated-union op/value envelopes.
 if ! SERVER_PATH="$server" python3 - <<'PY'
 import ast
 import os
@@ -130,9 +133,13 @@ assert "mutate_work_item(" in source
 assert "update_work_item(" not in source
 assert "_work_item_update_error_result" in source
 assert "except (ValidationError, ConflictError, NotFoundError)" in source
+assert "direct typed groups" in source
+assert "there is no op/value envelope" in source
+assert "Cross-group ordering is not" in source
+assert "applied in caller order" not in source
 PY
 then
-  fail 'server.py: work_item_update must expose WorkItemMutation and route only through incremental mutation engine'
+  fail 'server.py: work_item_update must expose grouped WorkItemMutation and route only through incremental mutation engine'
 fi
 
 # CRITICAL BOUNDED READ INVARIANT — public GET must never regress to raw full-document
@@ -172,8 +179,6 @@ then
 fi
 
 # CRITICAL ARTIFACT TEMPLATE BOUNDARY — guidance is startup advisory data only.
-# It may enrich artifact-create response from memory, but storage/list/get/read/finalize
-# must remain independent of template config and must not enforce template sections.
 if ! SERVER_PATH="$server" python3 - <<'PY'
 import ast
 import os
@@ -199,9 +204,8 @@ then
   fail 'server.py: artifact create must attach advisory in-memory guidance without a post-commit DB enrichment query'
 fi
 
-# CRITICAL MUTATION RESPONSE INVARIANT — DO NOT REMOVE OR WEAKEN THIS CHECK.
-# A committed Work Item update returns the bounded receipt produced by the mutation
-# transaction and never depends on a second artifact/snapshot query.
+# CRITICAL MUTATION RESPONSE INVARIANT — committed updates return the bounded receipt
+# produced by the transaction and never depend on a second snapshot/history query.
 if ! SERVER_PATH="$server" python3 - <<'PY'
 import ast
 import os
@@ -258,6 +262,9 @@ done
 for pattern in \
   'MUTATION_OPERATION_MAX = 50' \
   'STATE_FIELDS' \
+  'OPERATION_GROUP_ORDER' \
+  'mutation.operations must be a grouped object' \
+  'at most .* total records' \
   'LIFECYCLE_TRANSITIONS' \
   'IMMUTABLE_FIELDS' \
   'WRITE_ONCE_FIELDS' \
@@ -273,10 +280,11 @@ for pattern in \
   'revision conflict' \
   'validate_document(current)' \
   'validate_document(candidate)' \
+  'cross-group ordering is not part of the public contract' \
   'mutation does not change canonical Work Item state' \
   '"updated": True' \
   '"changed": changed'; do
-  rg -F -q "$pattern" "$mutations" || fail "mutations.py: missing incremental mutation invariant: $pattern"
+  rg -q "$pattern" "$mutations" || fail "mutations.py: missing grouped mutation invariant: $pattern"
 done
 
 # Mutation write path must stay one whole-document optimistic transaction. It must not
@@ -329,12 +337,9 @@ for pattern in \
   'class RequirementChangeMutation' \
   'class BlockerMutation' \
   'class HandoffMutation' \
-  'class CheckpointAppendOperation' \
-  'class QuestionUpsertOperation' \
-  'class DecisionUpsertOperation' \
-  'class ChangeUpsertOperation' \
-  'class BlockerUpsertOperation' \
-  'class HandoffUpsertOperation' \
+  'class WorkItemOperations' \
+  'operation_count' \
+  'to_core_operations' \
   'class WorkItemMutation' \
   'MUTATION_OPERATION_MAX = 50' \
   'Required canonical question lifecycle' \
@@ -351,13 +356,14 @@ for pattern in \
   'artifact_id: str | None' \
   'not an enum or workflow FSM' \
   'Partial semantic command' \
+  'there is no op/value envelope' \
+  'cross-group order is not part of the public contract' \
   'Historical semantic collections are intentionally not replaceable here'; do
-  rg -F -q "$pattern" "$models" || fail "models.py: missing typed read/mutation contract: $pattern"
+  rg -F -q "$pattern" "$models" || fail "models.py: missing typed grouped mutation contract: $pattern"
 done
 
-# Public mutation schema must make historical full-array replacement unrepresentable.
-# Current-state null/omission merge semantics remain available only inside state patch;
-# semantic record commands reject explicit null and use typed incremental operations.
+# Public mutation schema must expose direct typed groups and make both historical
+# full-array replacement and the old op/value union shape unrepresentable.
 if ! PYTHONPATH="$project" uv run --project "$project" python - <<'PY'
 from pydantic import ValidationError
 from models import (
@@ -372,37 +378,75 @@ assert WorkItemMutation.model_validate({"state": {"repos": {"old": None}}}).to_c
     "state": {"repos": {"old": None}}
 }
 partial = WorkItemMutation.model_validate({
-    "operations": [{
-        "op": "question_upsert",
-        "value": {"id": "q1", "status": "resolved", "decision_id": "d2"},
-    }]
+    "operations": {
+        "question_upsert": [
+            {"id": "q1", "status": "resolved", "decision_id": "d2"}
+        ]
+    }
 }).to_core_mutation()
-assert partial["operations"][0]["value"] == {
+assert partial["operations"]["question_upsert"][0] == {
     "id": "q1", "status": "resolved", "decision_id": "d2"
 }
 checkpoint = WorkItemMutation.model_validate({
-    "operations": [{
-        "op": "checkpoint_append",
-        "value": {
+    "operations": {
+        "checkpoint_append": [{
             "repo": "repo-a",
             "kind": "implementation-rework",
             "artifact_id": "review:2",
             "summary": "Fixed review finding and reverified.",
-        },
-    }]
-}).to_core_mutation()["operations"][0]["value"]
+        }]
+    }
+}).to_core_mutation()["operations"]["checkpoint_append"][0]
 assert checkpoint["kind"] == "implementation-rework"
 assert checkpoint["artifact_id"] == "review:2"
 state_properties = WorkItemStatePatch.model_json_schema()["properties"]
 for historical in ("questions", "decisions", "changes", "blockers", "handoffs", "checkpoints"):
     assert historical not in state_properties
-assert WorkItemMutation.model_json_schema()["properties"]["operations"]["maxItems"] == MUTATION_OPERATION_MAX
+schema = WorkItemMutation.model_json_schema()
+defs = schema["$defs"]
+operation_properties = defs["WorkItemOperations"]["properties"]
+assert set(operation_properties) == {
+    "decision_upsert",
+    "question_upsert",
+    "change_upsert",
+    "blocker_upsert",
+    "handoff_upsert",
+    "checkpoint_append",
+}
+assert "WorkItemOperation" not in defs
+assert "CheckpointAppendOperation" not in defs
+for prop in operation_properties.values():
+    assert prop["maxItems"] == MUTATION_OPERATION_MAX
 try:
-    WorkItemMutation.model_validate({"operations": [{"op": "question_upsert", "value": {"id": "q1", "answer": None}}]})
+    WorkItemMutation.model_validate({
+        "operations": [{"op": "question_upsert", "value": {"id": "q1"}}]
+    })
+except ValidationError:
+    pass
+else:
+    raise AssertionError("legacy op/value operation list must be rejected")
+try:
+    WorkItemMutation.model_validate({
+        "operations": {"question_upsert": [{"id": "q1", "answer": None}]}
+    })
 except ValidationError:
     pass
 else:
     raise AssertionError("incremental semantic mutation must reject explicit null")
+try:
+    WorkItemMutation.model_validate({
+        "operations": {
+            "checkpoint_append": [{"summary": f"checkpoint {i}"} for i in range(30)],
+            "blocker_upsert": [
+                {"id": f"b{i}", "status": "open", "summary": f"blocker {i}"}
+                for i in range(21)
+            ],
+        }
+    })
+except ValidationError:
+    pass
+else:
+    raise AssertionError("total semantic mutation count must be limited across groups")
 try:
     QuestionRecord.model_validate({"id": "q1", "question": "missing status"})
 except ValidationError:
@@ -417,7 +461,7 @@ else:
     raise AssertionError("DecisionRecord.status must be required")
 PY
 then
-  fail 'models.py: bounded state + typed incremental mutation schema invariants failed'
+  fail 'models.py: bounded state + direct grouped mutation schema invariants failed'
 fi
 
 for pattern in \
@@ -438,7 +482,6 @@ for pattern in \
     fail "artifact_templates.py: missing config contract: $pattern"
 done
 
-# Parse the shipped config through the same stdlib validator used at MCP startup.
 if ! PYTHONPATH="$project" ARTIFACT_TEMPLATE_CONFIG="$artifact_template_config" python3 - <<'PY'
 import os
 from artifact_templates import load_artifact_templates
@@ -493,15 +536,10 @@ for pattern in \
   rg -q "$pattern" "$artifacts" || fail "artifacts.py: missing bounded artifact contract: $pattern"
 done
 
-# Template config must never become an artifact storage dependency or second truth source.
 if rg -q 'artifact_templates|ARTIFACT_TEMPLATES|template_guidance' "$artifacts"; then
   fail 'artifacts.py: artifact storage must not import, persist, or enforce template guidance'
 fi
 
-# CRITICAL PAYLOAD/REVISION INVARIANTS — DO NOT REMOVE OR WEAKEN THESE CHECKS
-# merely to make a change pass. Artifact bodies must never become an unbounded
-# MCP request/response, and artifact writes must remain independently revisioned
-# from canonical Work Item state.
 rg -q 'len\(value\.encode\("utf-8"\)\) > ARTIFACT_CHUNK_MAX_BYTES' "$artifacts" || \
   fail 'artifacts.py: append must enforce UTF-8 byte limit server-side'
 rg -q 'ARTIFACT_READ_MIN_BYTES <= limit_bytes <= ARTIFACT_READ_MAX_BYTES' "$artifacts" || \
