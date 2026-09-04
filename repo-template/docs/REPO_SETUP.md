@@ -14,7 +14,7 @@ qiqi_delegate state    = runtime/session truth
 - `AGENTS.md` bảo vệ Git-root/sibling boundaries;
 - fresh repo agent thấy user-scoped `work_item` và `knowledge` MCP;
 - Work Item delegation đọc bounded canonical task, scoped history on demand và chỉ execute current repo;
-- Work Item write dùng typed incremental mutation, không reconstruct historical full arrays;
+- Work Item write dùng grouped typed incremental mutation, không reconstruct historical full arrays và không dùng legacy `{op,value}` envelope;
 - Knowledge dùng search → exact scoped read → whole/partial mutation progressive disclosure;
 - native final assistant response là semantic handoff về QiQi;
 - `bash scripts/repo-check.sh` PASS.
@@ -49,11 +49,14 @@ Nếu TaskPacket identify `redmine:116655 @ revision N`:
 3. làm đúng current repo;
 4. `work_item_update` bằng `WorkItemMutation`:
    - `mutation.state.repos[current_repo]` cho current effective evidence/state;
-   - `checkpoint_append` cho material milestone;
-   - `blocker_upsert`, `question_upsert`, `handoff_upsert` trong authority khi cần;
+   - `mutation.operations.checkpoint_append[]` cho material milestone;
+   - `mutation.operations.blocker_upsert[]`, `question_upsert[]`, `handoff_upsert[]` trong authority khi cần;
+   - omit `state` hoặc operation group không dùng; không gửi `state: {}` boilerplate;
 5. mutation success là compact receipt, không full Work Item;
 6. stale revision → reread/reconcile/retry; server không auto-rebase dù concurrent writer target khác;
 7. không mark sibling/overall task done.
+
+`mutation.operations` là direct grouped typed object. Không gửi operation list `{op,value}` và không dùng intentionally-invalid `work_item_update` calls để dò schema. Các group build một final candidate atomically; cross-group caller order không phải public semantics.
 
 Historical semantic collections không có public full-array replacement path. Repo agent không hydrate/resend checkpoints/questions/handoffs chỉ để append/advance một record.
 
@@ -96,19 +99,22 @@ Substantive Work Item turn phải persist material repo state trước final res
 bash scripts/repo-check.sh
 ```
 
-Checker xác nhận Work Item authority, typed incremental mutation boundary, progressive Knowledge contract, current-repo boundary và native-result handoff. Product tests vẫn theo `docs/VERIFY.md`.
+Checker xác nhận Work Item authority, incremental mutation boundary, progressive Knowledge contract, current-repo boundary và native-result handoff. Product tests vẫn theo `docs/VERIFY.md`.
 
 ## 8. Fresh-session smoke
 
 1. TaskPacket identify test Work Item.
 2. Child `work_item_get` đúng task và GET không hydrate accumulated checkpoint/resolved history.
-3. Child append checkpoint bằng typed operation, không resend historical checkpoints; receipt compact.
-4. Child update only current repo evidence; QiQi reread thấy revision mới.
-5. Stale writer bị reject dù target semantic collection khác.
-6. Scoped Work Item history read chỉ dùng khi exact provenance cần và stale cursor bị reject.
-7. `knowledge_search` trả thin cards và không revision.
-8. `knowledge_read_metadata` trả revision/provenance/section index nhưng không whole content.
-9. `knowledge_read_section` trả đúng one section + whole-document revision.
-10. `knowledge_update` metadata/section không yêu cầu caller resend untouched whole document và stale revision bị reject.
-11. Child không mở sibling repo/physical DB/store.
-12. Native final response quay lại QiQi bình thường.
+3. Child append checkpoint bằng `mutation.operations.checkpoint_append` ở **first valid attempt**, không schema-probing và không resend historical checkpoints; receipt compact.
+4. Child partial-resolve blocker/question bằng direct grouped field ở **first valid attempt**, không resend immutable body/full collection.
+5. Child update only current repo evidence; QiQi reread thấy revision mới.
+6. Stale writer bị reject dù target semantic collection khác.
+7. Scoped Work Item history read chỉ dùng khi exact provenance cần và stale cursor bị reject.
+8. `knowledge_search` trả thin cards và không revision.
+9. `knowledge_read_metadata` trả revision/provenance/section index nhưng không whole content.
+10. `knowledge_read_section` trả đúng one section + whole-document revision.
+11. `knowledge_update` metadata/section không yêu cầu caller resend untouched whole document và stale revision bị reject.
+12. Child không mở sibling repo/physical DB/store.
+13. Native final response quay lại QiQi bình thường.
+
+Happy-path Work Item smoke có **zero intentionally-invalid schema discovery calls**.
