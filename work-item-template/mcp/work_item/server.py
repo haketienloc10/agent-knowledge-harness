@@ -126,8 +126,9 @@ def _work_item_update_error_result(
                 "message": str(exc),
                 "action": (
                     "fix the mutation to match WorkItemMutation: current effective fields belong in "
-                    "state, while questions/decisions/changes/blockers/handoffs/checkpoints use typed "
-                    "incremental operations"
+                    "state; semantic history/lifecycle changes belong in the direct grouped fields under "
+                    "mutation.operations such as blocker_upsert or checkpoint_append; do not use an "
+                    "op/value envelope"
                 ),
             },
         }
@@ -140,8 +141,8 @@ def _work_item_update_error_result(
                 "message": str(exc),
                 "action": (
                     "call work_item_get again for the current whole Work Item revision, reconcile the "
-                    "intended state/semantic operation against current canonical state, then retry; "
-                    "the server never auto-rebases stale operations"
+                    "intended state/semantic mutation against current canonical state, then retry; "
+                    "the server never auto-rebases stale mutations"
                 ),
             },
         }
@@ -228,13 +229,15 @@ mcp = MCPServer(
         "QiQi; child agents must not modify sibling repositories. Work Item state is task truth, not "
         "reusable system knowledge and not runtime session state. Updates use optimistic concurrency: "
         "always pass the exact whole revision returned by work_item_get/list and reread on conflict; "
-        "stale semantic operations are never automatically rebased. work_item_update exposes one typed "
-        "WorkItemMutation with a bounded current-state patch plus up to 50 typed operations. Historical "
-        "semantic arrays are not public replacement fields: use question_upsert, decision_upsert, "
-        "change_upsert, blocker_upsert, handoff_upsert, and checkpoint_append. Stable-id lifecycle "
-        "records advance monotonically and existing identity/provenance cannot be silently rewritten. "
-        "All operations in one call apply in caller order and commit all-or-nothing under one Work Item "
-        "revision. Successful update returns only a compact receipt with id, new revision, and changed "
+        "stale semantic mutations are never automatically rebased. work_item_update exposes one typed "
+        "WorkItemMutation with a bounded current-state patch plus a grouped typed operations object. "
+        "Historical semantic arrays are not public replacement fields: mutation.operations contains "
+        "direct groups named question_upsert, decision_upsert, change_upsert, blocker_upsert, "
+        "handoff_upsert, and checkpoint_append; callers do not send op/value envelopes. Stable-id "
+        "lifecycle records advance monotonically and existing identity/provenance cannot be silently "
+        "rewritten. Up to 50 semantic records across all groups commit all-or-nothing against one final "
+        "candidate document under one Work Item revision; cross-group ordering is not part of the public "
+        "contract. Successful update returns only a compact receipt with id, new revision, and changed "
         "labels; reread work_item_get only when the caller needs the resulting current state. A missing "
         "work_item_get is normal startup control flow and returns found=false so QiQi can create the item. "
         "Optional task artifacts provide progressive-disclosure detail for explicit user-requested intake, "
@@ -336,13 +339,14 @@ async def work_item_update(
     expected_revision: Revision,
     mutation: WorkItemMutation,
 ) -> dict[str, Any]:
-    """Atomically apply current-state changes plus typed incremental semantic operations.
+    """Atomically apply current-state changes plus grouped typed semantic mutations.
 
     `mutation.state` may patch only current effective fields. Historical collections are changed only
-    through typed operations; full-array replacement is not part of this public mutation contract.
-    Operations are applied in caller order, duplicate stable-id targets are rejected, lifecycle records
-    cannot move backward or silently rewrite identity/provenance, and the whole call commits under the
-    exact expected Work Item revision. Success returns a compact mutation receipt, never the full document.
+    through direct typed groups under `mutation.operations`; there is no op/value envelope and full-array
+    replacement is not part of this public contract. Duplicate stable-id targets are rejected, lifecycle
+    records cannot move backward or silently rewrite identity/provenance, and all groups build one final
+    candidate document committed under the exact expected Work Item revision. Cross-group ordering is not
+    part of the public contract. Success returns a compact mutation receipt, never the full document.
     """
     try:
         return mutate_work_item(
