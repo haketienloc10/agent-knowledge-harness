@@ -38,11 +38,11 @@ trừ khi bảng này cho phép rõ ràng.
 
 ## Luồng Tích hợp Không Suy ra từ Registry
 
-Chỉ ghi flow/order khi `depends_on` không đủ để xác định behavior hoặc sequencing.
+Chỉ thêm row khi `depends_on` không đủ để xác định behavior hoặc sequencing. Nếu không có
+flow đặc biệt thì để bảng trống.
 
 | Flow | Trigger | Order/constraint | Source of truth |
 |---|---|---|---|
-| `{{INTEGRATION_FLOW}}` | `{{FLOW_TRIGGER}}` | `{{FLOW_ORDER_OR_CONSTRAINT}}` | `{{FLOW_SOURCE}}` |
 
 ## Kiểm thử Integration
 
