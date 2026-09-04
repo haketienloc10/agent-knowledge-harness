@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Annotated, Any, Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -410,63 +410,71 @@ class HandoffMutation(_RecordMutation):
     )
 
 
-class CheckpointAppendOperation(BaseModel):
+class WorkItemOperations(BaseModel):
+    """Grouped semantic mutations; group names carry operation meaning directly."""
+
     model_config = ConfigDict(extra="forbid")
 
-    op: Literal["checkpoint_append"]
-    value: CheckpointRecord = Field(
-        description="One new material milestone appended to canonical checkpoint history."
+    decision_upsert: list[DecisionMutation] = Field(
+        default_factory=list,
+        max_length=MUTATION_OPERATION_MAX,
+        description="Create or monotonically advance decision records, in list order.",
+    )
+    question_upsert: list[QuestionMutation] = Field(
+        default_factory=list,
+        max_length=MUTATION_OPERATION_MAX,
+        description="Create or monotonically advance question records, in list order.",
+    )
+    change_upsert: list[RequirementChangeMutation] = Field(
+        default_factory=list,
+        max_length=MUTATION_OPERATION_MAX,
+        description="Create or monotonically advance requirement/scope-change records, in list order.",
+    )
+    blocker_upsert: list[BlockerMutation] = Field(
+        default_factory=list,
+        max_length=MUTATION_OPERATION_MAX,
+        description="Create or monotonically advance blocker records, in list order.",
+    )
+    handoff_upsert: list[HandoffMutation] = Field(
+        default_factory=list,
+        max_length=MUTATION_OPERATION_MAX,
+        description="Create or monotonically advance handoff records, in list order.",
+    )
+    checkpoint_append: list[CheckpointRecord] = Field(
+        default_factory=list,
+        max_length=MUTATION_OPERATION_MAX,
+        description="Append material checkpoints in list order; checkpoints are never upserted or rewritten.",
     )
 
+    def operation_count(self) -> int:
+        return sum(
+            len(getattr(self, field_name))
+            for field_name in self.__class__.model_fields
+        )
 
-class QuestionUpsertOperation(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    @model_validator(mode="after")
+    def _limit_total_operations(self) -> "WorkItemOperations":
+        count = self.operation_count()
+        if count > MUTATION_OPERATION_MAX:
+            raise ValueError(
+                f"mutation.operations must contain at most {MUTATION_OPERATION_MAX} total records"
+            )
+        return self
 
-    op: Literal["question_upsert"]
-    value: QuestionMutation
-
-
-class DecisionUpsertOperation(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    op: Literal["decision_upsert"]
-    value: DecisionMutation
-
-
-class ChangeUpsertOperation(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    op: Literal["change_upsert"]
-    value: RequirementChangeMutation
-
-
-class BlockerUpsertOperation(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    op: Literal["blocker_upsert"]
-    value: BlockerMutation
-
-
-class HandoffUpsertOperation(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    op: Literal["handoff_upsert"]
-    value: HandoffMutation
-
-
-WorkItemOperation = Annotated[
-    CheckpointAppendOperation
-    | QuestionUpsertOperation
-    | DecisionUpsertOperation
-    | ChangeUpsertOperation
-    | BlockerUpsertOperation
-    | HandoffUpsertOperation,
-    Field(discriminator="op"),
-]
+    def to_core_operations(self) -> dict[str, list[dict[str, Any]]]:
+        result: dict[str, list[dict[str, Any]]] = {}
+        for field_name in self.__class__.model_fields:
+            values = getattr(self, field_name)
+            if values:
+                result[field_name] = [
+                    value.model_dump(mode="python", by_alias=True, exclude_none=True)
+                    for value in values
+                ]
+        return result
 
 
 class WorkItemMutation(BaseModel):
-    """Atomic current-state patch plus typed incremental semantic operations."""
+    """Atomic current-state patch plus grouped typed semantic mutations."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -477,19 +485,21 @@ class WorkItemMutation(BaseModel):
             "next_actions. Historical semantic collections are intentionally not replaceable here."
         ),
     )
-    operations: list[WorkItemOperation] = Field(
-        default_factory=list,
-        max_length=MUTATION_OPERATION_MAX,
+    operations: WorkItemOperations | None = Field(
+        default=None,
         description=(
-            "Up to 50 typed semantic operations applied in caller order and committed atomically under "
-            "one exact whole Work Item revision."
+            "Grouped typed semantic mutations. Use direct group names such as blocker_upsert or "
+            "checkpoint_append; there is no op/value envelope. At most 50 records total across all "
+            "groups. Groups commit atomically against one final candidate document; cross-group order "
+            "is not part of the public contract."
         ),
     )
 
     @model_validator(mode="after")
     def _require_material_mutation(self) -> "WorkItemMutation":
         state_patch = self.state.to_merge_patch() if self.state is not None else {}
-        if not state_patch and not self.operations:
+        operation_count = self.operations.operation_count() if self.operations is not None else 0
+        if not state_patch and operation_count == 0:
             raise ValueError("mutation must contain a non-empty state patch or at least one operation")
         return self
 
@@ -499,9 +509,8 @@ class WorkItemMutation(BaseModel):
             state_patch = self.state.to_merge_patch()
             if state_patch:
                 result["state"] = state_patch
-        if self.operations:
-            result["operations"] = [
-                operation.model_dump(mode="python", by_alias=True, exclude_none=True)
-                for operation in self.operations
-            ]
+        if self.operations is not None:
+            operations = self.operations.to_core_operations()
+            if operations:
+                result["operations"] = operations
         return result
