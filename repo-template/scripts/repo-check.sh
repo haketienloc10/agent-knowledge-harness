@@ -34,72 +34,74 @@ agents="$repo_root/AGENTS.md"
 for pattern in \
   '`ARCHITECTURE\.md`' \
   '`docs/VERIFY\.md`' \
-  'Global Work Item MCP' \
-  '\$work-item' \
-  'MUST apply `\$work-item`' \
-  'không tự tạo/chọn Work Item' \
-  'work_item_\*' \
-  'canonical operational protocol' \
   'current Git root' \
-  'Artifact creation không thay thế canonical Work Item reconciliation' \
+  '^## TaskPacket contract$' \
+  'immutable semantic snapshot' \
+  'objective' \
+  'acceptance_criteria' \
+  'trusted_facts' \
+  'claims_to_investigate' \
+  'trusted-for-execution' \
+  '^### Task-semantic closed-world rule$' \
+  'MUST NOT.*Work Item.*Shared Knowledge.*reconstruct missing task semantics' \
+  'không `work_item_get`/`work_item_update`' \
+  'stale detection' \
   '^## Shared Knowledge MCP$' \
+  'reusable repo/domain implementation knowledge' \
   'knowledge_search' \
   'knowledge_read' \
   'knowledge_read_metadata' \
   'knowledge_read_section' \
   'knowledge_write' \
   'knowledge_update' \
-  '^### Search trước, exact scoped read sau$' \
-  'smallest sufficient semantic scope' \
-  'decision cards' \
-  '3–8 discriminative concepts' \
-  'không có revision|không trả revision' \
-  'expected_revision' \
-  'whole-document.*revision' \
-  'missing section không implicit create' \
+  'Live owner source/test thắng' \
   '^## Handoff với QiQi$' \
-  '^### Closed-world context rule$' \
-  '^### Output về QiQi$' \
-  '^## Cross-repo Impact$' \
-  'Native final assistant response là authoritative semantic handoff'; do
+  'Native final assistant response là authoritative semantic handoff' \
+  'Runtime state là lifecycle truth' \
+  '^## Greenfield technical authority$' \
+  '^## Cross-repo Impact$'; do
   rg -U -q "$pattern" "$agents" || fail "AGENTS.md: missing required policy: $pattern"
 done
 
-rg -U -q 'Work Item MCP và Knowledge MCP.*tool exceptions.*không phải filesystem exceptions' "$agents" || \
-  fail 'AGENTS.md: MCP access must not widen filesystem boundary'
 rg -q 'Không đọc/sửa repository anh em' "$agents" || \
   fail 'AGENTS.md: sibling repository boundary missing'
-rg -U -q 'mark overall Work Item done|global Work Item complete' "$agents" || \
-  fail 'AGENTS.md: child must not own overall task completion'
-rg -U -q 'latest Work Item.*TaskPacket.*stale|latest Work Item.*conflict' "$agents" || \
-  fail 'AGENTS.md: current Work Item must be allowed to invalidate stale TaskPacket premises'
-rg -U -q 'live owner source/test.*thắng|source/test thắng' "$agents" || \
-  fail 'AGENTS.md: live implementation truth precedence missing'
-rg -U -q 'required_context.*required premise' "$agents" || \
-  fail 'AGENTS.md: TaskPacket required premise rule missing'
-rg -U -q 'cross-repo impact: fact, affected boundary/repository, evidence, next action' "$agents" || \
+rg -U -q 'Missing task semantics.*Work Item/Knowledge|không recover từ Work Item/Knowledge' "$agents" || \
+  fail 'AGENTS.md: incomplete TaskPacket must not trigger orchestration-context recovery'
+rg -U -q 'Shared Knowledge.*không phải fallback.*incomplete TaskPacket' "$agents" || \
+  fail 'AGENTS.md: Knowledge task-semantic boundary missing'
+for pattern in \
+  'observable product semantics' \
+  'external/public contract' \
+  'security/compliance' \
+  'cost/operational envelope'; do
+  rg -q "$pattern" "$agents" || \
+    fail "AGENTS.md: greenfield technical authority boundary missing: $pattern"
+done
+rg -U -q 'cross-repo impact:.*fact.*affected.*evidence.*next action' "$agents" || \
   fail 'AGENTS.md: actionable cross-repo handoff shape missing'
-rg -U -q 'Knowledge review.*mutation|Knowledge review.*knowledge_write|Knowledge review/write' "$agents" || \
-  fail 'AGENTS.md: Knowledge finalization missing'
-rg -U -q 'Work Item MCP unavailable|\$work-item.*unavailable' "$agents" || \
-  fail 'AGENTS.md: missing Work Item failure/no-fallback boundary'
 
-# Work Item mechanics belong to the shared user-scoped $work-item skill, not this
-# always-on repo policy. Reject the previous duplicated protocol sections if they return.
-if rg -q '^### Material session reconciliation$|^#### Implementation$|^#### Review$|^#### Report$' "$agents"; then
-  fail 'AGENTS.md: detailed Work Item operational protocol must live in $work-item, not repo always-on policy'
+if rg -q 'TaskPacket `required_context`|original user request, repo-local objective|MUST apply `\$work-item`|Child được đọc toàn task' "$agents"; then
+  fail 'AGENTS.md: legacy Work Item/user_request/required_context child contract found'
 fi
 
-if rg -q 'existing update target phải full-read|Update dùng exact id.*full read|knowledge_read\(keywords|workspace `knowledge/`|knowledge/INDEX\.md|result_path|fixed result schema' "$agents"; then
-  fail 'AGENTS.md: legacy full-read-only knowledge/result contract found'
+if rg -q 'existing update target phải full-read|knowledge_read\(keywords|workspace `knowledge/`|knowledge/INDEX\.md|result_path|fixed result schema' "$agents"; then
+  fail 'AGENTS.md: legacy knowledge/result contract found'
 fi
 
 setup="$repo_root/docs/REPO_SETUP.md"
-for pattern in 'Global Work Item MCP' 'work_item_get' 'work_item_update' 'knowledge_search' 'knowledge_read' 'knowledge_read_metadata' 'knowledge_read_section' 'knowledge_update' 'TaskPacket' 'native final assistant response'; do
-  rg -q "$pattern" "$setup" || fail "docs/REPO_SETUP.md: missing guidance: $pattern"
+for pattern in \
+  'TaskPacket' \
+  'immutable' \
+  'Work Item.*QiQi' \
+  'knowledge_search' \
+  'knowledge_read' \
+  'knowledge_read_metadata' \
+  'knowledge_read_section' \
+  'native final assistant response'; do
+  rg -U -q "$pattern" "$setup" || fail "docs/REPO_SETUP.md: missing guidance: $pattern"
 done
-rg -U -q 'partial update.*whole-document.*revision|whole-document exact revision' "$setup" || \
-  fail 'docs/REPO_SETUP.md: partial Knowledge concurrency boundary missing'
+rg -qi 'task-semantic' "$setup" || \
+  fail 'docs/REPO_SETUP.md: missing guidance: task-semantic'
 
 for file in "$repo_root/AGENTS.md" "$repo_root/ARCHITECTURE.md" "$repo_root/docs/VERIFY.md"; do
   [[ -f "$file" ]] || continue

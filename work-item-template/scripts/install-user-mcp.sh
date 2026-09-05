@@ -11,11 +11,15 @@ usage() {
 Usage: install-user-mcp.sh [--db-path PATH] [--bin-dir PATH]
 
 Installs the user-level Global Work Item tools:
-- managed user-scope `work-item` Agent Skill for QiQi/repository agents;
-- stable `agent-work-item-mcp` wrapper for QiQi/repository agents;
+- managed user-scope `work-item` Agent Skill for QiQi/orchestration;
+- stable `agent-work-item-mcp` wrapper for the user-scope Work Item service;
 - read-only `agent-work-item` CLI for human list/detail inspection;
 - MCP registration named `work_item` for available Codex/Claude CLIs;
-- one global SQLite database shared by QiQi and repository execution agents.
+- one global SQLite database backing canonical QiQi/orchestration Work Item state.
+
+Repository child processes may still see a user-scope MCP registration depending on
+client configuration, but repo-local TaskPacket execution must not depend on or persist
+through Work Item MCP. Work Item remains QiQi/orchestration-side task truth.
 
 The installer refuses to replace an existing `work_item` MCP registration or
 `work-item` skill that points to/contains unrelated unmanaged content.

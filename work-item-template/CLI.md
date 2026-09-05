@@ -1,8 +1,8 @@
 # Work Item human CLI
 
 `agent-work-item` là human-facing, strictly read-only view của cùng canonical SQLite
-Work Item store mà QiQi và repository agents sử dụng qua MCP. CLI không có lệnh create,
-update, complete hoặc delete.
+Work Item store mà QiQi sử dụng qua MCP. Repository child không dùng store này để hiểu
+hoặc persist delegated TaskPacket. CLI không có lệnh create, update, complete hoặc delete.
 
 ## Overview
 
@@ -149,7 +149,7 @@ mutation path.
 `install-user-mcp.sh` cài cả hai wrapper vào `~/.local/bin` mặc định:
 
 ```text
-agent-work-item-mcp   # MCP runtime cho agents
+agent-work-item-mcp   # user-scope Work Item MCP service used by QiQi/orchestration
 agent-work-item       # read-only human viewer
 ```
 

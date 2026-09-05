@@ -1,0 +1,47 @@
+name: qiqi-delegate contract
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/qiqi-delegate-contract.yml'
+      - 'workspace-template/mcp/qiqi_delegate/**'
+      - 'workspace-template/scripts/workspace-check.sh'
+      - 'work-item-template/**'
+      - 'migrations/0014-taskpacket-self-sufficient-contract.json'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  contract-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - uses: astral-sh/setup-uv@v6
+
+      - name: Sync qiqi_delegate MCP environment
+        run: uv sync --project workspace-template/mcp/qiqi_delegate
+
+      - name: Run qiqi_delegate unit and generated-schema tests
+        run: >-
+          uv run --project workspace-template/mcp/qiqi_delegate
+          python -m unittest discover
+          -s workspace-template/mcp/qiqi_delegate/tests -v
+
+      - name: Run Work Item skill contract regression tests
+        run: >-
+          python -m unittest discover
+          -s work-item-template/mcp/work_item/tests
+          -p test_skill_contract.py -v
+
+      - name: Check managed shell syntax
+        run: |
+          bash -n workspace-template/scripts/workspace-check.sh
+          bash -n repo-template/scripts/repo-check.sh
+          bash -n work-item-template/scripts/install-user-mcp.sh

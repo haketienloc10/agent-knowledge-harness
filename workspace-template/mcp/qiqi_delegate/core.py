@@ -10,11 +10,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
-# Preserve the existing qiqi_delegate task-size safety boundary. The previous
-# public contract rejected task strings above 100,000 characters; the structured
-# packet keeps that same aggregate bound instead of inventing per-field limits.
+# Preserve the existing qiqi_delegate task-size safety boundary. The structured
+# packet keeps the same aggregate ceiling while semantic completeness/minimality
+# remain the design criteria for normal operation.
 TASK_PACKET_MAX_CHARS = 100_000
-CONTEXT_CERTAINTIES = {"verified", "user-provided", "authoritative-decision"}
 SUPPORTED_HOOK_ADAPTERS = {"claude", "codex"}
 
 
@@ -60,43 +59,66 @@ def codex_session_hook_key() -> str:
 
 
 @dataclass(frozen=True)
-class ContextFact:
+class TrustedFact:
     fact: str
     source: str
-    certainty: str
 
     def as_dict(self) -> dict[str, str]:
-        return {
-            "fact": self.fact,
-            "source": self.source,
-            "certainty": self.certainty,
-        }
+        return {"fact": self.fact, "source": self.source}
+
+
+@dataclass(frozen=True)
+class ClaimToInvestigate:
+    claim: str
+    source: str
+
+    def as_dict(self) -> dict[str, str]:
+        return {"claim": self.claim, "source": self.source}
+
+
+@dataclass(frozen=True)
+class TaskContext:
+    trusted_facts: tuple[TrustedFact, ...]
+    claims_to_investigate: tuple[ClaimToInvestigate, ...]
+
+    def as_dict(self) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        if self.trusted_facts:
+            result["trusted_facts"] = [item.as_dict() for item in self.trusted_facts]
+        if self.claims_to_investigate:
+            result["claims_to_investigate"] = [
+                item.as_dict() for item in self.claims_to_investigate
+            ]
+        return result
 
 
 @dataclass(frozen=True)
 class TaskPacket:
-    user_request: str
     objective: str
     scope: tuple[str, ...]
-    out_of_scope: tuple[str, ...]
-    required_context: tuple[ContextFact, ...]
-    constraints: tuple[str, ...]
     acceptance_criteria: tuple[str, ...]
-    verification: tuple[str, ...]
-    known_unknowns: tuple[str, ...]
+    out_of_scope: tuple[str, ...] = ()
+    context: TaskContext | None = None
+    constraints: tuple[str, ...] = ()
+    known_unknowns: tuple[str, ...] = ()
 
     def as_dict(self) -> dict[str, Any]:
-        return {
-            "user_request": self.user_request,
+        result: dict[str, Any] = {
             "objective": self.objective,
             "scope": list(self.scope),
-            "out_of_scope": list(self.out_of_scope),
-            "required_context": [item.as_dict() for item in self.required_context],
-            "constraints": list(self.constraints),
             "acceptance_criteria": list(self.acceptance_criteria),
-            "verification": list(self.verification),
-            "known_unknowns": list(self.known_unknowns),
         }
+        if self.out_of_scope:
+            result["out_of_scope"] = list(self.out_of_scope)
+        if self.context is not None:
+            context = self.context.as_dict()
+            if context:
+                result["context"] = context
+        if self.constraints:
+            result["constraints"] = list(self.constraints)
+        if self.known_unknowns:
+            result["known_unknowns"] = list(self.known_unknowns)
+        return result
 
     def to_json(self) -> str:
         return json.dumps(self.as_dict(), ensure_ascii=False, separators=(",", ":"))
@@ -132,14 +154,22 @@ def _clean_string_list(
     return tuple(result)
 
 
-def _clean_context(value: Any) -> tuple[ContextFact, ...]:
+def _clean_optional_string_list(value: Any, label: str) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    return _clean_string_list(value, label)
+
+
+def _clean_fact_list(value: Any, label: str) -> tuple[TrustedFact, ...]:
+    if value is None:
+        return ()
     if not isinstance(value, list):
-        raise ValueError("required_context must be a list of objects")
-    result: list[ContextFact] = []
-    required_keys = {"fact", "source", "certainty"}
+        raise ValueError(f"{label} must be a list of objects")
+    result: list[TrustedFact] = []
+    required_keys = {"fact", "source"}
     for index, item in enumerate(value):
         if not isinstance(item, dict):
-            raise ValueError(f"required_context[{index}] must be an object")
+            raise ValueError(f"{label}[{index}] must be an object")
         keys = set(item)
         if keys != required_keys:
             missing = sorted(required_keys - keys)
@@ -149,124 +179,141 @@ def _clean_context(value: Any) -> tuple[ContextFact, ...]:
                 detail.append("missing " + ", ".join(missing))
             if extra:
                 detail.append("unsupported " + ", ".join(extra))
-            raise ValueError(
-                f"required_context[{index}] has invalid fields: {'; '.join(detail)}"
+            raise ValueError(f"{label}[{index}] has invalid fields: {'; '.join(detail)}")
+        result.append(
+            TrustedFact(
+                fact=_clean_required_text(item["fact"], f"{label}[{index}].fact"),
+                source=_clean_required_text(item["source"], f"{label}[{index}].source"),
             )
-        fact = _clean_required_text(item["fact"], f"required_context[{index}].fact")
-        source = _clean_required_text(
-            item["source"], f"required_context[{index}].source"
         )
-        certainty = _clean_required_text(
-            item["certainty"], f"required_context[{index}].certainty"
-        )
-        if certainty not in CONTEXT_CERTAINTIES:
-            allowed = ", ".join(sorted(CONTEXT_CERTAINTIES))
-            raise ValueError(
-                f"required_context[{index}].certainty must be one of: {allowed}"
-            )
-        result.append(ContextFact(fact=fact, source=source, certainty=certainty))
     return tuple(result)
+
+
+def _clean_claim_list(value: Any, label: str) -> tuple[ClaimToInvestigate, ...]:
+    if value is None:
+        return ()
+    if not isinstance(value, list):
+        raise ValueError(f"{label} must be a list of objects")
+    result: list[ClaimToInvestigate] = []
+    required_keys = {"claim", "source"}
+    for index, item in enumerate(value):
+        if not isinstance(item, dict):
+            raise ValueError(f"{label}[{index}] must be an object")
+        keys = set(item)
+        if keys != required_keys:
+            missing = sorted(required_keys - keys)
+            extra = sorted(keys - required_keys)
+            detail: list[str] = []
+            if missing:
+                detail.append("missing " + ", ".join(missing))
+            if extra:
+                detail.append("unsupported " + ", ".join(extra))
+            raise ValueError(f"{label}[{index}] has invalid fields: {'; '.join(detail)}")
+        result.append(
+            ClaimToInvestigate(
+                claim=_clean_required_text(item["claim"], f"{label}[{index}].claim"),
+                source=_clean_required_text(item["source"], f"{label}[{index}].source"),
+            )
+        )
+    return tuple(result)
+
+
+def _clean_context(value: Any) -> TaskContext | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ValueError("context must be an object")
+    supported_keys = {"trusted_facts", "claims_to_investigate"}
+    extra = sorted(set(value) - supported_keys)
+    if extra:
+        raise ValueError("context has unsupported fields: " + ", ".join(extra))
+
+    trusted_facts = _clean_fact_list(
+        value.get("trusted_facts"), "context.trusted_facts"
+    )
+    claims = _clean_claim_list(
+        value.get("claims_to_investigate"), "context.claims_to_investigate"
+    )
+    trusted_text = {item.fact.casefold() for item in trusted_facts}
+    claim_text = {item.claim.casefold() for item in claims}
+    overlap = sorted(trusted_text & claim_text)
+    if overlap:
+        raise ValueError(
+            "the same proposition cannot be both trusted_fact and claim_to_investigate"
+        )
+    if not trusted_facts and not claims:
+        return None
+    return TaskContext(
+        trusted_facts=trusted_facts,
+        claims_to_investigate=claims,
+    )
 
 
 def build_task_packet(
     *,
-    user_request: Any,
     objective: Any,
     scope: Any,
-    out_of_scope: Any,
-    required_context: Any,
-    constraints: Any,
     acceptance_criteria: Any,
-    verification: Any,
-    known_unknowns: Any,
+    out_of_scope: Any = None,
+    context: Any = None,
+    constraints: Any = None,
+    known_unknowns: Any = None,
 ) -> TaskPacket:
     packet = TaskPacket(
-        user_request=_clean_required_text(user_request, "user_request"),
         objective=_clean_required_text(objective, "objective"),
         scope=_clean_string_list(scope, "scope", require_non_empty=True),
-        out_of_scope=_clean_string_list(out_of_scope, "out_of_scope"),
-        required_context=_clean_context(required_context),
-        constraints=_clean_string_list(constraints, "constraints"),
         acceptance_criteria=_clean_string_list(
             acceptance_criteria, "acceptance_criteria", require_non_empty=True
         ),
-        verification=_clean_string_list(verification, "verification"),
-        known_unknowns=_clean_string_list(known_unknowns, "known_unknowns"),
+        out_of_scope=_clean_optional_string_list(out_of_scope, "out_of_scope"),
+        context=_clean_context(context),
+        constraints=_clean_optional_string_list(constraints, "constraints"),
+        known_unknowns=_clean_optional_string_list(known_unknowns, "known_unknowns"),
     )
     if len(packet.to_json()) > TASK_PACKET_MAX_CHARS:
         raise ValueError("task packet is too large")
     return packet
 
 
-def _bullet_lines(items: Iterable[str], empty_text: str) -> str:
-    values = list(items)
-    if not values:
-        return f"- {empty_text}"
-    return "\n".join(f"- {item}" for item in values)
+def _bullet_lines(items: Iterable[str]) -> str:
+    return "\n".join(f"- {item}" for item in items)
 
 
 def render_task_prompt(packet: TaskPacket) -> str:
-    context_lines: list[str] = []
-    if packet.required_context:
-        for item in packet.required_context:
-            context_lines.append(
-                f"- [{item.certainty}] {item.fact}\n  Provenance: {item.source}"
-            )
-    else:
-        context_lines.append(
-            "- No workspace/upstream facts are required for this turn."
-        )
+    sections = [
+        "Repository task delegated by QiQi",
+        f"## Repository objective\n\n{packet.objective}",
+        f"## Scope\n\n{_bullet_lines(packet.scope)}",
+    ]
 
-    return f"""Repository task delegated by QiQi
+    if packet.out_of_scope:
+        sections.append(f"## Out of scope\n\n{_bullet_lines(packet.out_of_scope)}")
 
-## Original user request
+    if packet.context is not None:
+        if packet.context.trusted_facts:
+            lines = [
+                f"- {item.fact}\n  Provenance: {item.source}"
+                for item in packet.context.trusted_facts
+            ]
+            sections.append("## Trusted facts\n\n" + "\n".join(lines))
+        if packet.context.claims_to_investigate:
+            lines = [
+                f"- {item.claim}\n  Provenance: {item.source}"
+                for item in packet.context.claims_to_investigate
+            ]
+            sections.append("## Claims to investigate\n\n" + "\n".join(lines))
 
-{packet.user_request}
+    if packet.constraints:
+        sections.append(f"## Constraints\n\n{_bullet_lines(packet.constraints)}")
 
-## Repository objective
+    sections.append(
+        f"## Acceptance criteria\n\n{_bullet_lines(packet.acceptance_criteria)}"
+    )
 
-{packet.objective}
+    if packet.known_unknowns:
+        sections.append(f"## Known unknowns\n\n{_bullet_lines(packet.known_unknowns)}")
 
-## Scope
-
-{_bullet_lines(packet.scope, 'No scope was provided.')}
-
-## Out of scope
-
-{_bullet_lines(packet.out_of_scope, 'Nothing additional was explicitly excluded.')}
-
-## Required workspace / upstream context
-
-{chr(10).join(context_lines)}
-
-## Constraints
-
-{_bullet_lines(packet.constraints, 'No additional constraints beyond repository policy.')}
-
-## Acceptance criteria
-
-{_bullet_lines(packet.acceptance_criteria, 'No acceptance criteria were provided.')}
-
-## Required verification
-
-{_bullet_lines(packet.verification, 'No specific verification command was mandated; choose evidence appropriate to the task and repository policy.')}
-
-## Known unknowns
-
-{_bullet_lines(packet.known_unknowns, 'None explicitly identified.')}
-
-## Context boundary
-
-You do not share QiQi's hidden conversation, hidden reasoning, workspace control context, or sibling-repository state. For user, workspace, upstream, and cross-repository facts, assume only the information explicitly present in this task packet is available to you. You may inspect the current repository and use tools that repository policy permits, including Shared Knowledge MCP when its decision rule calls for it.
-
-Do not invent an omitted external fact. If an external fact is required and cannot be established from the current repository or an allowed knowledge source, state the exact missing input in your final response and stop rather than guessing. Do not inspect sibling repository source, sibling result history, or QiQi workspace control files to fill the gap.
-
-## Handoff contract
-
-Your final assistant response is the authoritative semantic handoff to QiQi and may be forwarded to the user with little or no rewriting. Use the structure that best fits this task; there are no required result headings. Preserve material findings, evidence, caveats, uncertainty, verification details, blockers, and cross-repository implications that could change QiQi's or the user's next decision.
-
-Do not create or update a QiQi result Markdown artifact. Do not rely on terminal scrollback as the handoff. The delegation runtime captures your native final assistant message directly.
-""".strip()
+    return "\n\n".join(sections).strip()
 
 
 def normalize_hook_payload(
@@ -511,9 +558,9 @@ class SessionStore:
                     (now, session_id),
                 )
             conn.execute(
-                "INSERT INTO turns(" 
+                "INSERT INTO turns("
                 "turn_id, session_id, repository, route, state, native_turn_id, "
-                "task_packet_json, agent_response, created_at_ns" 
+                "task_packet_json, agent_response, created_at_ns"
                 ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     turn_id,

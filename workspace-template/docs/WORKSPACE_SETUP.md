@@ -29,14 +29,14 @@ Default DB:
 ~/.local/share/agent-work-items/work-items.sqlite3
 ```
 
-Có thể dùng `--db-path`. Mở fresh agent session rồi xác minh:
+Có thể dùng `--db-path`. Mở fresh QiQi session rồi xác minh:
 
 ```bash
 codex mcp get work_item
 claude mcp get work_item
 ```
 
-Fresh client phải discover:
+Fresh QiQi client phải discover:
 
 ```text
 work_item_get
@@ -46,16 +46,17 @@ work_item_create
 work_item_update
 ```
 
+Work Item là **canonical owner** của mutable product-task state nhưng thuộc QiQi/orchestration side. Repository child không cần discover hoặc gọi Work Item MCP để hiểu/hoàn thành TaskPacket.
+
 Smoke DB test/non-production:
 
 1. create test Work Item;
 2. `work_item_get` revision 1 và xác nhận response là bounded current-state projection;
-3. `work_item_update` bằng revision 1 với `mutation.operations.checkpoint_append=[{summary: ...}]` → compact receipt revision 2 ngay lần gọi hợp lệ đầu tiên;
-4. receipt không chứa full canonical Work Item/checkpoint history;
-5. stale revision 1 phải conflict;
-6. `work_item_history_read(collection="checkpoints")` vẫn đọc exact stored history khi cần provenance.
+3. `work_item_update` bằng revision 1 với `mutation.operations.checkpoint_append=[{summary: ...}]` → compact receipt revision 2;
+4. stale revision 1 phải conflict;
+5. `work_item_history_read(collection="checkpoints")` vẫn đọc exact stored history khi QiQi cần provenance.
 
-`mutation.operations` là **grouped typed object**, không phải list `{op,value}`. Fresh-agent happy path không được probe schema bằng intentionally-invalid `work_item_update` calls.
+`mutation.operations` là grouped typed object, không phải list `{op,value}`. Fresh-agent happy path không probe schema bằng intentionally-invalid calls.
 
 ## 2. Cài Shared Knowledge MCP
 
@@ -87,14 +88,9 @@ Smoke progressive disclosure:
 
 ## 3. Registry và System Map
 
-`repos.yaml` là canonical owner của workspace/repository registry: workspace name, repository
-name, exact Git-root path, role, `required_for` và dependency basics (`depends_on`). Xác nhận
-mọi path là exact Git root và mọi dependency reference trỏ tới repository đã khai báo.
+`repos.yaml` là canonical owner của workspace/repository registry: workspace name, repository name, exact Git-root path, role, `required_for` và dependency basics (`depends_on`). Xác nhận mọi path là exact Git root và dependency reference trỏ tới repository đã khai báo.
 
-`SYSTEM_MAP.md` chỉ giữ cross-repo semantic facts không suy ra được từ registry: contract,
-ownership/data boundary, non-trivial integration behavior, compatibility/deprecation/rollback
-và shared-infrastructure facts. Không copy full repository list/path/role/dependency sang
-System Map. dependency-only repository selection/wave không cần đọc `SYSTEM_MAP.md`.
+`SYSTEM_MAP.md` chỉ giữ cross-repo semantic facts không suy ra được từ registry: contract, ownership/data boundary, non-trivial integration behavior, compatibility/deprecation/rollback và shared-infrastructure facts. Không copy full repository list/path/role/dependency sang System Map. **dependency-only** repository selection/wave không cần đọc `SYSTEM_MAP.md`.
 
 ## 4. Herdr/qiqi_delegate
 
@@ -107,7 +103,7 @@ python3 -m unittest discover -s mcp/qiqi_delegate/tests -v
 bash scripts/workspace-check.sh
 ```
 
-Runtime state nằm dưới `.qiqi/state/` và chỉ là session/turn truth.
+Runtime state nằm dưới `.qiqi/state/` và chỉ là session/turn lifecycle truth, không phải semantic completion truth.
 
 ## 5. Canonical Work Item behavior
 
@@ -118,107 +114,141 @@ Với task có stable ID như `redmine:116655`:
 3. scoped `work_item_history_read` chỉ khi exact provenance thực sự cần;
 4. reconcile current requirements/repo state/open lifecycle state/next actions;
 5. choose repo/wave;
-6. TaskPacket truyền Work Item ID + exact whole revision;
-7. child `work_item_get`, làm current repo, persist current repo state bằng `mutation.state` + smallest direct groups dưới `mutation.operations` (`checkpoint_append`, blocker/question/handoff upsert);
-8. QiQi đọc full native response rồi reread bounded Work Item khi dependent orchestration decision cần resulting state;
-9. QiQi reconcile global phase/status/next action bằng exact latest revision.
+6. QiQi distill repo-local TaskPacket **không chứa Work Item ID/revision**;
+7. child làm current repo từ immutable TaskPacket + repo/stable policy và trả exact native evidence;
+8. QiQi reread latest Work Item khi dependent decision cần current canonical truth;
+9. QiQi reconcile returned evidence, stale materiality, phase/status/next action bằng exact latest revision.
 
-Historical semantic collections không được reconstruct/resend như full-array mutation. `mutation.operations` có direct typed groups, tối đa 50 semantic records tổng cộng/call, commit all-or-nothing trên một final candidate, và stale writer không được server auto-rebase. Cross-group caller order không phải public semantics.
+Task có Work Item và task không có Work Item phải có child-facing semantics tương đương khi objective/scope/acceptance/premises giống nhau.
 
 `phase` không phải FSM cứng; UAT → fix → UT → IT → UAT hợp lệ.
 
-## 6. Questions/decisions/requirement changes
+## 6. TaskPacket contract
 
-Ambiguity chưa chốt → `operations.question_upsert` tạo open question. User/customer Q&A chốt có thể dùng một atomic grouped mutation:
-
-```text
-operations.decision_upsert = [new active decision, old decision -> superseded nếu cần]
-operations.question_upsert = [open -> resolved]
-state.current_requirements nếu effective semantics đổi
-operations.change_upsert nếu requirement/scope thực sự đổi
-```
-
-Decision bị thay dùng monotonic `active -> superseded` + `superseded_by`; không rewrite historical summary/provenance. Cross-record reference validate trên final candidate document nên create successor + supersede old + resolve question có thể commit trong cùng revision mà không phụ thuộc cross-group execution order.
-
-## 7. Cross-repo behavior
+TaskPacket là **smallest sufficient repo-local problem contract** và là **immutable semantic snapshot** cho một delegated turn.
 
 ```text
-repo A evidence
-→ operations.handoff_upsert pending
-→ native response về QiQi
-→ QiQi reread/reconcile
-→ delegate repo B
+repository                 runtime routing arg
+route                      runtime routing arg
+objective                  required task semantic
+scope[]                    required task semantic
+acceptance_criteria[]      required task semantic
+out_of_scope[]?            optional
+context?                   optional
+  trusted_facts[]?         {fact, source}
+  claims_to_investigate[]? {claim, source}
+constraints[]?             optional
+known_unknowns[]?          optional
+session_id?                runtime continuity arg
 ```
 
-Child không tự sửa/delegate sibling repo.
+Không có child-facing `user_request`, Work Item ref/revision hoặc normal `verification` field.
 
-## 8. Knowledge progressive disclosure
+- `trusted_fact`: execution premise child MAY rely on; trusted-for-execution không đồng nghĩa independently verified truth.
+- `claim_to_investigate`: child MUST NOT assume; confirm/contradict/unresolved theo scope.
+- `known_unknown`: child MUST NOT silently assume away.
+- Acceptance nói WHAT phải chứng minh; child discover HOW từ current repo/stable policy. Exact method/command chỉ bắt buộc khi method itself là contractual requirement.
 
-Sau khi hiểu concern:
+### Material semantics survive distillation
 
-1. tạo 3–8 discriminative concepts;
-2. `knowledge_search`;
-3. chọn 1–2 exact candidates;
-4. exact-read smallest sufficient semantic scope:
-   - full `knowledge_read` khi cần whole concept;
-   - `knowledge_read_metadata` khi chỉ cần metadata/provenance/revision + section index;
-   - `knowledge_read_section` khi chỉ cần one existing marked section;
-5. material use/update dựa trên exact read đủ scope, không search card;
-6. before create/update search dedupe; existing update target lấy exact revision từ exact read;
-7. create/intentional whole replacement dùng `knowledge_write`;
-8. metadata/content/one-section partial mutation dùng `knowledge_update` và vẫn cạnh tranh trên one whole-document revision;
-9. substantive reusable conclusion review/mutation theo knowledge-distill policy.
+QiQi có thể bỏ original wording/history, nhưng mọi semantic element có thể đổi objective/scope/constraint/acceptance/external premise/unresolved decision phải survive distillation.
 
-Fact từ Knowledge mà QiQi dùng làm delegation premise và không nằm trong Work Item vẫn phải inline TaskPacket với provenance.
+`smallest sufficient` đánh giá bằng:
 
-## 9. TaskPacket contract
+- **completeness:** context-naive child hiểu WHAT/boundary/premises/acceptance không cần hidden QiQi/Work Item state;
+- **minimality:** datum task-specific chỉ ở packet nếu bỏ nó có thể làm child hiểu sai assignment hoặc QiQi accept sai result.
+
+Character/token count là performance metric phụ, không được dùng để truncate material semantics.
+
+## 7. Task-semantic closed world
+
+Child MUST NOT dùng Work Item, Shared Knowledge, sibling repo hoặc QiQi workspace/orchestration state để reconstruct objective/scope/product decision/constraint/acceptance bị thiếu.
+
+Missing material semantics là coordinator-contract failure/blocker. Child surface exact missing input để QiQi repair/resume/redelegate; không tự search global task state để đoán.
+
+Self-sufficiency chỉ áp dụng cho **task meaning**. Child vẫn MAY dùng:
 
 ```text
-repository
-route
-user_request
-objective
-scope
-out_of_scope
-required_context
-constraints
-acceptance_criteria
-verification
-known_unknowns
-session_id?
+current repo
+stable execution policy/environment
+allowed Shared Knowledge cho reusable repo/domain implementation knowledge
+authorized runtime/log/API/DB/browser/infra evidence
 ```
 
-`scope` và `acceptance_criteria` non-empty. `required_context` item có `fact`, `source`, `certainty`; certainty chỉ `verified`, `user-provided`, `authoritative-decision`.
+khi task/policy cho phép.
 
-## 10. Native result/RESUME
+## 8. Knowledge progressive disclosure và child boundary
+
+Ở QiQi layer, Knowledge có thể ảnh hưởng TaskPacket semantics; material external/product premise phải được distill vào TaskPacket.
+
+Ở child layer, Knowledge MAY dùng cho reusable implementation/domain knowledge phát sinh sau repo discovery nếu stable policy cho phép. Knowledge **không phải fallback cho incomplete TaskPacket**.
+
+Progressive read:
+
+1. `knowledge_search`;
+2. chọn exact candidate;
+3. `knowledge_read` / `knowledge_read_metadata` / `knowledge_read_section` ở smallest sufficient scope;
+4. owner source/test thắng stale Knowledge cho current implementation;
+5. mutation chỉ khi authority/policy cho phép và dùng whole-document revision concurrency.
+
+## 9. Greenfield decision authority
+
+Trong requirement-only repo, child MAY tự chọn reversible technical decision không materially đổi:
+
+- observable product semantics;
+- public/external contract;
+- security/compliance semantics;
+- significant cost/operational envelope.
+
+Decision vượt boundary phải surface options/trade-offs/open decision về QiQi/user.
+
+## 10. Stale semantics
+
+Sau START, TaskPacket không mutate. QiQi chịu trách nhiệm stale detection/materiality/reconciliation.
+
+```text
+canonical state change
+        ↓
+QiQi evaluates materiality
+        ↓
+non-material
+  → child may settle
+  → reconcile against latest truth
+
+material
+  → stale result MUST NOT become current truth
+  → cancel / interrupt / resume / redelegate / reconcile
+    tùy runtime capability
+```
+
+Normative requirement là stale result không được promote thành current truth; interrupt không phải mandatory mechanism.
+
+## 11. Native result/RESUME
 
 Settled/failed trả exact native `agent_response`. Blocked trả `agent_response=null` + exact `session_id`. Không viewport/transcript fallback.
 
-START không có session ID; RESUME dùng exact native ID của cùng repo/agent conversation. Task continuity đến từ Work Item, không infer session từ task ID.
+`settled | failed | blocked` chỉ là runtime lifecycle state. Không thêm semantic `completed | partial | blocked` envelope; QiQi đọc native response và quyết định semantic completion.
 
-## 11. Fresh-session acceptance smoke
+START không có session ID; RESUME dùng exact native ID của cùng repo/agent conversation. Session continuity khác canonical task continuity.
+
+## 12. Fresh-session acceptance smoke
 
 Trên repo test an toàn:
 
-1. QiQi thấy `work_item_*` gồm scoped history + grouped typed incremental update và đủ 6 Knowledge tools;
-2. QiQi create/get test Work Item; GET không hydrate accumulated history;
-3. fresh agent append checkpoint bằng `operations.checkpoint_append` thành công ở **first valid attempt**, không schema-probing, không gửi historical checkpoints, receipt compact;
-4. fresh agent partial-resolve blocker/question bằng direct group thành công ở **first valid attempt**, không resend immutable body/full collection;
-5. old `operations:[{op,value}]` shape bị schema reject và không xuất hiện trong declared public schema/skill;
-6. history cursor stale/cross-item bị reject đúng contract;
-7. delegate TaskPacket identify task/revision;
-8. child đọc cùng Work Item và chỉ mutate current-repo authority;
-9. stale Work Item writer conflict dù target khác collection;
-10. Knowledge search card thin + metadata/section/full exact reads đúng scope;
-11. partial Knowledge update preserve untouched canonical state và stale revision bị reject;
-12. child không mở sibling repo/physical DB/store;
-13. qiqi_delegate native hook/RESUME smoke pass cho agent family thực sự dùng;
-14. dependency-only orchestration chọn repo/wave từ `repos.yaml` mà không hydrate `SYSTEM_MAP.md`;
-15. contract/ownership/compatibility-impact task đọc `SYSTEM_MAP.md` và lấy đúng semantic fact ngoài registry.
+1. QiQi thấy Work Item + đủ 6 Knowledge tools; repository child không cần Work Item để hiểu assignment;
+2. cùng repo-local assignment được delegate một lần no-Work-Item và một lần tracked-by-Work-Item với child-facing semantics tương đương;
+3. TaskPacket không render original ticket/history/Work Item ID/revision/normal verification command;
+4. empty optional fields không tạo headings/fallback prose;
+5. missing task semantics khiến child surface blocker, không query Work Item/Knowledge để reconstruct task;
+6. child discover reusable legacy connector concern và MAY dùng Shared Knowledge nếu stable policy cho phép;
+7. stale Knowledge không override current owner source/test;
+8. runtime/external evidence task MAY dùng authorized logs/API/DB/browser tools;
+9. greenfield child surface product/security/compliance/material-cost decisions vượt technical authority;
+10. canonical state material change trong lúc child chạy: stale result không được QiQi promote thành current truth;
+11. native qiqi_delegate hook/RESUME smoke pass cho agent family thực sự dùng;
+12. dependency-only orchestration chọn repo/wave từ `repos.yaml` không hydrate `SYSTEM_MAP.md`.
 
-Happy-path acceptance có **zero intentionally-invalid schema discovery calls**. Validation errors dùng để reject bad input, không phải runtime discovery protocol.
-
-## 12. Workspace đã cài harness
+## 13. Workspace đã cài harness
 
 Không rsync đè template. Từ harness checkout mới:
 
@@ -229,7 +259,7 @@ bash scripts/migrate-workspace.sh --status /path/to/workspace
 bash scripts/migrate-workspace.sh --verify /path/to/workspace
 ```
 
-Cài user-scoped Work Item/Knowledge MCP là explicit operator step; migration không tự sửa user MCP config. Sau Work Item public read/write contract change phải rerun `work-item-template/scripts/install-user-mcp.sh` từ checkout mới; sau Knowledge public-tool change phải rerun `knowledge-template/scripts/install-user-mcp.sh`. Mở fresh agent session để client discover schema mới.
+Đây là breaking public schema change của `qiqi_delegate` 0.2.x: existing QiQi/workspace policy phải migrate coordinated với server/tool schema. Migration không tự sửa user MCP config. Mở fresh agent session để client discover `delegate_repo_task` schema mới.
 
 ## Acceptance gate
 
@@ -237,9 +267,11 @@ Cài user-scoped Work Item/Knowledge MCP là explicit operator step; migration k
 work-item-template checker PASS
 knowledge-template checker PASS
 workspace-check PASS
-fresh QiQi Work Item discovery/read/grouped-update PASS without schema probing
-fresh child Work Item discovery/update PASS
-Knowledge scoped progressive-disclosure smoke PASS
+qiqi_delegate unit/schema checks PASS
+fresh TaskPacket no-Work-Item / Work-Item equivalence PASS
+missing-task-semantics boundary PASS
+legitimate child Knowledge/runtime-evidence smoke PASS
+stale-result reconciliation smoke PASS
 native qiqi_delegate smoke PASS
 ```
 

@@ -38,6 +38,7 @@ required_files=(
   mcp/qiqi_delegate/server.py
   mcp/qiqi_delegate/tests/test_core.py
   mcp/qiqi_delegate/tests/test_result_hook.py
+  mcp/qiqi_delegate/tests/test_server_schema.py
   scripts/qiqi-mcp-server.sh
   scripts/workspace-check.sh
   docs/WORKSPACE_SETUP.md
@@ -84,20 +85,19 @@ for pattern in \
   '\$work-item' \
   'MUST apply `\$work-item`' \
   'không tự động.*Work Item' \
-  'work_item_\*' \
-  'canonical operational protocol' \
-  'QiQi sở hữu overall' \
+  'QiQi/orchestration side' \
   'knowledge_search' \
   'knowledge_read_metadata' \
   'knowledge_read_section' \
   'knowledge_update' \
-  'smallest sufficient semantic scope' \
-  'whole-document SHA-256 revision' \
   '`delegate_repo_task`' \
-  '`user_request`' \
-  '`required_context`' \
-  '`acceptance_criteria`' \
-  'Closed-world context rule' \
+  'immutable TaskPacket' \
+  'trusted_facts' \
+  'claims_to_investigate' \
+  'Task-semantic closed-world rule' \
+  'Completeness.*minimality' \
+  'stale result.*MUST NOT' \
+  'Runtime `state`.*không phải semantic completion' \
   '`agent_response`' \
   'native Stop hook' \
   '`\.qiqi/state/qiqi_delegate\.sqlite3`' \
@@ -108,12 +108,16 @@ done
 
 rg -q 'Repository selection và dependency wave chỉ dựa trên registry thì không đọc System Map' "$agents_md" || \
   fail 'AGENTS.md: dependency-only orchestration must not hydrate SYSTEM_MAP.md'
-rg -U -q 'native response established material repo state.*latest Work Item thiếu.*không silently tiếp tục' "$agents_md" || \
-  fail 'AGENTS.md: QiQi must detect missing repo persistence after material delegation'
+rg -U -q 'child.*không `work_item_get`/`work_item_update`|Child.*không cần Work Item ID/revision' "$agents_md" || \
+  fail 'AGENTS.md: Work Item must stay on QiQi side of delegation boundary'
+rg -U -q 'Missing material TaskPacket semantics.*không yêu cầu child search Work Item/Knowledge' "$agents_md" || \
+  fail 'AGENTS.md: incomplete TaskPacket must not trigger context reconstruction'
+rg -U -q 'Shared Knowledge.*implementation knowledge.*không thay thế nghĩa vụ semantic completeness' "$agents_md" || \
+  fail 'AGENTS.md: task-semantic Knowledge boundary missing'
 rg -U -q 'Work Item read/update/persistence failure.*\$work-item.*không local Markdown/cached-conversation fallback' "$agents_md" || \
   fail 'AGENTS.md: Work Item failure must not fall back to local/cached task truth'
 
-# Work Item read/write mechanics belong to the shared user-scoped $work-item skill.
+# Work Item mechanics belong to the shared user-scoped $work-item skill.
 # Keep only activation/authority/safety invariants in workspace always-on policy.
 if rg -q '^### Current snapshot và material history$|^### Material session reconciliation$|Phase-specific guardrails:' "$agents_md"; then
   fail 'AGENTS.md: detailed Work Item operational protocol must live in $work-item, not workspace always-on policy'
@@ -172,8 +176,8 @@ if [[ -f "$workspace_root/.agents/skills/ticket-work-item/SKILL.md" ]]; then
 fi
 
 identity="$workspace_root/identity.md"
-for pattern in 'knowledge_read_metadata' 'knowledge_read_section' 'knowledge_update' 'smallest sufficient semantic scope'; do
-  rg -q "$pattern" "$identity" || fail "identity.md: missing scoped Knowledge guidance: $pattern"
+for pattern in 'knowledge_read_metadata' 'knowledge_read_section' 'smallest sufficient semantic scope' 'material use/update'; do
+  rg -q "$pattern" "$identity" || fail "identity.md: missing scoped Knowledge responsibility: $pattern"
 done
 
 workspace_readme="$workspace_root/README.md"
@@ -181,17 +185,26 @@ for pattern in \
   'Work Item operational skill' \
   '\$work-item' \
   'user-scoped skill' \
-  'Không còn workspace-local `\$ticket-work-item`' \
   'knowledge_read_metadata' \
   'knowledge_read_section' \
   'knowledge_update' \
-  'one SHA-256 revision'; do
-  rg -q "$pattern" "$workspace_readme" || fail "README.md: missing workspace capability guidance: $pattern"
+  'TaskPacket' \
+  'immutable semantic snapshot' \
+  'task-semantic'; do
+  rg -U -q "$pattern" "$workspace_readme" || fail "README.md: missing workspace capability guidance: $pattern"
 done
 
 workspace_setup="$workspace_root/docs/WORKSPACE_SETUP.md"
-for pattern in 'knowledge_read_metadata' 'knowledge_read_section' 'knowledge_update' 'whole-document revision' 'canonical owner' 'dependency-only'; do
-  rg -q "$pattern" "$workspace_setup" || fail "docs/WORKSPACE_SETUP.md: missing workspace capability guidance: $pattern"
+for pattern in \
+  'knowledge_read_metadata' \
+  'knowledge_read_section' \
+  'knowledge_update' \
+  'canonical owner' \
+  'dependency-only' \
+  'immutable semantic snapshot' \
+  'task-semantic' \
+  'stale'; do
+  rg -U -q "$pattern" "$workspace_setup" || fail "docs/WORKSPACE_SETUP.md: missing workspace capability guidance: $pattern"
 done
 
 codex_config="$workspace_root/.codex/config.toml"
@@ -229,13 +242,13 @@ done
 
 for pattern in \
   'TASK_PACKET_MAX_CHARS = 100_000' \
+  'class TrustedFact' \
+  'class ClaimToInvestigate' \
+  'class TaskContext' \
   'class TaskPacket' \
-  'class ContextFact' \
   'def build_task_packet' \
   'def render_task_prompt' \
-  'You do not share QiQi' \
-  'Do not invent an omitted external fact' \
-  'there are no required result headings' \
+  'trusted_fact and claim_to_investigate' \
   'def normalize_hook_payload' \
   'last_assistant_message' \
   'class SessionStore' \
@@ -245,6 +258,12 @@ for pattern in \
 done
 if rg -q 'AGENT_RESPONSE_MAX|TASK_TEXT_MAX|TASK_ITEM_MAX|TASK_LIST_MAX' "$core"; then
   fail 'qiqi_delegate/core.py: guessed per-field/native-response limits are forbidden'
+fi
+if rg -q 'user_request|required_context|verification|certainty' "$core"; then
+  fail 'qiqi_delegate/core.py: legacy child-facing TaskPacket fields found'
+fi
+if rg -q 'Context boundary|Handoff contract|You do not share QiQi|Do not invent an omitted external fact' "$core"; then
+  fail 'qiqi_delegate/core.py: stable runtime/repo boilerplate must not be repeated by task renderer'
 fi
 
 for pattern in \
@@ -265,19 +284,31 @@ for pattern in \
   'LEGACY_RUNS_DIR' \
   'RESULT_HOOK_PATH' \
   'SessionStore' \
+  'class TrustedFactInput' \
+  'class ClaimToInvestigateInput' \
+  'class TaskContextInput' \
+  'ConfigDict\(extra="forbid"\)' \
   'def _build_handoff_args' \
   'def _register_active_capture' \
   'expected_session_id' \
   'def _wait_for_result_capture' \
   'refusing to fall back to terminal screen or transcript parsing' \
-  'user_request: str' \
-  'required_context: list\[dict\[str, str\]\]' \
+  'objective: str' \
+  'scope: list\[str\]' \
   'acceptance_criteria: list\[str\]' \
+  'context: TaskContextInput \| None' \
+  'known_unknowns: list\[str\] \| None' \
+  'Runtime state is lifecycle truth only' \
   '"agent_response": response' \
   'def delegate_repo_task'; do
   rg -q "$pattern" "$server" || fail "qiqi_delegate/server.py: missing contract: $pattern"
 done
+if rg -q 'context: dict\[str, list\[dict\[str, str\]\]\]|user_request: str|required_context: list|verification: list' "$server"; then
+  fail 'qiqi_delegate/server.py: legacy/generic child-facing public fields found'
+fi
 
+# Generated MCP inputSchema is validated by tests/test_server_schema.py through
+# MCPServer.list_tools(); keep static checks here focused on implementation presence.
 bypass_count="$(rg -o --fixed-strings -- '--dangerously-bypass-hook-trust' "$server" | wc -l | tr -d ' ')"
 [[ "$bypass_count" == "1" ]] || \
   fail "qiqi_delegate/server.py: hook-trust bypass must appear only in route-arg rejection policy, found $bypass_count occurrences"
