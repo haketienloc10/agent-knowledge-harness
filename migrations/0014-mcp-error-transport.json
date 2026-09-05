@@ -1,0 +1,24 @@
+{
+  "version": 14,
+  "from_ref": "601941e690ea873f45acb6e40e43bb7ebd2d3184",
+  "to_ref": "f86e97935a9d1302a4d7040aebd7e1602fdd9240",
+  "description": "install the MCP 2.1.1 QiQi Delegate error-transport contract into existing workspaces, run dependency-bearing qiqi_delegate tests in the project uv environment, and add public-boundary regression coverage",
+  "workspace": {
+    "merge": [],
+    "replace": [
+      "workspace-template/mcp/qiqi_delegate/pyproject.toml",
+      "workspace-template/mcp/qiqi_delegate/server.py",
+      "workspace-template/mcp/qiqi_delegate/tests/test_mcp_error_transport.py",
+      "workspace-template/mcp/qiqi_delegate/tests/test_review_5120952535.py",
+      "workspace-template/scripts/workspace-check.sh"
+    ],
+    "delete": [],
+    "manual_review": []
+  },
+  "repo": {
+    "merge": [],
+    "replace": [],
+    "delete": [],
+    "manual_review": []
+  }
+}
