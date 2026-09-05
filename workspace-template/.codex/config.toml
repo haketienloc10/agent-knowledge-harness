@@ -6,3 +6,6 @@ tool_timeout_sec = 7200
 required = true
 enabled_tools = ["delegate_repo_task"]
 default_tools_approval_mode = "approve"
+
+[features.code_mode]
+direct_only_tool_namespaces = ["mcp__qiqi_delegate"]
