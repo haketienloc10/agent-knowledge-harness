@@ -1,5 +1,6 @@
 name: MCP error transport
 
+# Keep this workflow path in the pull-request filter so CI-only edits retrigger the transport suite.
 on:
   pull_request:
     paths:

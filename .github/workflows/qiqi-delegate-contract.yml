@@ -7,7 +7,7 @@ on:
       - 'workspace-template/mcp/qiqi_delegate/**'
       - 'workspace-template/scripts/workspace-check.sh'
       - 'work-item-template/**'
-      - 'migrations/0014-taskpacket-self-sufficient-contract.json'
+      - 'migrations/0015-taskpacket-self-sufficient-contract.json'
   workflow_dispatch:
 
 permissions:
