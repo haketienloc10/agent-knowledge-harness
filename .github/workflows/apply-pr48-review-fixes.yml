@@ -1,0 +1,118 @@
+name: Apply PR 48 review fixes
+
+on:
+  push:
+    branches:
+      - fix/issue-47-mcp-error-transport
+    paths:
+      - "scripts/apply_pr48_review_fixes.py"
+      - ".github/workflows/apply-pr48-review-fixes.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/issue-47-mcp-error-transport
+          fetch-depth: 0
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+
+      - name: Apply reviewed fixes
+        run: python3 scripts/apply_pr48_review_fixes.py
+
+      - name: Commit code and regression fixes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            knowledge-template/mcp/knowledge/server.py \
+            knowledge-template/mcp/knowledge/tests/test_review_5120952535.py \
+            work-item-template/mcp/work_item/server.py \
+            work-item-template/mcp/work_item/tests/test_review_5120952535.py \
+            workspace-template/mcp/qiqi_delegate/server.py \
+            workspace-template/mcp/qiqi_delegate/tests/test_review_5120952535.py \
+            workspace-template/scripts/workspace-check.sh
+          git commit -m "fix: address PR 48 review findings"
+          echo "FIXED_REF=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+
+      - name: Add workspace migration
+        env:
+          FROM_REF: 601941e690ea873f45acb6e40e43bb7ebd2d3184
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          migration = {
+              "version": 14,
+              "from_ref": os.environ["FROM_REF"],
+              "to_ref": os.environ["FIXED_REF"],
+              "description": (
+                  "install the MCP 2.1.1 QiQi Delegate error-transport contract into existing "
+                  "workspaces, run dependency-bearing qiqi_delegate tests in the project uv "
+                  "environment, and add public-boundary regression coverage"
+              ),
+              "workspace": {
+                  "merge": [],
+                  "replace": [
+                      "workspace-template/mcp/qiqi_delegate/pyproject.toml",
+                      "workspace-template/mcp/qiqi_delegate/server.py",
+                      "workspace-template/mcp/qiqi_delegate/tests/test_mcp_error_transport.py",
+                      "workspace-template/mcp/qiqi_delegate/tests/test_review_5120952535.py",
+                      "workspace-template/scripts/workspace-check.sh",
+                  ],
+                  "delete": [],
+                  "manual_review": [],
+              },
+              "repo": {"merge": [], "replace": [], "delete": [], "manual_review": []},
+          }
+          Path("migrations/0014-mcp-error-transport.json").write_text(
+              json.dumps(migration, indent=2) + "\n", encoding="utf-8"
+          )
+          PY
+          git add migrations/0014-mcp-error-transport.json
+          git commit -m "chore: migrate QiQi MCP error transport"
+
+      - name: Verify all MCP suites
+        run: |
+          uv sync --project knowledge-template/mcp/knowledge
+          uv run --project knowledge-template/mcp/knowledge \
+            python -m unittest discover -s knowledge-template/mcp/knowledge/tests -v
+
+          uv sync --project work-item-template/mcp/work_item
+          (
+            cd work-item-template/mcp/work_item
+            uv run python -m unittest discover -s tests -v
+          )
+
+          uv sync --project workspace-template/mcp/qiqi_delegate
+          (
+            cd workspace-template/mcp/qiqi_delegate
+            uv run python -m unittest discover -s tests -v
+          )
+
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          data = json.loads(Path("migrations/0014-mcp-error-transport.json").read_text())
+          assert data["version"] == 14
+          required = {
+              "workspace-template/mcp/qiqi_delegate/pyproject.toml",
+              "workspace-template/mcp/qiqi_delegate/server.py",
+              "workspace-template/mcp/qiqi_delegate/tests/test_mcp_error_transport.py",
+              "workspace-template/mcp/qiqi_delegate/tests/test_review_5120952535.py",
+              "workspace-template/scripts/workspace-check.sh",
+          }
+          assert required <= set(data["workspace"]["replace"])
+          PY
+
+      - name: Push fixes
+        run: git push origin HEAD:fix/issue-47-mcp-error-transport
