@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 
 from mcp.server import MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
 
 from contracts import (
     KnowledgeId,
@@ -49,7 +50,7 @@ def _raise_actionable_error(exc: KnowledgeError) -> None:
     message = str(exc)
     lowered = message.lower()
     if "knowledge section does not exist" in lowered:
-        raise ValueError(
+        raise ToolError(
             "code=missing_section; "
             f"{message}; action=call knowledge_read_metadata for the exact id, choose an "
             "existing returned section id, then retry without inventing or implicitly "
@@ -57,7 +58,7 @@ def _raise_actionable_error(exc: KnowledgeError) -> None:
         ) from exc
     if isinstance(exc, ConflictError):
         if "revision conflict" in lowered or "changed during update" in lowered:
-            raise ValueError(
+            raise ToolError(
                 "code=revision_conflict; "
                 f"{message}; action=read the exact knowledge target again, reconcile "
                 "against the returned revision, then retry with that exact "
@@ -66,34 +67,34 @@ def _raise_actionable_error(exc: KnowledgeError) -> None:
                 "the full semantic content is required"
             ) from exc
         if "already exists or collides" in lowered:
-            raise ValueError(
+            raise ToolError(
                 "code=create_conflict; "
                 f"{message}; action=call knowledge_search for the concept, read the "
                 "existing item, then update with exact id + expected_revision instead "
                 "of retrying create"
             ) from exc
         if "does not exist for update" in lowered:
-            raise ValueError(
+            raise ToolError(
                 "code=missing_update_target; "
                 f"{message}; action=call knowledge_search again; create only if no "
                 "existing knowledge covers the concept"
             ) from exc
         if "index is stale" in lowered or "index points to a different id" in lowered:
-            raise ValueError(
+            raise ToolError(
                 "code=stale_index; "
                 f"{message}; action=do not retry unchanged; the store operator must run "
                 "knowledge reindex/check before search/read can be trusted"
             ) from exc
-        raise ValueError(f"code=knowledge_conflict; {message}") from exc
+        raise ToolError(f"code=knowledge_conflict; {message}") from exc
     if isinstance(exc, ValidationError):
-        raise ValueError(
+        raise ToolError(
             "code=knowledge_validation; "
             f"{message}; action=inspect the typed tool schema and correct the payload "
             "instead of guessing filesystem fields, flattening routing metadata, or "
             "editing semantic section markers manually"
         ) from exc
     if "knowledge id does not exist" in lowered:
-        raise ValueError(
+        raise ToolError(
             "code=missing_read_target; "
             f"{message}; action=call knowledge_search again and read only exact returned ids"
         ) from exc
