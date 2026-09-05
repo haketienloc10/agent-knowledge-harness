@@ -70,6 +70,31 @@ class WorkItemSkillContractTests(unittest.TestCase):
         self.assertNotIn("child `work_item_get`", lowered)
         self.assertNotIn("taskpacket identifies a work item", lowered)
 
+    def test_common_path_avoids_redundant_parent_inference_turns(self) -> None:
+        text = SKILL.read_text(encoding="utf-8").lower()
+
+        for required in (
+            "do **not** call `work_item_list` before `work_item_get(id)`",
+            "successful `work_item_create` response is the authoritative current snapshot",
+            "do not immediately reread it",
+            "preserve the exact revision that produced the delegated taskpacket",
+            "prefer optimistic cas",
+            "delegated `expected_revision`",
+            "update success proves the canonical revision stayed unchanged through commit",
+            "revision conflict means stale risk",
+            "routine repo-specific completion",
+            "does **not** by itself require shared knowledge review",
+            "do not read `$knowledge-distill`",
+            "knowledge_write(entries=[])",
+        ):
+            self.assertIn(required, text)
+
+        self.assertLessEqual(
+            len(SKILL.read_bytes()),
+            7000,
+            "work-item skill exceeded the reviewed always-hydrated token budget",
+        )
+
     def test_child_facing_taskpacket_does_not_require_work_item_identity(self) -> None:
         text = SKILL.read_text(encoding="utf-8").lower()
         taskpacket = text.split("## taskpacket delegation boundary", 1)[1]
