@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import hashlib
 import json
 import os
@@ -18,6 +19,7 @@ from typing import Any
 
 import yaml
 from mcp.server import MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
 
 from core import (
     SessionStore,
@@ -82,6 +84,93 @@ _state_lock = asyncio.Lock()
 _active_repositories: set[Path] = set()
 _active_sessions: set[str] = set()
 _store = SessionStore(STATE_DB)
+
+
+def _delegation_tool_error(exc: ValueError | RuntimeError) -> ToolError:
+    message = str(exc)
+    lowered = message.lower()
+    code = "delegation_runtime_error"
+    action = "correct the reported delegation environment or input and retry"
+
+    if "repository must not be empty" in lowered or "route must not be empty" in lowered:
+        code = "invalid_argument"
+        action = "provide non-empty repository and route values"
+    elif "unknown repository" in lowered:
+        code = "unknown_repository"
+        action = "choose an exact repository name from the workspace repos.yaml registry"
+    elif (
+        "missing workspace registry" in lowered
+        or "repos.yaml" in lowered
+        or "not a git repository" in lowered
+        or "repository path does not exist" in lowered
+    ):
+        code = "repository_registry_invalid"
+        action = "repair repos.yaml so the repository resolves to an existing exact Git root inside the workspace"
+    elif "unknown route" in lowered:
+        code = "unknown_route"
+        action = "choose an exact route from instructions/agent-routing.yaml"
+    elif (
+        "agent-routing.yaml" in lowered
+        or "unresolved execution placeholder" in lowered
+        or "start_args" in lowered
+        or "resume_args" in lowered
+    ):
+        code = "routing_invalid"
+        action = "repair instructions/agent-routing.yaml and rerun workspace verification"
+    elif "missing execution agent cli" in lowered:
+        code = "execution_agent_unavailable"
+        action = "install or expose the configured native agent CLI on PATH, then retry"
+    elif "missing native result hook helper" in lowered:
+        code = "result_hook_unavailable"
+        action = "restore the managed qiqi_delegate result hook and rerun workspace verification"
+    elif (
+        "repository already has an active delegation" in lowered
+        or "native session already has an active delegation" in lowered
+    ):
+        code = "delegation_conflict"
+        action = "wait for or cancel the existing delegation before retrying the same repository or session"
+    elif "integration is not current" in lowered:
+        code = "herdr_integration_not_current"
+        action = "run the reported herdr integration install command, verify status is current, then retry"
+    elif "missing herdr cli" in lowered or "failed to start herdr named session" in lowered:
+        code = "herdr_unavailable"
+        action = "install or repair Herdr and verify the configured named session can start"
+    elif "native final response was not captured" in lowered:
+        code = "native_result_capture_failed"
+        action = "use the preserved session_id in this error to RESUME the exact native session after repairing result capture"
+    elif "resume identity mismatch" in lowered or "cross-agent" in lowered or "repository mismatch" in lowered:
+        code = "resume_identity_mismatch"
+        action = "resume only the exact session with the same repository and native agent identity"
+    elif "native session" in lowered or "session identity" in lowered:
+        code = "native_session_unavailable"
+        action = "verify the current Herdr integration exposes the native session identity, then retry"
+    elif (
+        "herdr command failed" in lowered
+        or "herdr workspace" in lowered
+        or "herdr agent" in lowered
+        or "herdr root pane" in lowered
+        or "claude prompt" in lowered
+    ):
+        code = "herdr_runtime_failed"
+        action = "inspect the reported Herdr stage, repair the runtime condition, and retry"
+    elif isinstance(exc, ValueError):
+        code = "task_packet_invalid"
+        action = "correct the structured TaskPacket fields and retry"
+
+    return ToolError(f"code={code}; {message}; action={action}")
+
+
+def _public_tool_errors(func):
+    @functools.wraps(func)
+    async def wrapper(*args, **kwargs):
+        try:
+            return await func(*args, **kwargs)
+        except ToolError:
+            raise
+        except (ValueError, RuntimeError) as exc:
+            raise _delegation_tool_error(exc) from exc
+
+    return wrapper
 
 
 def _load_repo_registry() -> dict[str, Path]:
@@ -805,6 +894,7 @@ def _prepare_resume(repository: str, agent_name: str, session_id: str) -> None:
 
 
 @mcp.tool()
+@_public_tool_errors
 async def delegate_repo_task(
     repository: str,
     route: str,
