@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 
 from mcp.server import MCPServer
@@ -46,8 +47,15 @@ def _store_root() -> Path:
     return resolve_store_root(raw)
 
 
+_ABSOLUTE_PATH_RE = re.compile(r"(?<![\w])(?:[A-Za-z]:[\\/]|/)[^\s;,)\]}]+")
+
+
+def _redact_physical_paths(message: str) -> str:
+    return _ABSOLUTE_PATH_RE.sub("<redacted-path>", message)
+
+
 def _raise_actionable_error(exc: KnowledgeError) -> None:
-    message = str(exc)
+    message = _redact_physical_paths(str(exc))
     lowered = message.lower()
     if "knowledge section does not exist" in lowered:
         raise ToolError(
@@ -85,7 +93,10 @@ def _raise_actionable_error(exc: KnowledgeError) -> None:
                 f"{message}; action=do not retry unchanged; the store operator must run "
                 "knowledge reindex/check before search/read can be trusted"
             ) from exc
-        raise ToolError(f"code=knowledge_conflict; {message}") from exc
+        raise ToolError(
+            f"code=knowledge_conflict; {message}; "
+            "action=read the exact knowledge target again, inspect the reported conflict, and retry only after reconciling current state"
+        ) from exc
     if isinstance(exc, ValidationError):
         raise ToolError(
             "code=knowledge_validation; "

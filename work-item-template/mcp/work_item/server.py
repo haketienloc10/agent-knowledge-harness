@@ -172,7 +172,10 @@ def _raise_actionable_error(exc: WorkItemError) -> None:
                 "code=artifact_revision_conflict; "
                 f"{message}; action=call work_item_artifact_get again and retry with its exact revision"
             ) from exc
-        raise ToolError(f"code=artifact_conflict; {message}") from exc
+        raise ToolError(
+            f"code=artifact_conflict; {message}; "
+            "action=call work_item_artifact_get/list to inspect current artifact state before retrying"
+        ) from exc
     if isinstance(exc, ArtifactNotFoundError):
         raise ToolError(
             f"code=artifact_not_found; {exc}; action=call work_item_artifact_list/get to verify artifact identity"
@@ -189,13 +192,19 @@ def _raise_actionable_error(exc: WorkItemError) -> None:
                 "code=revision_conflict; "
                 f"{message}; action=call work_item_get again and restart the dependent read/reconciliation"
             ) from exc
-        raise ToolError(f"code=work_item_conflict; {message}") from exc
+        raise ToolError(
+            f"code=work_item_conflict; {message}; "
+            "action=call work_item_get again, reconcile against current canonical state, then retry"
+        ) from exc
     if isinstance(exc, NotFoundError):
         raise ToolError(
             f"code=work_item_not_found; {exc}; action=verify the canonical task id or let QiQi create it"
         ) from exc
     if isinstance(exc, ValidationError):
-        raise ToolError(f"code=work_item_validation; {exc}") from exc
+        raise ToolError(
+            f"code=work_item_validation; {exc}; "
+            "action=correct the request to match the typed Work Item tool schema and retry"
+        ) from exc
     raise RuntimeError(f"code=work_item_store_error; {exc}") from exc
 
 

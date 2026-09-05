@@ -829,6 +829,7 @@ async def _prompt_and_wait(
     name: str, prompt: str, adapter: str
 ) -> tuple[str, dict[str, Any]]:
     command = ["agent", "prompt", name, prompt, "--wait"]
+    display_command = ["agent", "prompt", name, "<task-packet>", "--wait"]
     returncode, stdout, stderr = await _run_herdr(*command, check=False)
     payload = _herdr_json_payload(stdout, stderr)
     if returncode != 0:
@@ -846,15 +847,15 @@ async def _prompt_and_wait(
                 )
             await _run_herdr("agent", "send-keys", name, "enter")
             return await _wait_for_claude_enter_recovery(name, stalled_agent)
-        detail = (stderr or stdout).strip()
+        detail = (stderr or stdout).replace(prompt, "<task-packet>").strip()
         if len(detail) > 3000:
             detail = detail[-3000:]
         raise RuntimeError(
-            f"Herdr command failed (exit={returncode}): {' '.join(command)}"
+            f"Herdr command failed (exit={returncode}): {' '.join(display_command)}"
             f"{f'; {detail}' if detail else ''}"
         )
     if payload is None:
-        raise RuntimeError(f"Herdr agent prompt returned invalid JSON: {' '.join(command)}")
+        raise RuntimeError(f"Herdr agent prompt returned invalid JSON: {' '.join(display_command)}")
     agent = _agent_from_payload(payload, "agent prompt")
     status = agent.get("agent_status")
     if status not in {"idle", "done", "blocked"}:

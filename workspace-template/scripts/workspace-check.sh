@@ -302,7 +302,7 @@ tool_count="$(rg -c '^@mcp\.tool\(\)$' "$server" || true)"
 [[ "$tool_count" == "1" ]] || \
   fail "qiqi_delegate/server.py: expected exactly one public MCP tool, found $tool_count"
 
-python3 -m unittest discover -s "$mcp_project/tests" -v || \
+uv run --project "$mcp_project" python -m unittest discover -s "$mcp_project/tests" -v || \
   fail 'qiqi_delegate: unit tests failed'
 
 if ! uv run --project "$mcp_project" python -c \
