@@ -1,147 +1,73 @@
 ---
 name: work-item
 description: >
-  Operational protocol for Global Work Item MCP. Apply when a canonical Work Item has
-  already been selected or identified, when the user explicitly asks to create/use a
-  Work Item, or before calling any `work_item_*` tool. Do not decide that a generic
-  ticket, bug report, incident, or coding task should become a Work Item.
+  Operational protocol for Global Work Item MCP on the QiQi/orchestration side.
+  Apply when a canonical Work Item is selected/identified, when the user asks to
+  create/use one, or before any QiQi `work_item_*` call. Do not make Work Item a repository-child execution dependency.
 ---
 
 # Global Work Item Operational Protocol
 
-This skill contains the **on-demand read/write/reconciliation protocol** for Global
-Work Item MCP. Role authority still comes from the active `AGENTS.md`; this skill must
-not widen QiQi or repository-agent authority.
+Global Work Item MCP is canonical mutable product-task truth on the QiQi/orchestration side.
+Repository children receive immutable, semantically self-sufficient TaskPackets and do
+not need Work Item identity/revision.
 
-## Activation boundary
+## Activation
 
-Global Work Item remains explicit opt-in task state.
+- Apply when a canonical Work Item is selected/identified, when the user explicitly
+  requests create/use, and before any QiQi `work_item_*` call.
+- Generic tickets/bugs/incidents do not automatically become Work Items.
+- Never put Work Item ID/revision into child-facing TaskPacket semantics.
+- If MCP is unavailable for an ongoing canonical task, do not reconstruct canonical
+  truth from conversation memory or local Markdown.
 
-- Apply this skill when a canonical Work Item is already identified/selected.
-- Apply this skill when the user explicitly asks to create or use a Work Item.
-- Apply this skill before any `work_item_*` tool call in the current turn.
-- Do **not** create/select a Work Item merely because a prompt contains a Redmine/Jira/
-  GitHub issue, bug report, incident, pasted task, or generic coding request.
-- If role policy does not authorize creation, do not create one; hand the decision back
-  to the authorized orchestrator/user.
+## Common low-churn path
 
-If Work Item MCP is unavailable for an ongoing canonical Work Item, do not reconstruct
-canonical task truth from conversation memory or create a local Markdown fallback.
-
-## Canonical truth boundary
+For a normal single-repo task with an exact canonical ID:
 
 ```text
-Global Work Item MCP   = mutable product-task truth
-Knowledge MCP          = reusable durable truth
-Repo source/test       = implementation truth
-qiqi_delegate state    = runtime/session truth
+work_item_get(id)
+→ if absent: work_item_create(...)
+→ delegate from that exact snapshot/revision
+→ reconcile exact native child response
+→ work_item_update(expected_revision=<delegated revision>, mutation=...)
+→ on revision conflict: reread → reconcile → retry
 ```
 
-Work Item is not an activity transcript, reusable Knowledge store, source-code truth,
-or runtime/session store.
+Fast-path rules:
 
-## Read or create
+- Exact ID known → do **not** call `work_item_list` before `work_item_get(id)`.
+- A successful `work_item_create` response is the authoritative current snapshot and
+  revision for an immediately dependent delegation; do not immediately reread it.
+- Preserve the exact revision that produced the delegated TaskPacket.
+- After child return, prefer optimistic CAS: build the candidate reconciliation from
+  immutable TaskPacket + exact native response and call `work_item_update` with that
+  delegated `expected_revision`.
+- Update success proves the canonical revision stayed unchanged through commit.
+- Revision conflict means stale risk: get latest state, evaluate materiality, reconcile,
+  then retry only if still valid.
+- Reread first only when the dependent decision is not guarded by that same revisioned
+  mutation, when no mutation will be attempted, or after conflict.
+- Read history only when exact provenance is material.
 
-### Existing Work Item
+This preserves stale-result containment without redundant reads.
 
-Before substantive planning, implementation, review, status, handoff, RESUME/START
-follow-up, or completion decision that depends on a Work Item:
+## Current state, history, update
 
-1. `work_item_get(id)`.
-2. Treat the returned `revision` plus bounded current-state projection as the latest
-   canonical decision state; do not expect resolved/superseded/checkpoint history in
-   the default read.
-3. Reconcile any supplied TaskPacket/user context against that current state before acting.
-4. Call `work_item_history_read(...)` only when exact provenance/history is material to
-   the current decision. Mutation no longer requires hydrating a full historical array.
-5. If current Work Item conflicts with a required premise, stop the dependent action
-   and surface/reconcile the conflict according to role authority.
+`work_item_get(id)` returns bounded current state + whole revision.
+`work_item_history_read(...)` is only for material exact provenance. History cursors
+bind ID + exact revision + collection + filters; revision change between pages means
+restart, never mix revisions.
 
-`work_item_history_read` reads exactly one semantic collection per call. Its cursor is
-opaque and bound to Work Item id, whole Work Item revision, collection, and filters. If
-the Work Item changes between pages, restart the history read from the current revision;
-never mix pages from two revisions.
+Every write uses one typed `WorkItemMutation` with optimistic concurrency.
 
-### Explicit new Work Item
-
-Create only after explicit user/orchestrator selection of the Work Item workflow.
-
-1. Determine a stable canonical ID only when source + external ID are unambiguous.
-2. Call `work_item_get(id)` first so repeated intake does not reset an existing task.
-3. If found, continue from the existing current-state projection and reconcile genuinely
-   new source material; read scoped history only if the current decision needs it.
-4. If not found and creation is within role authority, `work_item_create(...)` from
-   material current facts/requirements only.
-5. Do not promote unsupported hypotheses, suggested fixes, or ticket comments into
-   verified facts/decisions.
-
-If a stable ID is required but cannot be determined safely, ask only for the missing
-identity instead of inventing one.
-
-## Update mechanics
-
-Every Work Item update uses one typed `WorkItemMutation` plus optimistic concurrency:
+`mutation.state` current fields:
 
 ```text
-work_item_get -> latest revision/current state
-→ build current-state patch + smallest grouped semantic mutations
-→ work_item_update(id, expected_revision, mutation)
-→ revision conflict: reread → reconcile → retry
+title / status / phase / summary / current_requirements / repos / next_actions
 ```
 
-A mutation has two separate roles:
-
-```text
-mutation.state
-  = current effective fields only
-
-mutation.operations
-  = grouped typed mutation of semantic lifecycle/history records
-```
-
-Either branch may be omitted when unused. Do not send an empty `state` object merely as
-boilerplate.
-
-### Current-state patch
-
-`mutation.state` may patch only:
-
-```text
-title / status / phase / summary
-current_requirements
-repos
-next_actions
-```
-
-Rules:
-
-- Nested repository objects merge by supplied fields.
-- `current_requirements` and `next_actions` are bounded current-state arrays; these
-  arrays replace atomically.
-- Explicit `null` keeps JSON merge-patch deletion semantics for state fields where the
-  canonical model permits it; omitted fields mean no change.
-- Historical semantic collections are intentionally **not** public full-array replacement
-  fields in `mutation.state`.
-
-### Grouped semantic operations
-
-`mutation.operations` is a typed object whose field names are the operation meaning
-itself. There is **no `op` discriminator and no `value` wrapper**:
-
-```json
-{
-  "operations": {
-    "blocker_upsert": [
-      {"id": "b1", "status": "resolved"}
-    ],
-    "checkpoint_append": [
-      {"repo": "backend", "summary": "Focused verification passed."}
-    ]
-  }
-}
-```
-
-Available groups:
+`mutation.operations` optional groups:
 
 ```text
 decision_upsert[]
@@ -152,262 +78,85 @@ handoff_upsert[]
 checkpoint_append[]
 ```
 
-Use only groups needed by the material change; omit empty groups. The declared MCP schema
-for each group exposes its record fields directly, so construct a valid mutation from the
-schema instead of probing it with intentionally incomplete/invalid `work_item_update`
-calls.
+At most 50 semantic records total may be sent per call. Groups form one final candidate
+and commit all-or-nothing under one exact revision. Server does not auto-rebase.
+Successful update returns a compact receipt; reread only if a later decision needs a
+fresh snapshot. Stable lifecycle IDs advance monotonically; checkpoints are append-only.
+Do not reconstruct/resend untouched history.
 
-Rules:
+## TaskPacket delegation boundary
 
-- At most 50 semantic records total may be sent across all groups in one call.
-- All groups commit all-or-nothing under one whole Work Item revision and build one final
-  candidate document.
-- Cross-group ordering is **not** part of the public contract. Cross-record references are
-  validated against the final candidate, so related decision/question transitions may be
-  grouped in the same atomic call without relying on heterogeneous caller order.
-- List order inside a group is preserved where canonical ordering matters, including
-  checkpoint append order.
-- Do not target the same stable-id record twice in one mutation; reconcile it into one
-  deterministic record mutation.
-- A stale writer always conflicts, even when it targets a different collection/record.
-  The server never auto-rebases semantic mutations.
-- Existing stable-id records keep semantic identity/provenance. Upsert means create or
-  monotonic lifecycle advance, not arbitrary historical rewrite.
-- Existing provenance/evidence extensions are additive: do not silently replace an
-  established value.
-
-Lifecycle contract:
+QiQi distills the smallest sufficient repo-local problem contract.
 
 ```text
-question:  open -> resolved                 # resolved never reopens
-decision:  active -> superseded             # superseded never reactivates
-blocker:   open -> resolved                 # recurring blocker gets a new id
-handoff:   pending -> resolved              # recurring handoff gets a new id
-
-change:
-  proposed -> accepted | rejected | superseded
-  accepted -> superseded
-  rejected/superseded are terminal
+objective                    required
+scope[]                      required
+acceptance_criteria[]        required
+out_of_scope[]?              optional
+context.trusted_facts[]?     {fact, source}
+context.claims_to_investigate[]? {claim, source}
+constraints[]?               optional
+known_unknowns[]?            optional
 ```
 
-Identity/provenance rules:
-
-- `questions[].question` is immutable after create. Resolution may add write-once
-  `answer` and/or `decision_id`.
-- `decisions[].summary` is immutable after create. Supersession adds write-once
-  `superseded_by`.
-- `changes[].type` and `changes[].summary` are immutable after create.
-- `blockers[].summary` is immutable after create.
-- `handoffs[].from`, `handoffs[].to`, and `handoffs[].summary` are immutable after create.
-- `checkpoints[]` is append-only through `checkpoint_append`; there is no checkpoint
-  upsert/rewrite operation.
-
-If a historical statement was wrong or later changed, add the proper new semantic record
-or lifecycle transition rather than rewriting provenance.
-
-### Compact mutation receipt
-
-A successful `work_item_update` returns only a bounded receipt such as:
-
-```json
-{
-  "updated": true,
-  "id": "redmine:116655",
-  "revision": 42,
-  "changed": ["repos.backend", "decisions:d7", "questions:q3", "checkpoints"]
-}
-```
-
-The receipt is confirmation of the committed mutation, not a new snapshot. Reread
-`work_item_get(id)` only when the next decision actually needs resulting current state.
-Do not expect mutation success to hydrate the full Work Item document.
-
-## Current snapshot vs material history
-
-Keep these roles stable across sessions:
+It does **not** contain normal child-facing:
 
 ```text
-work_item_get:
-  summary / repos / verification / status / phase / current_requirements / next_actions
-  open_questions / active_decisions / open_blockers / pending_handoffs
-    = bounded current effective decision state
-
-work_item_history_read:
-  questions / decisions / changes / checkpoints / blockers / handoffs
-    = exact scoped canonical history/provenance
-
-artifact
-  = optional detailed material; never a replacement for Work Item reconciliation
+user_request
+work_item_id / work_item_revision
+verification command
+Work Item phase/status/global next_actions
+QiQi bookkeeping identifiers
 ```
 
-`work_item_get.history` is deterministic metadata/counts only. It is not a prose summary
-and does not return checkpoint records. If a fresh session cannot continue from
-`summary`, `repos[repo].summary`, current requirements, and current lifecycle state,
-repair those current snapshots rather than depending on default history hydration.
+Material semantics must survive distillation. If child would need Work Item dereference
+to reconstruct objective/scope/product decisions/premises/constraints/acceptance, the
+TaskPacket is incomplete.
 
-### Repository summary
+## Immutable snapshot and native result
 
-`repos[repo].summary` is the **current effective repo truth after all work known so
-far**: implemented outcome, verified boundary, and remaining repo work when material.
-It is not a narrative of the latest review/investigation/report/session or command log.
+TaskPacket is an immutable semantic snapshot for one delegated turn; child does not
+chase mutable Work Item state after START.
 
-### Verification
+Runtime state (`settled`, `failed`, `blocked`, session/turn lifecycle) is execution
+lifecycle truth only. It is **not semantic completion truth**. QiQi reads the complete
+native response; QiQi is the semantic interpreter/reconciliation layer.
 
-`repos[repo].verification` contains concrete verification evidence currently established
-for that repository. Update it when verification materially changes; do not fill it with
-plans or unexecuted checks.
+A materially stale execution result **must not become current truth**. Prefer the
+delegated-revision CAS fast path in the uncontended case; conflict forces latest-state
+reconciliation before promotion. Do not add a second child-authored semantic status
+such as `completed | partial | blocked`.
 
-### Checkpoints
+## Semantic records and artifacts
 
-`checkpoints[]` is accumulated material phase/milestone history. It is not returned by
-`work_item_get`; read it through `work_item_history_read(collection="checkpoints", ...)`
-only when provenance is materially needed.
+Use questions/decisions/changes/blockers/handoffs/next_actions only for material
+meaning. Prefer one atomic grouped mutation when one answer changes related fields.
 
-Append a checkpoint when a substantive session establishes a new milestone that a future
-reader needs to reconstruct major task progression. Checkpoint metadata may include:
+Artifacts are optional detail from an exact Work Item revision, only when user/workflow
+requires detailed intake/investigation/plan/review/report material. Artifact revisions
+are independent and current Work Item state wins over stale artifacts. Artifact creation/finalization does not replace canonical Work Item reconciliation.
 
-```text
-kind        = optional free-form descriptive milestone label
-artifact_id = optional detailed artifact reference
-```
+## Shared Knowledge boundary
 
-Useful `kind` examples: `investigation`, `implementation`, `verification`, `review`,
-`decision`, `report`, `completion`. `kind` is descriptive only, not an enum/FSM.
+Work Item state is not Shared Knowledge. Only reusable verified conclusions (stable
+invariant, contract, ownership/diagnostic rule, recurring operational behavior) are
+durable candidates.
 
-Do not create command-by-command, test-by-test, or session transcript checkpoints.
+Routine repo-specific completion, a one-off code fix, or ordinary test-pass evidence
+does **not** by itself require Shared Knowledge review. Do not read `$knowledge-distill`
+or call `knowledge_write(entries=[])` merely to record such a review. Use Knowledge
+policy only when a plausible reusable conclusion exists or a higher-level workflow
+explicitly requires durable review.
 
-## Material session reconciliation
+## Before final QiQi response
 
-Every substantive Work Item session that establishes material task state must leave
-canonical continuation state **before final**. Artifact creation never substitutes for
-this reconciliation.
-
-Generic mapping:
-
-| Session | Canonical effect when material |
-|---|---|
-| Investigation | current repo truth + checkpoint + question/blocker when needed |
-| Planning | next action/handoff within authority + checkpoint when plan becomes continuation state |
-| Implementation | current implemented repo truth + checkpoint; artifact not required |
-| Verification | repository verification + checkpoint; summary/status only if conclusion changes |
-| Review | review artifact when workflow requests it + checkpoint; preserve current implementation truth |
-| Decision | persist decision/question/requirement effects within role authority |
-| Report | report artifact when workflow requests it + checkpoint; preserve prior repo/history truth |
-| Completion | final effective summary/status/checkpoint only within global completion authority |
-
-### Implementation guardrail
-
-Implementation **must reconcile the Work Item even when no artifact is created**.
-Persist current implemented outcome and verification through `mutation.state`; append one
-material implementation checkpoint through `mutation.operations.checkpoint_append` when a
-new milestone was established. Do not read/resend historical checkpoints for this common
-path.
-
-### Review guardrail
-
-Review detail belongs in a review artifact when the workflow requires one; material
-review findings belong in checkpoints. Change `repos[repo].summary` only when review
-actually changes current effective repo truth (for example, a resulting code/test fix or
-new verified boundary). If review merely confirms current implementation, preserve the
-implementation-oriented summary instead of replacing it with `Review code...` narrative.
-
-### Report guardrail
-
-A report artifact is presentation/detail. Preserve implementation/review checkpoints and
-current repo truth. Global summary/status/phase/next-action reconciliation remains owned
-by the role authorized for overall task orchestration.
-
-Investigation, planning, and verification use the same generic snapshot/history boundary;
-do not introduce a hard workflow machine or event log.
-
-## Questions, decisions, changes, blockers, handoffs
-
-Use semantic fields only for their intended material meaning:
-
-- `questions[]`: external/product ambiguity lifecycle, not generic notes.
-- `decisions[]`: material decisions explaining current task interpretation/behavior.
-- `changes[]`: requirement/scope evolution only, not implementation progress.
-- `blockers[]`: conditions materially preventing progress.
-- `handoffs[]`: explicit remaining work transferred to another repo/owner.
-- `next_actions[]`: concrete current continuation actions with repo/owner target.
-
-Default `work_item_get` exposes only `open_questions`, `active_decisions`,
-`open_blockers`, and `pending_handoffs`. Resolved/superseded lifecycle records remain
-canonical and audit-readable through scoped history.
-
-When a user/customer answer resolves a material question and the current role owns the
-reconciliation, prefer one atomic grouped mutation:
-
-```text
-operations.decision_upsert = [new active decision, old decision -> superseded if needed]
-operations.question_upsert = [open question -> resolved]
-operations.change_upsert   = [effective requirement/scope change when one occurred]
-operations.blocker_upsert / handoff_upsert when applicable
-state.current_requirements / next_actions when current state changed
-```
-
-Because references validate on the final candidate document, the new decision and the
-question/decision transitions may be in the same call without depending on cross-group
-execution order.
-
-A repository execution agent does not use these mechanics to exceed current-repo
-authority; product/customer decisions and global orchestration remain with QiQi when
-role policy says so.
-
-## Artifact boundary
-
-Artifacts are optional detailed material derived from an exact Work Item revision.
-
-- Create artifacts only when the user/workflow explicitly requires intake,
-  investigation, plan, review, or report detail.
-- Normal implementation/progress bookkeeping does not require an artifact.
-- Artifact writes have independent artifact revision and must not advance Work Item
-  revision/state.
-- Current Work Item state wins if a historical artifact conflicts with newer canonical
-  state.
-- Finalizing/creating an artifact does not satisfy material-session Work Item update.
-
-Follow artifact MCP bounds/cursor/revision contracts exposed by the tool schema.
-
-## Role application
-
-Always obey the active `AGENTS.md` authority boundary.
-
-### QiQi/orchestrator
-
-Operationally, QiQi normally owns overall `status`, `phase`, `summary`, repo assignment,
-global `next_actions`, product/customer decision reconciliation, cross-repo coordination,
-and final completion. After repo delegation returns, reread the bounded current Work
-Item snapshot before a dependent orchestration decision when returned evidence may have
-changed canonical state. Read scoped history only when that decision needs provenance.
-Do not silently assume repo persistence succeeded when returned material evidence is
-absent from canonical state.
-
-### Repository execution agent
-
-Operationally, a repo agent may establish only current-repo truth/evidence plus material
-repo-local checkpoint, blocker/question, and handoff allowed by its role policy. It does
-not mark sibling repos done, mark overall Work Item done, or rewrite global state merely
-to reflect local progress.
-
-## Before final
-
-For a substantive turn with a canonical Work Item:
-
-1. Ensure decisions/actions used the latest relevant bounded Work Item state.
-2. Read scoped history only when exact provenance is materially needed.
-3. Persist current effective fields through `mutation.state` within role authority.
-4. Persist semantic lifecycle/history changes with the smallest direct groups under
-   `mutation.operations`; never reconstruct or resend a historical collection for a local
-   record change, and never probe the schema by submitting intentionally invalid mutations.
-5. Add/update verification and append one material checkpoint when applicable.
-6. Persist blocker/question/handoff/next action when materially required.
-7. If a revision conflict occurs, reread current state, reconcile the intended mutation,
-   and retry; do not expect server-side rebase.
-8. Treat the compact mutation receipt as commit confirmation, not as a refreshed snapshot.
-9. Do not treat artifact creation as the canonical-state update.
-10. If persistence failed, report that failure; do not claim the Work Item contains the
-    missing state.
-
-Work Item handling does not replace separate Shared Knowledge review/write rules when a
-reusable conclusion was established.
+1. Reconcile exact native response against immutable TaskPacket.
+2. Persist required canonical state with the smallest grouped revisioned mutation.
+3. Prefer delegated-revision CAS; on revision conflict: reread → reconcile → retry.
+4. If no revisioned write guards a dependent completion decision, read latest bounded
+   state before claiming current completion.
+5. Read history only for material provenance.
+6. Treat compact receipt as commit confirmation, not refreshed snapshot.
+7. If persistence fails, report it; do not claim missing data is canonical.
+8. Apply separate Shared Knowledge rules only for reusable conclusions or explicitly
+   required durable review.

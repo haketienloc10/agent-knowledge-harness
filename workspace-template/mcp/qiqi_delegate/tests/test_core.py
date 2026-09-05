@@ -8,6 +8,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from core import (
+    TASK_PACKET_MAX_CHARS,
     SessionStore,
     active_capture_filename,
     build_task_packet,
@@ -22,33 +23,55 @@ from core import (
 class TaskPacketTests(unittest.TestCase):
     def packet(self):
         return build_task_packet(
-            user_request="Giữ backward compatibility và sửa consumer.",
             objective="Update the consumer without breaking the legacy field.",
             scope=["Consumer schema handling"],
             out_of_scope=["Producer API changes"],
-            required_context=[
-                {
-                    "fact": "legacy_id must remain for two releases",
-                    "source": "repo-a turn 123",
-                    "certainty": "verified",
-                }
-            ],
+            context={
+                "trusted_facts": [
+                    {
+                        "fact": "legacy_id must remain for two releases",
+                        "source": "customer compatibility decision",
+                    }
+                ],
+                "claims_to_investigate": [
+                    {
+                        "claim": "The current consumer rejects records without legacy_id",
+                        "source": "existing migration note",
+                    }
+                ],
+            },
             constraints=["Do not remove legacy_id"],
             acceptance_criteria=["Existing consumers remain compatible"],
-            verification=["Run compatibility tests"],
             known_unknowns=["Deployment date is unknown"],
         )
 
-    def test_prompt_preserves_original_intent_and_closed_world_boundary(self):
+    def test_prompt_contains_only_task_specific_semantics(self):
         prompt = render_task_prompt(self.packet())
-        self.assertIn("Giữ backward compatibility", prompt)
+        self.assertIn("Update the consumer", prompt)
         self.assertIn("legacy_id must remain for two releases", prompt)
-        self.assertIn("Provenance: repo-a turn 123", prompt)
-        self.assertIn("You do not share QiQi's hidden conversation", prompt)
-        self.assertIn("Do not invent an omitted external fact", prompt)
-        self.assertIn("there are no required result headings", prompt)
-        self.assertNotIn("### Outcome", prompt)
-        self.assertNotIn("result Markdown artifact:", prompt)
+        self.assertIn("Provenance: customer compatibility decision", prompt)
+        self.assertIn("Claims to investigate", prompt)
+        self.assertIn("Do not remove legacy_id", prompt)
+        self.assertNotIn("Original user request", prompt)
+        self.assertNotIn("Required verification", prompt)
+        self.assertNotIn("Context boundary", prompt)
+        self.assertNotIn("Handoff contract", prompt)
+
+    def test_optional_empty_sections_are_omitted(self):
+        packet = build_task_packet(
+            objective="Inspect retry behavior.",
+            scope=["Retry behavior"],
+            acceptance_criteria=["Current behavior is established with evidence"],
+        )
+        prompt = render_task_prompt(packet)
+        self.assertNotIn("Out of scope", prompt)
+        self.assertNotIn("Trusted facts", prompt)
+        self.assertNotIn("Claims to investigate", prompt)
+        self.assertNotIn("Constraints", prompt)
+        self.assertNotIn("Known unknowns", prompt)
+        self.assertEqual(
+            set(packet.as_dict()), {"objective", "scope", "acceptance_criteria"}
+        )
 
     def test_scope_and_acceptance_are_required(self):
         kwargs = self.packet().as_dict()
@@ -60,15 +83,63 @@ class TaskPacketTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "acceptance_criteria must contain"):
             build_task_packet(**kwargs)
 
-    def test_context_requires_provenance_and_calibrated_certainty(self):
+    def test_trusted_fact_requires_fact_and_source_only(self):
         kwargs = self.packet().as_dict()
-        kwargs["required_context"] = [{"fact": "x", "source": "y"}]
-        with self.assertRaisesRegex(ValueError, "invalid fields"):
+        kwargs["context"] = {
+            "trusted_facts": [{"fact": "x", "source": "y", "certainty": "verified"}]
+        }
+        with self.assertRaisesRegex(ValueError, "unsupported certainty"):
             build_task_packet(**kwargs)
-        kwargs = self.packet().as_dict()
-        kwargs["required_context"][0]["certainty"] = "probably"
-        with self.assertRaisesRegex(ValueError, "certainty must be one of"):
+        kwargs["context"] = {"trusted_facts": [{"fact": "x"}]}
+        with self.assertRaisesRegex(ValueError, "missing source"):
             build_task_packet(**kwargs)
+
+    def test_claim_cannot_also_be_a_trusted_premise(self):
+        with self.assertRaisesRegex(ValueError, "cannot be both"):
+            build_task_packet(
+                objective="Establish retry behavior.",
+                scope=["Retry behavior"],
+                context={
+                    "trusted_facts": [{"fact": "Retry limit is 3", "source": "ticket"}],
+                    "claims_to_investigate": [
+                        {"claim": "retry LIMIT is 3", "source": "legacy note"}
+                    ],
+                },
+                acceptance_criteria=["Retry behavior is established"],
+            )
+
+    def test_long_history_is_not_part_of_target_contract(self):
+        packet = build_task_packet(
+            objective="Fix retry handling.",
+            scope=["Retry handling"],
+            context={
+                "trusted_facts": [
+                    {"fact": "Retry limit is 3", "source": "current product decision"}
+                ]
+            },
+            acceptance_criteria=["Retry stops after the third failure"],
+        )
+        payload = packet.to_json()
+        self.assertNotIn("user_request", payload)
+        self.assertNotIn("verification", payload)
+        self.assertNotIn("work_item", payload)
+
+    def test_aggregate_packet_size_boundary(self):
+        small = build_task_packet(
+            objective="x",
+            scope=["y"],
+            acceptance_criteria=["z"],
+            constraints=["a" * (TASK_PACKET_MAX_CHARS // 2)],
+        )
+        self.assertLessEqual(len(small.to_json()), TASK_PACKET_MAX_CHARS)
+
+        with self.assertRaisesRegex(ValueError, "task packet is too large"):
+            build_task_packet(
+                objective="x",
+                scope=["y"],
+                acceptance_criteria=["z"],
+                constraints=["a" * TASK_PACKET_MAX_CHARS],
+            )
 
 
 class HookIdentityTests(unittest.TestCase):

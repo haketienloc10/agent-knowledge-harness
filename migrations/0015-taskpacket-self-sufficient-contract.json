@@ -1,0 +1,38 @@
+{
+  "version": 15,
+  "from_ref": "f86e97935a9d1302a4d7040aebd7e1602fdd9240",
+  "to_ref": "316cc4945f601b15643b3238eba14204f27d3f40",
+  "description": "adopt qiqi_delegate 0.2 semantically self-sufficient immutable TaskPacket snapshots: Work Item stays on the QiQi/orchestration side, user_request and normal verification are removed from the child-facing schema, context separates trusted_facts from claims_to_investigate with an exact typed public MCP input schema, empty optional prompt sections are omitted, stale-result handling belongs to QiQi, Shared Knowledge remains available only for legitimate implementation/domain knowledge rather than reconstructing missing task semantics, Codex routes the qiqi_delegate namespace as a direct-only Code Mode tool so synchronous delegation does not fall through exec-cell wait polling that repeatedly resamples the parent model, QiQi keeps orchestration/stable-policy meta-instructions such as Work Item handling, verification-strategy ownership, delegation mechanics, and polling policy out of child constraints unless the method itself is a material user/product/system requirement, and normal Work Item completion uses the delegated revision as an optimistic-CAS stale guard so an uncontended post-child path can update directly without a redundant reread while revision conflict forces latest-state materiality reconciliation; rerun work-item-template/scripts/install-user-mcp.sh after migration and open fresh QiQi/child sessions so the new MCP/skill/tool-routing contract is discovered",
+  "workspace": {
+    "merge": [
+      "workspace-template/AGENTS.md",
+      "workspace-template/identity.md"
+    ],
+    "replace": [
+      "workspace-template/.codex/config.toml",
+      "workspace-template/README.md",
+      "workspace-template/docs/WORKSPACE_SETUP.md",
+      "workspace-template/mcp/qiqi_delegate/core.py",
+      "workspace-template/mcp/qiqi_delegate/pyproject.toml",
+      "workspace-template/mcp/qiqi_delegate/server.py",
+      "workspace-template/mcp/qiqi_delegate/tests/test_codex_routing.py",
+      "workspace-template/mcp/qiqi_delegate/tests/test_core.py",
+      "workspace-template/mcp/qiqi_delegate/tests/test_server_schema.py",
+      "workspace-template/mcp/qiqi_delegate/tests/test_taskpacket_minimality_policy.py",
+      "workspace-template/scripts/workspace-check.sh"
+    ],
+    "delete": [],
+    "manual_review": []
+  },
+  "repo": {
+    "merge": [
+      "repo-template/AGENTS.md"
+    ],
+    "replace": [
+      "repo-template/docs/REPO_SETUP.md",
+      "repo-template/scripts/repo-check.sh"
+    ],
+    "delete": [],
+    "manual_review": []
+  }
+}

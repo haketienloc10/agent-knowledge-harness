@@ -20,6 +20,7 @@ from typing import Any
 import yaml
 from mcp.server import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
+from pydantic import BaseModel, ConfigDict, Field
 
 from core import (
     SessionStore,
@@ -56,23 +57,57 @@ PLACEHOLDER_RE = re.compile(r"\{[a-z_][a-z0-9_]*\}")
 LEGACY_META_PREFIX = "<!-- qiqi-session: "
 LEGACY_META_SUFFIX = " -->"
 
+
+class TrustedFactInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    fact: str
+    source: str
+
+
+class ClaimToInvestigateInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    claim: str
+    source: str
+
+
+class TaskContextInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    trusted_facts: list[TrustedFactInput] = Field(default_factory=list)
+    claims_to_investigate: list[ClaimToInvestigateInput] = Field(default_factory=list)
+
+    def to_core_dict(self) -> dict[str, list[dict[str, str]]]:
+        result: dict[str, list[dict[str, str]]] = {}
+        if self.trusted_facts:
+            result["trusted_facts"] = [item.model_dump() for item in self.trusted_facts]
+        if self.claims_to_investigate:
+            result["claims_to_investigate"] = [
+                item.model_dump() for item in self.claims_to_investigate
+            ]
+        return result
+
+
 mcp = MCPServer(
     "QiQi Delegate",
     instructions=(
         "Synchronous Herdr-backed repository execution boundary for QiQi. "
-        "delegate_repo_task accepts a structured task packet instead of an opaque "
-        "prompt string. The packet must explicitly carry the original user request, "
-        "repo-local objective, scope, required live context, constraints, acceptance "
-        "criteria, verification requirements, and known unknowns. The child does not "
-        "share QiQi's hidden context. The MCP launches/resumes the native Codex or "
-        "Claude session through Herdr and captures the native final assistant message "
-        "through a static result-hook command routed to MCP-owned active-capture state; "
-        "it never scrapes terminal scrollback or parses agent transcripts. Codex trusts "
-        "only the exact QiQi session hook by matching its computed trusted_hash; global "
-        "hook-trust bypass is forbidden. Settled/failed native turns return session_id, "
-        "turn_id, state, and the exact agent_response. If Herdr reports blocked before "
-        "a native final response exists, the MCP persists session ownership and returns "
-        "state blocked with agent_response null so QiQi can RESUME the exact session. "
+        "delegate_repo_task accepts a semantically self-sufficient repo-local problem "
+        "contract: objective, scope, optional exclusions/context/constraints, acceptance "
+        "criteria, and optional known unknowns. QiQi owns user/product intent, Work Item "
+        "state, stale detection, and semantic completion; the child owns repository "
+        "discovery, implementation/investigation strategy, verification strategy, and "
+        "native evidence reporting. Task semantics must not depend on hidden QiQi "
+        "conversation or Work Item dereference. Allowed repository/runtime/Knowledge "
+        "tools may still be used for execution evidence or reusable implementation "
+        "knowledge under stable policy, but not to reconstruct omitted task semantics. "
+        "The MCP launches/resumes the native Codex or Claude session through Herdr and "
+        "captures the native final assistant message through a static result-hook command "
+        "routed to MCP-owned active-capture state; it never scrapes terminal scrollback "
+        "or parses agent transcripts. Codex trusts only the exact QiQi session hook by "
+        "matching its computed trusted_hash; global hook-trust bypass is forbidden. "
+        "Settled/failed/blocked are runtime lifecycle states, not semantic completion. "
         "Runtime session ownership is persisted in MCP-owned SQLite state, not in a "
         "Markdown result artifact."
     ),
@@ -899,23 +934,29 @@ def _prepare_resume(repository: str, agent_name: str, session_id: str) -> None:
 async def delegate_repo_task(
     repository: str,
     route: str,
-    user_request: str,
     objective: str,
     scope: list[str],
-    out_of_scope: list[str],
-    required_context: list[dict[str, str]],
-    constraints: list[str],
     acceptance_criteria: list[str],
-    verification: list[str],
-    known_unknowns: list[str],
+    out_of_scope: list[str] | None = None,
+    context: TaskContextInput | None = None,
+    constraints: list[str] | None = None,
+    known_unknowns: list[str] | None = None,
     session_id: str | None = None,
 ) -> dict[str, Any]:
     """Execute one repo-local task and return the native final assistant message.
 
-    QiQi must pass explicit structured fields. `user_request` preserves the relevant
-    original user wording. Each `required_context` entry has exact keys `fact`,
-    `source`, and `certainty`; certainty is `verified`, `user-provided`, or
-    `authoritative-decision`. `scope` and `acceptance_criteria` must be non-empty.
+    The child-facing TaskPacket is an immutable semantic snapshot for this delegated
+    turn. `objective`, `scope`, and `acceptance_criteria` are required. Optional
+    `context` supports `trusted_facts=[{fact, source}]` and
+    `claims_to_investigate=[{claim, source}]`. Trusted facts are execution premises;
+    claims to investigate must not be assumed true. `out_of_scope`, `constraints`,
+    and `known_unknowns` are omitted when empty.
+
+    The packet must already contain all material task semantics. Work Item identity,
+    original user conversation, and normal verification commands are not child-facing
+    task inputs. Allowed repo/runtime/Knowledge tools may be used for implementation
+    knowledge or evidence under stable policy, but not to reconstruct omitted task
+    meaning.
 
     Omit `session_id` to START. Pass a returned `session_id` to RESUME that exact
     native conversation. Session ownership is stored in `.qiqi/state/qiqi_delegate.sqlite3`.
@@ -924,7 +965,8 @@ async def delegate_repo_task(
     and exact native `agent_response`. If Herdr reaches `blocked` before the agent
     emits a native final response, the MCP first persists native session ownership,
     then returns `state="blocked"`, `agent_response=None`, and
-    `blocker_type="agent_blocked"`. No terminal-screen/transcript fallback is used.
+    `blocker_type="agent_blocked"`. Runtime state is lifecycle truth only; QiQi owns
+    semantic completion and reconciliation. No terminal-screen/transcript fallback is used.
     """
     repository = repository.strip()
     route = route.strip()
@@ -937,14 +979,12 @@ async def delegate_repo_task(
         session_id = None
 
     packet: TaskPacket = build_task_packet(
-        user_request=user_request,
         objective=objective,
         scope=scope,
-        out_of_scope=out_of_scope,
-        required_context=required_context,
-        constraints=constraints,
         acceptance_criteria=acceptance_criteria,
-        verification=verification,
+        out_of_scope=out_of_scope,
+        context=context.to_core_dict() if context is not None else None,
+        constraints=constraints,
         known_unknowns=known_unknowns,
     )
     prompt = render_task_prompt(packet)
