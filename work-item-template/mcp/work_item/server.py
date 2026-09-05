@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Annotated, Any, Literal
 
 from mcp.server import MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import Field
 
 from artifact_templates import load_artifact_templates, template_guidance_for
@@ -162,39 +163,39 @@ def _raise_actionable_error(exc: WorkItemError) -> None:
         message = str(exc)
         if "artifact revision conflict" in message:
             if "cursor revision" in message:
-                raise ValueError(
+                raise ToolError(
                     "code=artifact_revision_conflict; "
                     f"{message}; action=call work_item_artifact_get again and restart "
                     "that section read without the stale cursor"
                 ) from exc
-            raise ValueError(
+            raise ToolError(
                 "code=artifact_revision_conflict; "
                 f"{message}; action=call work_item_artifact_get again and retry with its exact revision"
             ) from exc
-        raise ValueError(f"code=artifact_conflict; {message}") from exc
+        raise ToolError(f"code=artifact_conflict; {message}") from exc
     if isinstance(exc, ArtifactNotFoundError):
-        raise ValueError(
+        raise ToolError(
             f"code=artifact_not_found; {exc}; action=call work_item_artifact_list/get to verify artifact identity"
         ) from exc
     if isinstance(exc, ConflictError):
         message = str(exc)
         if "history revision conflict" in message:
-            raise ValueError(
+            raise ToolError(
                 "code=history_revision_conflict; "
                 f"{message}; action=restart work_item_history_read from the current revision without the stale cursor"
             ) from exc
         if "revision conflict" in message:
-            raise ValueError(
+            raise ToolError(
                 "code=revision_conflict; "
                 f"{message}; action=call work_item_get again and restart the dependent read/reconciliation"
             ) from exc
-        raise ValueError(f"code=work_item_conflict; {message}") from exc
+        raise ToolError(f"code=work_item_conflict; {message}") from exc
     if isinstance(exc, NotFoundError):
-        raise ValueError(
+        raise ToolError(
             f"code=work_item_not_found; {exc}; action=verify the canonical task id or let QiQi create it"
         ) from exc
     if isinstance(exc, ValidationError):
-        raise ValueError(f"code=work_item_validation; {exc}") from exc
+        raise ToolError(f"code=work_item_validation; {exc}") from exc
     raise RuntimeError(f"code=work_item_store_error; {exc}") from exc
 
 
