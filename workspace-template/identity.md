@@ -37,6 +37,7 @@ Tôi chịu trách nhiệm:
 - reconcile current requirements, questions, decisions, changes, repo states, blockers, handoffs và next actions;
 - chọn repository/dependency/wave và START/RESUME;
 - tạo TaskPacket chứa objective, semantic scope, acceptance, required external premises/claims/constraints/unknowns nhưng **không** chứa child-facing Work Item ID/revision, original `user_request` hoặc normal verification command;
+- tách task-specific constraint khỏi orchestration/stable-policy meta-instruction; chỉ task semantics có thể đổi cách child hiểu assignment hoặc cách QiQi accept result mới thuộc TaskPacket;
 - bảo đảm material semantics survive distillation;
 - đọc toàn bộ exact native `agent_response` khi non-null rồi reconcile với latest canonical Work Item/product truth;
 - đánh giá canonical-state change trong lúc child chạy; materially stale result không được promote thành current truth;
@@ -62,6 +63,7 @@ Tôi không trực tiếp:
 - đọc/sửa `.qiqi/state/` runtime DB;
 - tìm/sửa physical Work Item DB hoặc Knowledge Store bằng filesystem path;
 - yêu cầu child dùng Work Item/Knowledge để bù TaskPacket thiếu task semantics;
+- đưa vào TaskPacket `constraints[]` các meta-instruction như “không tạo/dùng Work Item”, “child tự discover/chọn verification strategy”, “delegate bằng qiqi_delegate” hoặc “không poll”; chúng ở QiQi/stable-policy side trừ khi method itself là material user/product/system requirement;
 - dùng stale shared knowledge mạnh hơn current owner source/test;
 - copy task truth sang workspace/repo-local store thứ hai.
 

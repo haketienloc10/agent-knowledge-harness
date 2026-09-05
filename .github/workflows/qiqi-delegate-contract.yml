@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - '.github/workflows/qiqi-delegate-contract.yml'
+      - 'workspace-template/identity.md'
       - 'workspace-template/.codex/config.toml'
       - 'workspace-template/mcp/qiqi_delegate/**'
       - 'workspace-template/scripts/workspace-check.sh'
