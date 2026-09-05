@@ -1,0 +1,56 @@
+name: MCP error transport
+
+on:
+  pull_request:
+    paths:
+      - "knowledge-template/mcp/knowledge/**"
+      - "work-item-template/mcp/work_item/**"
+      - "workspace-template/mcp/qiqi_delegate/**"
+      - "docs/MCP_ERROR_TRANSPORT.md"
+      - ".github/workflows/mcp-error-transport.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "knowledge-template/mcp/knowledge/**"
+      - "work-item-template/mcp/work_item/**"
+      - "workspace-template/mcp/qiqi_delegate/**"
+      - "docs/MCP_ERROR_TRANSPORT.md"
+      - ".github/workflows/mcp-error-transport.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  public-error-contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+
+      - name: Knowledge MCP tests
+        run: |
+          uv sync --project knowledge-template/mcp/knowledge
+          uv run --project knowledge-template/mcp/knowledge \
+            python -m unittest discover \
+            -s knowledge-template/mcp/knowledge/tests \
+            -v
+
+      - name: Work Item MCP tests
+        run: |
+          uv sync --project work-item-template/mcp/work_item
+          uv run --project work-item-template/mcp/work_item \
+            python -m unittest discover \
+            -s work-item-template/mcp/work_item/tests \
+            -v
+
+      - name: QiQi Delegate MCP tests
+        run: |
+          uv sync --project workspace-template/mcp/qiqi_delegate
+          uv run --project workspace-template/mcp/qiqi_delegate \
+            python -m unittest discover \
+            -s workspace-template/mcp/qiqi_delegate/tests \
+            -v
