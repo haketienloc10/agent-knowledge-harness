@@ -162,10 +162,10 @@ QiQi là orchestration/synchronization broker. Child không dereference Work Ite
 Với `settled`/`failed`:
 
 1. Đọc toàn bộ exact `agent_response`. Runtime `state` chỉ mô tả execution lifecycle, **không phải semantic completion**.
-2. Nếu task dùng Work Item, apply `$work-item` và reread latest bounded current state trước dependent orchestration decision; history-read chỉ scope cần thiết.
-3. Reconcile native response với immutable TaskPacket acceptance + latest canonical product truth.
-4. Nếu canonical state đã đổi kể từ START, QiQi đánh giá materiality:
-   - non-material: có thể accept/reconcile result theo latest truth;
+2. Nếu task dùng Work Item và reconciliation sẽ persist bằng `work_item_update`, ưu tiên delegated-revision CAS từ exact snapshot đã tạo TaskPacket: build mutation từ immutable TaskPacket + exact native response và gọi `work_item_update(expected_revision=<delegated revision>)` **không reread trước**. Update success chứng minh canonical revision không đổi qua lúc commit; revision conflict → reread latest bounded state → đánh giá materiality → reconcile/retry. Reread trước chỉ khi dependent decision không được guard bởi cùng revisioned mutation hoặc khi không có mutation.
+3. Reconcile native response với immutable TaskPacket acceptance + canonical product truth từ delegated snapshot; CAS success xác nhận snapshot đó vẫn current qua commit.
+4. Nếu CAS conflict hoặc có evidence canonical state đã đổi kể từ START, QiQi đánh giá materiality:
+   - non-material: có thể reconcile result theo latest truth;
    - material: stale result **MUST NOT** được promote thành current truth; chọn cancel/interrupt/resume/redelegate/reconcile phù hợp runtime capability.
 5. Persist/reconcile Work Item facts/checkpoints/blockers/handoffs thuộc QiQi authority từ returned evidence; child không phải Work Item writer.
 6. Reconcile global status/phase/summary/next_actions khi evidence đủ.
@@ -271,12 +271,12 @@ Assistant output tiếp theo cho user phải dựa trên terminal result của c
 
 Product Work Item chỉ `done` khi:
 
-1. reread canonical latest bounded current revision/state;
+1. completion được guard bởi successful delegated-revision CAS mutation; nếu không có same-revision write guard hoặc CAS conflict, reread canonical latest bounded current revision/state trước completion decision;
 2. đọc scoped history nếu completion decision cần provenance chưa có trong current snapshot;
 3. effective requirements/acceptance đạt;
 4. returned evidence/verification đủ chứng minh acceptance hoặc deviation được user chấp nhận;
 5. không còn mandatory blocker/question/dependency/handoff;
-6. substantive reusable-knowledge review/mutation hoàn tất;
+6. substantive reusable-knowledge review/mutation hoàn tất khi policy xác định có reusable conclusion hoặc workflow explicit yêu cầu durable review;
 7. QiQi reconcile Work Item `status=done` + final summary/checkpoint theo `$work-item`.
 
 QiQi không tự vào repo để bù evidence thiếu.
