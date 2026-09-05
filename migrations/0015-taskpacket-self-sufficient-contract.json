@@ -1,19 +1,21 @@
 {
   "version": 15,
   "from_ref": "f86e97935a9d1302a4d7040aebd7e1602fdd9240",
-  "to_ref": "40e0f828e608bb3abb3d96600369e3cb37d361b0",
-  "description": "adopt qiqi_delegate 0.2 semantically self-sufficient immutable TaskPacket snapshots: Work Item stays on the QiQi/orchestration side, user_request and normal verification are removed from the child-facing schema, context separates trusted_facts from claims_to_investigate with an exact typed public MCP input schema, empty optional prompt sections are omitted, stale-result handling belongs to QiQi, and Shared Knowledge remains available only for legitimate implementation/domain knowledge rather than reconstructing missing task semantics; rerun work-item-template/scripts/install-user-mcp.sh after migration and open fresh QiQi/child sessions so the new MCP/skill contract is discovered",
+  "to_ref": "f7aa9bbdf6b945b5b790ff3f4c155aafaac7b1b3",
+  "description": "adopt qiqi_delegate 0.2 semantically self-sufficient immutable TaskPacket snapshots: Work Item stays on the QiQi/orchestration side, user_request and normal verification are removed from the child-facing schema, context separates trusted_facts from claims_to_investigate with an exact typed public MCP input schema, empty optional prompt sections are omitted, stale-result handling belongs to QiQi, Shared Knowledge remains available only for legitimate implementation/domain knowledge rather than reconstructing missing task semantics, and Codex routes the qiqi_delegate namespace as a direct-only Code Mode tool so synchronous delegation does not fall through exec-cell wait polling that repeatedly resamples the parent model; rerun work-item-template/scripts/install-user-mcp.sh after migration and open fresh QiQi/child sessions so the new MCP/skill/tool-routing contract is discovered",
   "workspace": {
     "merge": [
       "workspace-template/AGENTS.md",
       "workspace-template/identity.md"
     ],
     "replace": [
+      "workspace-template/.codex/config.toml",
       "workspace-template/README.md",
       "workspace-template/docs/WORKSPACE_SETUP.md",
       "workspace-template/mcp/qiqi_delegate/core.py",
       "workspace-template/mcp/qiqi_delegate/pyproject.toml",
       "workspace-template/mcp/qiqi_delegate/server.py",
+      "workspace-template/mcp/qiqi_delegate/tests/test_codex_routing.py",
       "workspace-template/mcp/qiqi_delegate/tests/test_core.py",
       "workspace-template/mcp/qiqi_delegate/tests/test_server_schema.py",
       "workspace-template/scripts/workspace-check.sh"
