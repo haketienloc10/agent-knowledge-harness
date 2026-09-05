@@ -32,25 +32,19 @@ jobs:
           python-version: "3.12"
 
       - name: Knowledge MCP tests
+        working-directory: knowledge-template/mcp/knowledge
         run: |
-          uv sync --project knowledge-template/mcp/knowledge
-          uv run --project knowledge-template/mcp/knowledge \
-            python -m unittest discover \
-            -s knowledge-template/mcp/knowledge/tests \
-            -v
+          uv sync
+          uv run python -m unittest discover -s tests -v
 
       - name: Work Item MCP tests
+        working-directory: work-item-template/mcp/work_item
         run: |
-          uv sync --project work-item-template/mcp/work_item
-          uv run --project work-item-template/mcp/work_item \
-            python -m unittest discover \
-            -s work-item-template/mcp/work_item/tests \
-            -v
+          uv sync
+          uv run python -m unittest discover -s tests -v
 
       - name: QiQi Delegate MCP tests
+        working-directory: workspace-template/mcp/qiqi_delegate
         run: |
-          uv sync --project workspace-template/mcp/qiqi_delegate
-          uv run --project workspace-template/mcp/qiqi_delegate \
-            python -m unittest discover \
-            -s workspace-template/mcp/qiqi_delegate/tests \
-            -v
+          uv sync
+          uv run python -m unittest discover -s tests -v
