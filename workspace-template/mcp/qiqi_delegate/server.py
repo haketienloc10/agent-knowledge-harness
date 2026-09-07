@@ -391,6 +391,9 @@ def _build_filesystem_args(agent: dict[str, Any]) -> list[str]:
     filesystem = agent.get("filesystem")
     if not filesystem:
         return []
+    additional_dirs = filesystem.get("additional_dirs", [])
+    if not additional_dirs:
+        return []
     adapter = agent["adapter"]
     if adapter != "claude":
         raise RuntimeError(
@@ -399,7 +402,7 @@ def _build_filesystem_args(agent: dict[str, Any]) -> list[str]:
 
     argv: list[str] = []
     seen: set[Path] = set()
-    for entry in filesystem.get("additional_dirs", []):
+    for entry in additional_dirs:
         env_name = entry["env"]
         raw_value = os.environ.get(env_name)
         if raw_value is None or not raw_value.strip():
