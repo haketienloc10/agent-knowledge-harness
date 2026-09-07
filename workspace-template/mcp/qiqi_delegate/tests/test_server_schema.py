@@ -65,6 +65,13 @@ class PublicTaskSchemaTests(unittest.TestCase):
         )
         self.assertTrue(FORBIDDEN_PUBLIC_FIELDS.isdisjoint(properties))
 
+    def test_repository_field_documents_registry_name_contract(self) -> None:
+        repository = self.schema["properties"]["repository"]
+        description = repository.get("description", "")
+        self.assertIn("repos.yaml", description)
+        self.assertIn("name", description)
+        self.assertIn("Do not pass a filesystem path", description)
+
     def test_context_exposes_only_normative_nested_fields(self) -> None:
         context = _non_null_schema(self.schema, self.schema["properties"]["context"])
         self.assertEqual(
