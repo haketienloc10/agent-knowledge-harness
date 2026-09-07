@@ -1,0 +1,24 @@
+{
+  "version": 17,
+  "from_ref": "98101b31bb4506735b34800549d3d1b557664907",
+  "to_ref": "7e47b92ec4cc94a775efb83d18dd7758b061de8a",
+  "description": "add optional Claude additional-directory routing for authorized execution evidence without wiring canonical Work Item storage into child sessions",
+  "workspace": {
+    "merge": [],
+    "replace": [
+      "workspace-template/instructions/agent-routing.yaml",
+      "workspace-template/mcp/qiqi_delegate/server.py",
+      "workspace-template/mcp/qiqi_delegate/tests/test_claude_filesystem_routing.py",
+      "workspace-template/scripts/workspace-check.sh",
+      "workspace-template/docs/WORKSPACE_SETUP.md"
+    ],
+    "delete": [],
+    "manual_review": []
+  },
+  "repo": {
+    "merge": [],
+    "replace": [],
+    "delete": [],
+    "manual_review": []
+  }
+}
