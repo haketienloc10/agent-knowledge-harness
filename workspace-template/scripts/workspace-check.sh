@@ -36,6 +36,7 @@ required_files=(
   mcp/qiqi_delegate/core.py
   mcp/qiqi_delegate/result_hook.py
   mcp/qiqi_delegate/server.py
+  mcp/qiqi_delegate/tests/test_claude_filesystem_routing.py
   mcp/qiqi_delegate/tests/test_core.py
   mcp/qiqi_delegate/tests/test_repo_registry.py
   mcp/qiqi_delegate/tests/test_result_hook.py
@@ -204,6 +205,8 @@ for pattern in \
   'dependency-only' \
   'immutable semantic snapshot' \
   'task-semantic' \
+  'QIQI_CLAUDE_ADDITIONAL_DIR' \
+  'canonical Work Item MCP store' \
   'stale'; do
   rg -U -q "$pattern" "$workspace_setup" || fail "docs/WORKSPACE_SETUP.md: missing workspace capability guidance: $pattern"
 done
@@ -290,6 +293,8 @@ for pattern in \
   'class TaskContextInput' \
   'RepositoryName = Annotated' \
   'ConfigDict\(extra="forbid"\)' \
+  'def _validate_filesystem_config' \
+  'def _build_filesystem_args' \
   'def _build_handoff_args' \
   'def _register_active_capture' \
   'expected_session_id' \
@@ -356,8 +361,10 @@ fi
 
 if ! uv run --project "$mcp_project" python - "$routing" <<'PY'; then
 import pathlib
+import re
 import sys
 import yaml
+
 path = pathlib.Path(sys.argv[1])
 data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
 assert data.get("version") == 2
@@ -365,7 +372,9 @@ agents = data.get("agents")
 routes = data.get("routes")
 assert isinstance(agents, dict) and agents
 assert isinstance(routes, dict) and routes
+env_name_re = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 for name, agent in agents.items():
+    adapter = agent.get("adapter")
     for key in ("start_args", "resume_args"):
         values = agent.get(key)
         assert isinstance(values, list), f"{name}.{key} must be a list"
@@ -373,17 +382,44 @@ for name, agent in agents.items():
     assert "{session_id}" not in agent["start_args"]
     assert "{session_id}" in agent["resume_args"]
     assert all("{result_dir}" not in value for key in ("start_args", "resume_args") for value in agent[key])
+
+    filesystem = agent.get("filesystem")
+    if filesystem is not None:
+        assert isinstance(filesystem, dict), f"{name}.filesystem must be a map"
+        assert set(filesystem) <= {"additional_dirs"}, f"{name}.filesystem has unsupported fields"
+        additional_dirs = filesystem.get("additional_dirs", [])
+        assert isinstance(additional_dirs, list), f"{name}.filesystem.additional_dirs must be a list"
+        if additional_dirs:
+            assert adapter == "claude", f"{name}.filesystem.additional_dirs is Claude-only"
+        for index, entry in enumerate(additional_dirs):
+            assert isinstance(entry, dict), f"{name}.filesystem.additional_dirs[{index}] must be a map"
+            assert set(entry) <= {"env", "required"}, f"{name}.filesystem.additional_dirs[{index}] has unsupported fields"
+            assert isinstance(entry.get("env"), str) and env_name_re.fullmatch(entry["env"]), f"{name}.filesystem.additional_dirs[{index}].env invalid"
+            assert isinstance(entry.get("required", False), bool), f"{name}.filesystem.additional_dirs[{index}].required must be boolean"
+
+claude = agents.get("claude")
+codex = agents.get("codex")
+assert isinstance(claude, dict), "claude agent missing"
+assert claude.get("filesystem", {}).get("additional_dirs") == [
+    {"env": "QIQI_CLAUDE_ADDITIONAL_DIR", "required": False}
+], "claude additional-directory contract drifted"
+if isinstance(codex, dict):
+    assert "filesystem" not in codex, "codex routing must remain unchanged"
+
 for name, route in routes.items():
     assert route.get("agent") in agents, f"{name}: unknown agent"
     args = route.get("args", [])
     assert isinstance(args, list)
     assert not any(value in {"--settings", "--dangerously-bypass-hook-trust", "--enable", "--disable"} or value.startswith("hooks.") for value in args), f"{name}: handoff config must be MCP-owned"
 PY
-  fail 'agent-routing.yaml: structured native-handoff validation failed'
+  fail 'agent-routing.yaml: structured native-handoff/filesystem validation failed'
 fi
 
 if rg -q '\{result_dir\}|result_path|prompt_transport|result\.schema\.json' "$routing"; then
   fail 'agent-routing.yaml: legacy result transport placeholder/config found'
+fi
+if rg -q 'QIQI_WORK_ITEMS_ROOT' "$routing"; then
+  fail 'agent-routing.yaml: canonical/task-specific Work Item root must not be wired into child routing'
 fi
 
 rg -q '^state/$' "$workspace_root/.qiqi/.gitignore" || fail '.qiqi/.gitignore: state/ must be ignored'
