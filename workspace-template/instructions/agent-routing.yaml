@@ -42,6 +42,14 @@ agents:
     command: claude
     adapter: claude
 
+    # Machine-local shared roots are supplied through environment variables so
+    # the template does not encode one workspace/storage topology. Missing
+    # optional variables are ignored; configured paths are validated at runtime.
+    filesystem:
+      additional_dirs:
+        - env: QIQI_WORK_ITEMS_ROOT
+          required: false
+
     start_args:
       - "{handoff_args}"
       - --model
