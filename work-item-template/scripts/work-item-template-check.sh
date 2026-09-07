@@ -10,12 +10,4 @@ if ! command -v uv >/dev/null 2>&1; then
   exit 1
 fi
 
-project_python="$(uv run --project "$project" python -c 'import sys; print(sys.executable)')"
-shim_dir="$(mktemp -d)"
-cleanup() {
-  rm -rf "$shim_dir"
-}
-trap cleanup EXIT INT TERM
-ln -s "$project_python" "$shim_dir/python3"
-
-PATH="$shim_dir:$PATH" "$impl" "$@"
+exec uv run --project "$project" -- bash "$impl" "$@"
