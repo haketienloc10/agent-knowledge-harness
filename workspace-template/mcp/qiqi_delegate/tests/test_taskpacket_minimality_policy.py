@@ -8,6 +8,9 @@ class TaskPacketMinimalityPolicyTests(unittest.TestCase):
         cls.workspace_root = Path(__file__).resolve().parents[3]
         cls.identity = (cls.workspace_root / "identity.md").read_text(encoding="utf-8")
         cls.agents = (cls.workspace_root / "AGENTS.md").read_text(encoding="utf-8")
+        cls.referential_closure = (
+            cls.workspace_root / "docs" / "TASKPACKET_REFERENTIAL_CLOSURE.md"
+        ).read_text(encoding="utf-8")
 
     def test_orchestration_meta_instructions_stay_out_of_taskpacket_constraints(self):
         self.assertIn(
@@ -24,6 +27,53 @@ class TaskPacketMinimalityPolicyTests(unittest.TestCase):
         self.assertIn(
             "chúng ở QiQi/stable-policy side trừ khi method itself là material user/product/system requirement",
             self.identity,
+        )
+
+    def test_taskpacket_requires_referential_closure_over_hidden_parent_context(self):
+        for required in (
+            "referential closure",
+            "child-visible context",
+            "hidden parent conversation/tool/media/file state",
+            "smallest sufficient semantics",
+            "provenance/coverage",
+            "negative evidence",
+            "explicit superseded",
+        ):
+            self.assertIn(required, self.identity)
+
+    def test_referential_closure_contract_covers_referent_classes_and_session_modes(self):
+        for required in (
+            "prior-turn text",
+            "media",
+            "file/attachment",
+            "tool result",
+            "external observation",
+            "START",
+            "RESUME",
+            "Parent/user conversation state không tự động trở thành child context",
+            "partial, cropped, sampled, truncated, redacted, stale",
+            "absence outside observed coverage != negative evidence",
+            "explicit superseded",
+        ):
+            self.assertIn(required, self.referential_closure)
+
+    def test_referential_closure_preserves_existing_taskpacket_schema_boundary(self):
+        for required in (
+            "không yêu cầu một TaskPacket field mới",
+            "context.trusted_facts[]",
+            "context.claims_to_investigate[]",
+            "constraints[]",
+            "acceptance_criteria[]",
+            "known_unknowns[]",
+            "scope[]",
+            "out_of_scope[]",
+            "không duplicate toàn history",
+        ):
+            self.assertIn(required, self.referential_closure)
+
+        self.assertIn(
+            "syntax/deictic keyword blacklist",
+            self.referential_closure,
         )
 
     def test_work_item_completion_uses_revision_guarded_fast_path(self):
