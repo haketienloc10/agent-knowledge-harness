@@ -1,5 +1,6 @@
 # Registry các Git repository local do QiQi điều phối.
-# `path` tính tương đối từ workspace root và phải trỏ đúng Git root.
+# `path` tính tương đối từ workspace root, có thể dùng `..` cho repo sibling,
+# và phải resolve tới đúng Git root. Không dùng absolute path.
 
 workspace:
   name: "{{WORKSPACE_NAME}}"
