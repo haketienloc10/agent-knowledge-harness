@@ -50,7 +50,7 @@ class TaskPacketMinimalityPolicyTests(unittest.TestCase):
             "external observation",
             "START",
             "RESUME",
-            "Parent/user conversation state không tự động trở thành child context",
+            "parent conversation không tự trở thành child-visible context",
             "partial, cropped, sampled, truncated, redacted, stale",
             "absence outside observed coverage != negative evidence",
             "explicit superseded",
