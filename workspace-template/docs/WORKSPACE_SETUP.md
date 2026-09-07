@@ -126,6 +126,20 @@ bash scripts/workspace-check.sh
 
 Runtime state nằm dưới `.qiqi/state/` và chỉ là session/turn lifecycle truth, không phải semantic completion truth.
 
+### Claude additional execution directory
+
+Claude có thể được cấp thêm **một machine-local directory cho execution/evidence** qua biến môi trường optional:
+
+```bash
+export QIQI_CLAUDE_ADDITIONAL_DIR=/absolute/path/to/authorized-runtime-evidence
+```
+
+Khi biến có giá trị, `qiqi_delegate` validate đây là absolute directory tồn tại rồi inject `--add-dir` cho cả START và RESUME. Khi biến không set/empty, không inject thêm directory nào. Codex routing không thay đổi.
+
+Directory này chỉ dành cho authorized runtime/log/test fixture/input/evidence mà child được phép dùng trong execution. **Không trỏ nó vào canonical Work Item MCP store, Shared Knowledge store hoặc QiQi orchestration state**, và không dùng nó để cho child reconstruct task semantics bị thiếu; material task meaning vẫn phải có sẵn trong immutable TaskPacket.
+
+Một thư mục chứa raw Redmine artifact có thể được dùng theo cơ chế này chỉ khi các file đó là authorized execution evidence/input và TaskPacket đã self-sufficient. Nếu thư mục đó là canonical mutable task truth thì QiQi phải đọc/reconcile ở orchestration side và distill semantics vào TaskPacket thay vì cấp store cho child.
+
 ## 5. Canonical Work Item behavior
 
 Với task có stable ID như `redmine:116655`:
@@ -280,7 +294,7 @@ bash scripts/migrate-workspace.sh --status /path/to/workspace
 bash scripts/migrate-workspace.sh --verify /path/to/workspace
 ```
 
-Đây là breaking public schema change của `qiqi_delegate` 0.2.x: existing QiQi/workspace policy phải migrate coordinated với server/tool schema. Migration không tự sửa user MCP config. Mở fresh agent session để client discover `delegate_repo_task` schema mới.
+Đây là breaking public schema change của `qiqi_delegate` 0.2.x: existing QiQi/workspace policy phải migrate coordinated với server/tool schema. Migration không tự sửa user MCP config hoặc machine-local `QIQI_CLAUDE_ADDITIONAL_DIR`. Sau migration, set biến này ở process environment của QiQi MCP nếu cần Claude access một authorized additional directory và mở fresh agent session.
 
 ## Acceptance gate
 
