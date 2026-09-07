@@ -88,7 +88,28 @@ Smoke progressive disclosure:
 
 ## 3. Registry và System Map
 
-`repos.yaml` là canonical owner của workspace/repository registry: workspace name, repository name, exact Git-root path, role, `required_for` và dependency basics (`depends_on`). Xác nhận mọi path là exact Git root và dependency reference trỏ tới repository đã khai báo.
+`repos.yaml` là canonical owner của workspace/repository registry: workspace name, repository name, exact Git-root path, role, `required_for` và dependency basics (`depends_on`).
+
+`repositories[].name` là **logical repository identity** và là giá trị phải truyền vào `delegate_repo_task(repository=...)`. Không truyền filesystem path hoặc `repositories[].path` vào argument `repository`.
+
+`repositories[].path` luôn tính tương đối từ workspace root và phải resolve tới exact Git root. Path có thể nằm dưới workspace (`sgapi`, `services/sgapi`) hoặc là sibling (`../sgapi`). Absolute path không hợp lệ. Ví dụ:
+
+```yaml
+repositories:
+  - name: sgapi
+    path: ../sgapi
+    role: API service
+    required_for: [airlink]
+    depends_on: []
+```
+
+Dù `path` là `../sgapi`, delegation vẫn dùng:
+
+```text
+repository = "sgapi"
+```
+
+Xác nhận dependency reference trỏ tới repository `name` đã khai báo.
 
 `SYSTEM_MAP.md` chỉ giữ cross-repo semantic facts không suy ra được từ registry: contract, ownership/data boundary, non-trivial integration behavior, compatibility/deprecation/rollback và shared-infrastructure facts. Không copy full repository list/path/role/dependency sang System Map. **dependency-only** repository selection/wave không cần đọc `SYSTEM_MAP.md`.
 
@@ -99,7 +120,7 @@ herdr integration install codex
 herdr integration install claude
 herdr integration status
 uv sync --project mcp/qiqi_delegate
-python3 -m unittest discover -s mcp/qiqi_delegate/tests -v
+uv run --project mcp/qiqi_delegate python -m unittest discover -s mcp/qiqi_delegate/tests -v
 bash scripts/workspace-check.sh
 ```
 

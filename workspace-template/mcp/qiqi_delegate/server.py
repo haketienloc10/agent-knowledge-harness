@@ -15,7 +15,7 @@ import tempfile
 import time
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 
 import yaml
 from mcp.server import MCPServer
@@ -89,10 +89,22 @@ class TaskContextInput(BaseModel):
         return result
 
 
+RepositoryName = Annotated[
+    str,
+    Field(
+        description=(
+            "Exact repository name from the workspace repos.yaml `name` field. "
+            "Do not pass a filesystem path or the repos.yaml `path` value."
+        )
+    ),
+]
+
+
 mcp = MCPServer(
     "QiQi Delegate",
     instructions=(
         "Synchronous Herdr-backed repository execution boundary for QiQi. "
+        "The repository argument is the exact repos.yaml name, never a filesystem path. "
         "delegate_repo_task accepts a semantically self-sufficient repo-local problem "
         "contract: objective, scope, optional exclusions/context/constraints, acceptance "
         "criteria, and optional known unknowns. QiQi owns user/product intent, Work Item "
@@ -140,7 +152,7 @@ def _delegation_tool_error(exc: ValueError | RuntimeError) -> ToolError:
         or "repository path does not exist" in lowered
     ):
         code = "repository_registry_invalid"
-        action = "repair repos.yaml so the repository resolves to an existing exact Git root inside the workspace"
+        action = "repair repos.yaml so each relative repository path resolves to an existing exact Git root"
     elif "unknown route" in lowered:
         code = "unknown_route"
         action = "choose an exact route from instructions/agent-routing.yaml"
@@ -226,11 +238,10 @@ def _load_repo_registry() -> dict[str, Path]:
             continue
         if "{{" in name or "{{" in relative_path:
             continue
-        repo = (WORKSPACE_ROOT / relative_path).resolve()
-        try:
-            repo.relative_to(WORKSPACE_ROOT)
-        except ValueError as exc:
-            raise RuntimeError(f"repos.yaml: repository {name!r} escapes workspace root") from exc
+        configured_path = Path(relative_path)
+        if configured_path.is_absolute():
+            raise RuntimeError(f"repos.yaml: repository {name!r} path must be relative")
+        repo = (WORKSPACE_ROOT / configured_path).resolve()
         result[name] = repo
     return result
 
@@ -932,7 +943,7 @@ def _prepare_resume(repository: str, agent_name: str, session_id: str) -> None:
 @mcp.tool()
 @_public_tool_errors
 async def delegate_repo_task(
-    repository: str,
+    repository: RepositoryName,
     route: str,
     objective: str,
     scope: list[str],
@@ -945,9 +956,11 @@ async def delegate_repo_task(
 ) -> dict[str, Any]:
     """Execute one repo-local task and return the native final assistant message.
 
-    The child-facing TaskPacket is an immutable semantic snapshot for this delegated
-    turn. `objective`, `scope`, and `acceptance_criteria` are required. Optional
-    `context` supports `trusted_facts=[{fact, source}]` and
+    `repository` is the exact workspace `repos.yaml` `name`, not a filesystem path
+    and not the registry `path` value. The child-facing TaskPacket is an immutable
+    semantic snapshot for this delegated turn. `objective`, `scope`, and
+    `acceptance_criteria` are required. Optional `context` supports
+    `trusted_facts=[{fact, source}]` and
     `claims_to_investigate=[{claim, source}]`. Trusted facts are execution premises;
     claims to investigate must not be assumed true. `out_of_scope`, `constraints`,
     and `known_unknowns` are omitted when empty.

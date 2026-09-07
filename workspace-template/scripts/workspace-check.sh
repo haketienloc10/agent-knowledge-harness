@@ -37,6 +37,7 @@ required_files=(
   mcp/qiqi_delegate/result_hook.py
   mcp/qiqi_delegate/server.py
   mcp/qiqi_delegate/tests/test_core.py
+  mcp/qiqi_delegate/tests/test_repo_registry.py
   mcp/qiqi_delegate/tests/test_result_hook.py
   mcp/qiqi_delegate/tests/test_server_schema.py
   scripts/qiqi-mcp-server.sh
@@ -287,12 +288,14 @@ for pattern in \
   'class TrustedFactInput' \
   'class ClaimToInvestigateInput' \
   'class TaskContextInput' \
+  'RepositoryName = Annotated' \
   'ConfigDict\(extra="forbid"\)' \
   'def _build_handoff_args' \
   'def _register_active_capture' \
   'expected_session_id' \
   'def _wait_for_result_capture' \
   'refusing to fall back to terminal screen or transcript parsing' \
+  'repository: RepositoryName' \
   'objective: str' \
   'scope: list\[str\]' \
   'acceptance_criteria: list\[str\]' \
@@ -409,6 +412,8 @@ for index, repository in enumerate(repositories):
     for key in ("name", "path", "role"):
         value = repository.get(key)
         assert isinstance(value, str) and value.strip(), f"{prefix}.{key} must be a non-empty string"
+    configured_path = Path(repository["path"])
+    assert not configured_path.is_absolute(), f"{prefix}.path must be relative to workspace root"
     name = repository["name"]
     names.append(name)
     for key in ("required_for", "depends_on"):
@@ -460,8 +465,7 @@ if yq -e '.repositories | type == "!!seq" and length > 0' "$workspace_root/repos
     [[ -n "$name" && "$name" != "null" ]] || fail 'repos.yaml: repository name is empty'
     [[ -n "$path" && "$path" != "null" ]] || fail "repos.yaml: ${name}: path is empty"
     [[ "$path" != /* ]] || fail "repos.yaml: ${name}: path must be relative"
-    [[ "$path" != *'..'* ]] || fail "repos.yaml: ${name}: path must not contain .."
-    module_root="$workspace_root/$path"
+    module_root="$(python3 -c 'from pathlib import Path; import sys; print(Path(sys.argv[1]).resolve())' "$workspace_root/$path")"
     if ! git -C "$module_root" rev-parse --show-toplevel >/dev/null 2>&1; then
       fail "repos.yaml: ${name}: path is not a Git repository: $path"
       continue
