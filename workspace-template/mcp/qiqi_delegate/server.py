@@ -54,6 +54,7 @@ NATIVE_RESULT_WAIT_SECONDS = 5.0
 CLAUDE_PROMPT_RETRY_EFFECT_SECONDS = 5.0
 SUPPORTED_ADAPTERS = {"codex", "claude"}
 PLACEHOLDER_RE = re.compile(r"\{[a-z_][a-z0-9_]*\}")
+ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 LEGACY_META_PREFIX = "<!-- qiqi-session: "
 LEGACY_META_SUFFIX = " -->"
 
@@ -156,6 +157,12 @@ def _delegation_tool_error(exc: ValueError | RuntimeError) -> ToolError:
     elif "unknown route" in lowered:
         code = "unknown_route"
         action = "choose an exact route from instructions/agent-routing.yaml"
+    elif "additional directory" in lowered or ".filesystem" in lowered:
+        code = "filesystem_access_invalid"
+        action = (
+            "set the configured filesystem environment variable to an existing absolute "
+            "directory or correct the agent filesystem routing"
+        )
     elif (
         "agent-routing.yaml" in lowered
         or "unresolved execution placeholder" in lowered
@@ -274,6 +281,41 @@ def _require_string_list(value: Any, label: str) -> list[str]:
     return value
 
 
+def _validate_filesystem_config(name: str, adapter: str, config: dict[str, Any]) -> None:
+    filesystem = config.get("filesystem")
+    if filesystem is None:
+        return
+    if not isinstance(filesystem, dict):
+        raise RuntimeError(f"agent {name}.filesystem must be a map")
+    unknown_keys = set(filesystem) - {"additional_dirs"}
+    if unknown_keys:
+        raise RuntimeError(
+            f"agent {name}.filesystem has unsupported fields: {', '.join(sorted(unknown_keys))}"
+        )
+    additional_dirs = filesystem.get("additional_dirs", [])
+    if not isinstance(additional_dirs, list):
+        raise RuntimeError(f"agent {name}.filesystem.additional_dirs must be a list")
+    if additional_dirs and adapter != "claude":
+        raise RuntimeError(
+            f"agent {name}.filesystem.additional_dirs is unsupported for adapter {adapter!r}"
+        )
+    for index, entry in enumerate(additional_dirs):
+        label = f"agent {name}.filesystem.additional_dirs[{index}]"
+        if not isinstance(entry, dict):
+            raise RuntimeError(f"{label} must be a map")
+        unknown_entry_keys = set(entry) - {"env", "required"}
+        if unknown_entry_keys:
+            raise RuntimeError(
+                f"{label} has unsupported fields: {', '.join(sorted(unknown_entry_keys))}"
+            )
+        env_name = entry.get("env")
+        if not isinstance(env_name, str) or not ENV_NAME_RE.fullmatch(env_name):
+            raise RuntimeError(f"{label}.env must be a valid environment variable name")
+        required = entry.get("required", False)
+        if not isinstance(required, bool):
+            raise RuntimeError(f"{label}.required must be boolean")
+
+
 def _load_execution_config() -> tuple[dict[str, Any], dict[str, Any]]:
     if not ROUTING_PATH.is_file():
         raise RuntimeError(f"missing agent routing registry: {ROUTING_PATH}")
@@ -298,6 +340,7 @@ def _load_execution_config() -> tuple[dict[str, Any], dict[str, Any]]:
                 f"agent {name}: unsupported adapter {adapter!r}; supported: "
                 f"{', '.join(sorted(SUPPORTED_ADAPTERS))}"
             )
+        _validate_filesystem_config(name, adapter, config)
         start_args = _require_string_list(config.get("start_args"), f"agent {name}.start_args")
         resume_args = _require_string_list(config.get("resume_args"), f"agent {name}.resume_args")
         if any("{session_id}" in item for item in start_args):
@@ -344,6 +387,47 @@ def _expand_scalar(raw: str, values: dict[str, str]) -> str:
     return expanded
 
 
+def _build_filesystem_args(agent: dict[str, Any]) -> list[str]:
+    filesystem = agent.get("filesystem")
+    if not filesystem:
+        return []
+    adapter = agent["adapter"]
+    if adapter != "claude":
+        raise RuntimeError(
+            f"additional directory arguments are unsupported for adapter {adapter!r}"
+        )
+
+    argv: list[str] = []
+    seen: set[Path] = set()
+    for entry in filesystem.get("additional_dirs", []):
+        env_name = entry["env"]
+        raw_value = os.environ.get(env_name)
+        if raw_value is None or not raw_value.strip():
+            if entry.get("required", False):
+                raise RuntimeError(
+                    f"additional directory environment variable {env_name} is required "
+                    "but is not set"
+                )
+            continue
+
+        configured_path = Path(raw_value.strip()).expanduser()
+        if not configured_path.is_absolute():
+            raise RuntimeError(
+                f"additional directory from {env_name} must be absolute: {configured_path}"
+            )
+        resolved = configured_path.resolve()
+        if not resolved.is_dir():
+            raise RuntimeError(
+                f"additional directory from {env_name} does not exist or is not a directory: "
+                f"{resolved}"
+            )
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        argv.extend(["--add-dir", str(resolved)])
+    return argv
+
+
 def _build_interactive_args(
     agent: dict[str, Any],
     route: dict[str, Any],
@@ -358,7 +442,7 @@ def _build_interactive_args(
     values = {"model": route["model"]}
     if session_id:
         values["session_id"] = session_id
-    argv: list[str] = []
+    argv = _build_filesystem_args(agent)
     for item in template:
         if item == "{route_args}":
             argv.extend(_expand_scalar(arg, values) for arg in route_args)
