@@ -1,0 +1,23 @@
+{
+  "version": 17,
+  "from_ref": "b425d6fbc1ae29a56805fe3802b11e2d7059ea50",
+  "to_ref": "48e0c5e895eaec3b4d7c689c2cccb3e080a2c3fa",
+  "description": "require QiQi to close task-material references over child-visible context before delegation, preserving material prior-turn semantics plus provenance and evidence coverage without adding a TaskPacket schema field or relying on language-specific deictic keyword filters",
+  "workspace": {
+    "merge": [
+      "workspace-template/identity.md"
+    ],
+    "replace": [
+      "workspace-template/docs/TASKPACKET_REFERENTIAL_CLOSURE.md",
+      "workspace-template/mcp/qiqi_delegate/tests/test_taskpacket_minimality_policy.py"
+    ],
+    "delete": [],
+    "manual_review": []
+  },
+  "repo": {
+    "merge": [],
+    "replace": [],
+    "delete": [],
+    "manual_review": []
+  }
+}
