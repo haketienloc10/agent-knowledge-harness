@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -109,8 +110,8 @@ def resolve_repo_roots(workspace: Path, repo_paths: list[str]) -> list[Path]:
     roots: list[Path] = []
     for rel in repo_paths:
         path = Path(rel)
-        if path.is_absolute() or ".." in path.parts:
-            die(f"repository path must be relative and must not contain '..': {rel}")
+        if path.is_absolute():
+            die(f"repository path must be relative to workspace root: {rel}")
         root = (workspace / path).resolve()
         if not root.is_dir():
             die(f"repository path does not exist: {rel}")
@@ -118,6 +119,8 @@ def resolve_repo_roots(workspace: Path, repo_paths: list[str]) -> list[Path]:
         if resolved != root:
             die(f"repository path is not the exact Git root: {rel}")
         roots.append(root)
+    if len(roots) != len(set(roots)):
+        die("repos.yaml contains repository paths that resolve to the same Git root")
     return roots
 
 
@@ -223,7 +226,9 @@ def backup_path(workspace: Path, key: str, version: int, relative: Path) -> Path
     repo_prefix = "repo:"
     if not key.startswith(repo_prefix):
         die(f"invalid migration scope key: {key}")
-    return base / "repos" / key[len(repo_prefix):] / relative
+    repo_key = key[len(repo_prefix):]
+    repo_backup_id = hashlib.sha256(repo_key.encode("utf-8")).hexdigest()
+    return base / "repos" / repo_backup_id / relative
 
 
 def check_backup(source: Path, backup: Path) -> bool:
