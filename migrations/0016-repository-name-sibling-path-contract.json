@@ -1,0 +1,26 @@
+{
+  "version": 16,
+  "from_ref": "316cc4945f601b15643b3238eba14204f27d3f40",
+  "to_ref": "98101b31bb4506735b34800549d3d1b557664907",
+  "description": "make qiqi_delegate repository identity self-describing, allow relative sibling Git roots in repos.yaml, and keep migration backups safe for paths containing parent segments",
+  "workspace": {
+    "merge": [],
+    "replace": [
+      "workspace-template/mcp/qiqi_delegate/server.py",
+      "workspace-template/mcp/qiqi_delegate/tests/test_repo_registry.py",
+      "workspace-template/mcp/qiqi_delegate/tests/test_server_schema.py",
+      "workspace-template/scripts/workspace-check.sh",
+      "workspace-template/docs/WORKSPACE_SETUP.md"
+    ],
+    "delete": [],
+    "manual_review": [
+      "workspace-template/repos.yaml"
+    ]
+  },
+  "repo": {
+    "merge": [],
+    "replace": [],
+    "delete": [],
+    "manual_review": []
+  }
+}
