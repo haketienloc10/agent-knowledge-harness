@@ -42,12 +42,13 @@ agents:
     command: claude
     adapter: claude
 
-    # Machine-local shared roots are supplied through environment variables so
-    # the template does not encode one workspace/storage topology. Missing
-    # optional variables are ignored; configured paths are validated at runtime.
+    # Machine-local authorized execution/evidence roots may be supplied through
+    # environment variables so the template does not encode one storage topology.
+    # Never point these entries at canonical Work Item/Knowledge/orchestration
+    # storage; task meaning must already be complete in the TaskPacket.
     filesystem:
       additional_dirs:
-        - env: QIQI_WORK_ITEMS_ROOT
+        - env: QIQI_CLAUDE_ADDITIONAL_DIR
           required: false
 
     start_args:
