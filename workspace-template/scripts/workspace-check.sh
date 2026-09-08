@@ -144,14 +144,18 @@ rg -F -q 'Default delegation route = `claude-balanced`' <<<"$startup_section" ||
   fail 'AGENTS.md: startup must keep claude-balanced as deterministic default route'
 rg -F -q 'Turn không delegate không hydrate route policy' <<<"$startup_section" || \
   fail 'AGENTS.md: no-delegation turn must not hydrate route policy'
-rg -F -q 'đọc `instructions/model-routing.md` ngay trước route decision' "$agents_md" || \
-  fail 'AGENTS.md: non-default/uncertain route decisions must hydrate route policy just in time'
+rg -F -q 'Khi một turn thực sự cần delegation, đọc `instructions/model-routing.md` **just-in-time ngay trước route decision**' <<<"$startup_section" || \
+  fail 'AGENTS.md: every actual delegation must hydrate route policy just in time'
+rg -F -q 'Đọc `instructions/model-routing.md` ngay trước route decision rồi chọn exact route nhẹ nhất vẫn đủ tin cậy' "$agents_md" || \
+  fail 'AGENTS.md: before-delegation route decision must hydrate model-routing policy first'
 
 model_routing="$workspace_root/instructions/model-routing.md"
 rg -F -q 'File này **không phải mandatory startup material**' "$model_routing" || \
   fail 'model-routing.md: activation must declare policy non-mandatory at startup'
 rg -F -q 'Turn không delegate **không đọc** file này' "$model_routing" || \
   fail 'model-routing.md: no-delegation turns must skip route-policy hydration'
+rg -F -q 'Khi một turn thực sự cần delegation, QiQi **đọc file này ngay trước route decision**' "$model_routing" || \
+  fail 'model-routing.md: every actual delegation must hydrate route policy before classification'
 rg -F -q 'Default delegation route = claude-balanced' "$model_routing" || \
   fail 'model-routing.md: activation must preserve claude-balanced default'
 
