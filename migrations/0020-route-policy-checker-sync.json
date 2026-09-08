@@ -1,0 +1,20 @@
+{
+  "version": 20,
+  "from_ref": "48df3fa78f81c5a37ec044050e0f079571ca19e0",
+  "to_ref": "8c181efbd544ee08de5e59119cf765d0319324bf",
+  "description": "align workspace-check route-policy assertions with the just-in-time routing contract introduced by migration 19 so already-migrated workspaces verify successfully",
+  "workspace": {
+    "merge": [],
+    "replace": [
+      "workspace-template/scripts/workspace-check.sh"
+    ],
+    "delete": [],
+    "manual_review": []
+  },
+  "repo": {
+    "merge": [],
+    "replace": [],
+    "delete": [],
+    "manual_review": []
+  }
+}
