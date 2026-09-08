@@ -124,10 +124,9 @@ repos.yaml
 
 `AGENTS.md` là always-on policy đã được client load theo workspace contract. `instructions/model-routing.md` **không phải mandatory startup read**.
 
-Default delegation route là `claude-balanced`. Với status-only/answer-only/orchestration-only turn không delegate, QiQi không hydrate route policy. Khi cần delegation:
+Default delegation route là `claude-balanced`. Với status-only/answer-only/orchestration-only turn không delegate, QiQi không hydrate route policy. Khi một turn thực sự cần delegation, QiQi đọc `instructions/model-routing.md` **just-in-time ngay trước route decision** rồi mới phân loại fast/balanced/deep/verifier/Codex.
 
-- không có exception signal → có thể dùng `claude-balanced` trực tiếp;
-- có fast/deep/verifier/Codex signal, explicit user/project route selection hoặc uncertainty về default → đọc `instructions/model-routing.md` ngay trước route decision.
+Điểm quan trọng: always-on policy không phải tự nhận diện trước “exception signal” mà route-policy file mới định nghĩa. `claude-balanced` chỉ là deterministic default/fallback sau khi policy được áp dụng, không phải lý do để bỏ qua policy ở một actual delegation.
 
 `SYSTEM_MAP.md` và Shared Knowledge vẫn giữ activation rule riêng; optimization startup không được làm yếu TaskPacket semantic completeness, referential closure hoặc cross-repo ownership boundary.
 
@@ -300,7 +299,7 @@ Trên repo test an toàn:
 10. canonical state material change trong lúc child chạy: stale result không được QiQi promote thành current truth;
 11. native qiqi_delegate hook/RESUME smoke pass cho agent family thực sự dùng;
 12. dependency-only orchestration chọn repo/wave từ `repos.yaml` không hydrate `SYSTEM_MAP.md`;
-13. status-only/answer-only fresh turn không hydrate `instructions/model-routing.md`; normal delegation giữ deterministic `claude-balanced`, còn route exception hydrate policy trước decision.
+13. status-only/answer-only fresh turn không hydrate `instructions/model-routing.md`; mọi actual delegation hydrate route policy ngay trước route decision, rồi `claude-balanced` chỉ làm deterministic fallback/default khi policy không chỉ ra route khác.
 
 ## 13. Workspace đã cài harness
 
@@ -328,6 +327,7 @@ legitimate child Knowledge/runtime-evidence smoke PASS
 stale-result reconciliation smoke PASS
 native qiqi_delegate smoke PASS
 status-only startup skips model-routing PASS
+actual delegation hydrates model-routing just-in-time PASS
 ```
 
 Static/unit test không thay external CLI/user-MCP smoke.
