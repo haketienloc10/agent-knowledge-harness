@@ -41,6 +41,7 @@ required_files=(
   mcp/qiqi_delegate/tests/test_repo_registry.py
   mcp/qiqi_delegate/tests/test_result_hook.py
   mcp/qiqi_delegate/tests/test_server_schema.py
+  mcp/qiqi_delegate/tests/test_workspace_startup_policy.py
   scripts/qiqi-mcp-server.sh
   scripts/workspace-check.sh
   docs/WORKSPACE_SETUP.md
@@ -119,6 +120,41 @@ rg -U -q 'Shared Knowledge.*implementation knowledge.*không thay thế nghĩa v
 rg -U -q 'Work Item read/update/persistence failure.*\$work-item.*không local Markdown/cached-conversation fallback' "$agents_md" || \
   fail 'AGENTS.md: Work Item failure must not fall back to local/cached task truth'
 
+startup_section="$(python3 - "$agents_md" <<'PY'
+from pathlib import Path
+import sys
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8")
+heading = "## Khởi động QiQi\n"
+start = text.find(heading)
+if start < 0:
+    print("")
+    raise SystemExit(0)
+next_heading = text.find("\n## ", start + len(heading))
+section = text[start:] if next_heading < 0 else text[start:next_heading]
+print(section.rstrip("\n"))
+PY
+)"
+if rg -q '^\d+\. Đọc `instructions/model-routing\.md`' <<<"$startup_section"; then
+  fail 'AGENTS.md: model-routing.md must not be an unconditional startup read'
+fi
+rg -F -q '`instructions/model-routing.md` **không phải mandatory startup read**' <<<"$startup_section" || \
+  fail 'AGENTS.md: startup must declare model-routing.md lazy'
+rg -F -q 'Default delegation route = `claude-balanced`' <<<"$startup_section" || \
+  fail 'AGENTS.md: startup must keep claude-balanced as deterministic default route'
+rg -F -q 'Turn không delegate không hydrate route policy' <<<"$startup_section" || \
+  fail 'AGENTS.md: no-delegation turn must not hydrate route policy'
+rg -F -q 'đọc `instructions/model-routing.md` ngay trước route decision' "$agents_md" || \
+  fail 'AGENTS.md: non-default/uncertain route decisions must hydrate route policy just in time'
+
+model_routing="$workspace_root/instructions/model-routing.md"
+rg -F -q 'File này **không phải mandatory startup material**' "$model_routing" || \
+  fail 'model-routing.md: activation must declare policy non-mandatory at startup'
+rg -F -q 'Turn không delegate **không đọc** file này' "$model_routing" || \
+  fail 'model-routing.md: no-delegation turns must skip route-policy hydration'
+rg -F -q 'Default delegation route = claude-balanced' "$model_routing" || \
+  fail 'model-routing.md: activation must preserve claude-balanced default'
+
 # Work Item mechanics belong to the shared user-scoped $work-item skill.
 # Keep only activation/authority/safety invariants in workspace always-on policy.
 if rg -q '^### Current snapshot và material history$|^### Material session reconciliation$|Phase-specific guardrails:' "$agents_md"; then
@@ -180,6 +216,15 @@ fi
 identity="$workspace_root/identity.md"
 for pattern in 'knowledge_read_metadata' 'knowledge_read_section' 'smallest sufficient semantic scope' 'material use/update'; do
   rg -q "$pattern" "$identity" || fail "identity.md: missing scoped Knowledge responsibility: $pattern"
+done
+for duplicated_operational_detail in 'work_item_get' 'work_item_update' 'agent_response' 'settled \| failed \| blocked'; do
+  if rg -q "$duplicated_operational_detail" "$identity"; then
+    fail "identity.md: duplicate operational detail must stay in owner policy, not identity: $duplicated_operational_detail"
+  fi
+done
+for hard_identity_invariant in 'referential closure' 'TaskPacket phải tự đủ' 'child tự đọc/sửa sibling repo'; do
+  rg -q "$hard_identity_invariant" "$identity" || \
+    fail "identity.md: missing hard always-on invariant after dedup: $hard_identity_invariant"
 done
 
 workspace_readme="$workspace_root/README.md"
