@@ -1,0 +1,26 @@
+{
+  "version": 19,
+  "from_ref": "48e0c5e895eaec3b4d7c689c2cccb3e080a2c3fa",
+  "to_ref": "5697eca44ef4749c6820ad5b7af338d4b88ef573",
+  "description": "reduce fixed QiQi startup context by deduplicating identity policy and hydrating model-routing only for route exceptions or uncertainty while preserving claude-balanced default behavior and task-semantic hard boundaries",
+  "workspace": {
+    "merge": [
+      "workspace-template/AGENTS.md",
+      "workspace-template/identity.md"
+    ],
+    "replace": [
+      "workspace-template/instructions/model-routing.md",
+      "workspace-template/mcp/qiqi_delegate/tests/test_workspace_startup_policy.py",
+      "workspace-template/scripts/workspace-check.sh",
+      "workspace-template/docs/WORKSPACE_SETUP.md"
+    ],
+    "delete": [],
+    "manual_review": []
+  },
+  "repo": {
+    "merge": [],
+    "replace": [],
+    "delete": [],
+    "manual_review": []
+  }
+}
