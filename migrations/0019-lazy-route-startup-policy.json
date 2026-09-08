@@ -1,8 +1,8 @@
 {
   "version": 19,
   "from_ref": "48e0c5e895eaec3b4d7c689c2cccb3e080a2c3fa",
-  "to_ref": "7f74653579526c51c64837e01c4ca038422d1a9c",
-  "description": "reduce fixed QiQi startup context by deduplicating identity policy and hydrating model-routing only for route exceptions or uncertainty while preserving claude-balanced default behavior and task-semantic hard boundaries",
+  "to_ref": "48df3fa78f81c5a37ec044050e0f079571ca19e0",
+  "description": "reduce fixed QiQi startup context by deduplicating identity policy and hydrating model-routing only when an actual delegation reaches route selection, preserving claude-balanced fallback behavior, route-selection correctness and task-semantic hard boundaries",
   "workspace": {
     "merge": [
       "workspace-template/AGENTS.md",
