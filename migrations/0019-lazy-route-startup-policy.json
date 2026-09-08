@@ -1,7 +1,7 @@
 {
   "version": 19,
   "from_ref": "48e0c5e895eaec3b4d7c689c2cccb3e080a2c3fa",
-  "to_ref": "5697eca44ef4749c6820ad5b7af338d4b88ef573",
+  "to_ref": "7f74653579526c51c64837e01c4ca038422d1a9c",
   "description": "reduce fixed QiQi startup context by deduplicating identity policy and hydrating model-routing only for route exceptions or uncertainty while preserving claude-balanced default behavior and task-semantic hard boundaries",
   "workspace": {
     "merge": [
