@@ -22,16 +22,12 @@ Default delegation route = claude-balanced.
 
 Turn không delegate **không đọc** file này chỉ để hoàn thành startup.
 
-Khi cần delegation:
+Khi một turn thực sự cần delegation, QiQi **đọc file này ngay trước route decision** rồi mới phân loại task vào fast/balanced/deep/verifier/Codex. Không yêu cầu always-on policy tự nhận diện trước các exception signal mà file này định nghĩa.
 
-- nếu không có signal rõ cho route khác, QiQi có thể chọn `claude-balanced` trực tiếp;
-- đọc file này **ngay trước route decision** khi task có signal cho fast/deep/verifier/Codex;
-- cũng đọc file này khi user/project explicit chọn route hoặc agent family khác default;
-- nếu QiQi không đủ chắc default route phù hợp, hydrate policy trước khi chọn thay vì đoán.
+`claude-balanced` vẫn là deterministic default/fallback khi sau khi áp dụng policy không có lý do rõ để chọn route khác. User/project explicit route selection vẫn phải được kiểm tra theo policy và route registry trước delegation.
 
 Mục tiêu của activation rule là tránh fixed context tax cho status-only/answer-only
-turn nhưng không làm giảm route-selection correctness khi route decision thực sự
-có uncertainty hoặc exception signal.
+turn nhưng không đánh đổi route-selection correctness ở các turn thực sự delegate.
 
 ## Route hiện có
 
