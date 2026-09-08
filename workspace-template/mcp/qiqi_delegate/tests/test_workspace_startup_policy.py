@@ -34,16 +34,22 @@ class WorkspaceStartupPolicyTests(unittest.TestCase):
             re.compile(r"(?m)^\d+\.\s+Đọc `instructions/model-routing\.md`\.?$"),
         )
 
-    def test_route_policy_is_hydrated_only_for_route_exceptions_or_uncertainty(self) -> None:
+    def test_every_actual_delegation_hydrates_route_policy_just_in_time(self) -> None:
+        startup = markdown_section(self.agents, "## Khởi động QiQi")
         before_delegation = markdown_section(self.agents, "## Trước delegation")
 
-        self.assertIn("dùng `claude-balanced` trực tiếp", before_delegation)
-        self.assertIn("fast/deep/verifier/Codex", before_delegation)
-        self.assertIn("explicit user/project route selection", before_delegation)
-        self.assertIn("đọc `instructions/model-routing.md` ngay trước route decision", before_delegation)
+        self.assertIn("Khi một turn thực sự cần delegation", startup)
+        self.assertIn("just-in-time ngay trước route decision", startup)
+        self.assertIn("không yêu cầu QiQi đoán exception signal", startup)
+
+        self.assertIn("Đọc `instructions/model-routing.md` ngay trước route decision", before_delegation)
+        self.assertIn("exact route nhẹ nhất vẫn đủ tin cậy", before_delegation)
+        self.assertIn("`claude-balanced` là fallback/default", before_delegation)
 
         self.assertIn("**không phải mandatory startup material**", self.model_routing)
         self.assertIn("Turn không delegate **không đọc** file này", self.model_routing)
+        self.assertIn("đọc file này ngay trước route decision", self.model_routing)
+        self.assertIn("Không yêu cầu always-on policy tự nhận diện trước", self.model_routing)
         self.assertIn("Default delegation route = claude-balanced", self.model_routing)
 
     def test_identity_dedup_preserves_always_on_semantic_boundaries(self) -> None:
