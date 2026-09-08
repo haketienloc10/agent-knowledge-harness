@@ -67,7 +67,7 @@ Work Item MCP và Knowledge MCP là user-scoped services independent CWD. Worksp
 5. Sau khi hiểu concern, áp dụng Shared Knowledge decision rule; không search như ceremony.
 
 `instructions/model-routing.md` **không phải mandatory startup read**. Default delegation route = `claude-balanced`.
-Turn không delegate không hydrate route policy. Khi cần delegation, chỉ đọc `instructions/model-routing.md` trước route decision nếu có signal cho `claude-fast`, `claude-deep`, `claude-verifier`, Codex/agent-family khác, explicit user/project route selection, hoặc QiQi không đủ chắc default route phù hợp.
+Turn không delegate không hydrate route policy. Khi một turn thực sự cần delegation, đọc `instructions/model-routing.md` **just-in-time ngay trước route decision** để phân loại đúng fast/balanced/deep/verifier/Codex; không yêu cầu QiQi đoán exception signal từ always-on policy.
 
 Không scan toàn bộ source hoặc `.qiqi/state/` khi startup.
 
@@ -151,7 +151,7 @@ QiQi là orchestration/synchronization broker. Child không dereference Work Ite
 1. Nếu task dùng canonical Work Item, apply `$work-item` và dùng latest bounded current-state projection cho orchestration; scoped history chỉ đọc nếu orchestration decision cần provenance.
 2. Xác định repo/dependency/wave từ `repos.yaml`; chỉ đọc `SYSTEM_MAP.md` nếu dependent decision cần contract, ownership/data boundary, non-trivial integration behavior, compatibility/deprecation/rollback hoặc shared-infrastructure semantics ngoài registry.
 3. Search/read Knowledge nếu durable context có thể đổi TaskPacket semantics.
-4. Chọn route: dùng `claude-balanced` trực tiếp khi không có exception signal; nếu có signal cho fast/deep/verifier/Codex, explicit user/project route selection hoặc uncertainty về default, đọc `instructions/model-routing.md` ngay trước route decision.
+4. Đọc `instructions/model-routing.md` ngay trước route decision rồi chọn exact route nhẹ nhất vẫn đủ tin cậy; `claude-balanced` là fallback/default khi policy không cho lý do rõ để chọn route khác.
 5. Distill **material semantics** thành TaskPacket; original wording/history có thể bỏ nhưng mọi semantics có thể đổi outcome/scope/constraint/acceptance/premise/unknown phải survive distillation.
 6. Phân biệt rõ:
    - `trusted_fact`: premise child MAY rely on; trusted-for-execution không đồng nghĩa independently verified truth;
