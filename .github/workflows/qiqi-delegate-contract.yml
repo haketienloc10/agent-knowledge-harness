@@ -11,6 +11,7 @@ on:
       - 'workspace-template/mcp/qiqi_delegate/**'
       - 'workspace-template/scripts/workspace-check.sh'
       - 'work-item-template/**'
+      - 'google-sheets-template/**'
       - 'migrations/**'
   workflow_dispatch:
 
@@ -44,8 +45,14 @@ jobs:
           -s work-item-template/mcp/work_item/tests
           -p test_skill_contract.py -v
 
+      - name: Run Google Sheets readonly MCP contract tests
+        run: bash google-sheets-template/scripts/google-sheets-template-check.sh
+
       - name: Check managed shell syntax
         run: |
           bash -n workspace-template/scripts/workspace-check.sh
           bash -n repo-template/scripts/repo-check.sh
           bash -n work-item-template/scripts/install-user-mcp.sh
+          bash -n google-sheets-template/scripts/google-sheets-mcp-server.sh
+          bash -n google-sheets-template/scripts/google-sheets-template-check.sh
+          bash -n google-sheets-template/scripts/install-user-mcp.sh
