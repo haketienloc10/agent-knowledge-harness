@@ -10,6 +10,25 @@ flags của từng route.
 Không copy model ID, permission mode, effort hay CLI flags vào file này. Khi
 runtime configuration thay đổi, chỉ registry machine-readable phải đổi.
 
+## Activation
+
+File này **không phải mandatory startup material**.
+
+Always-on default invariant nằm ở `AGENTS.md`:
+
+```text
+Default delegation route = claude-balanced.
+```
+
+Turn không delegate **không đọc** file này chỉ để hoàn thành startup.
+
+Khi một turn thực sự cần delegation, QiQi **đọc file này ngay trước route decision** rồi mới phân loại task vào fast/balanced/deep/verifier/Codex. Không yêu cầu always-on policy tự nhận diện trước các exception signal mà file này định nghĩa.
+
+`claude-balanced` vẫn là deterministic default/fallback khi sau khi áp dụng policy không có lý do rõ để chọn route khác. User/project explicit route selection vẫn phải được kiểm tra theo policy và route registry trước delegation.
+
+Mục tiêu của activation rule là tránh fixed context tax cho status-only/answer-only
+turn nhưng không đánh đổi route-selection correctness ở các turn thực sự delegate.
+
 ## Route hiện có
 
 ### `claude-fast`
