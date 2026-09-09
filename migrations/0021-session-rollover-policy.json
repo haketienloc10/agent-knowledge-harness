@@ -1,7 +1,7 @@
 {
   "version": 21,
   "from_ref": "8c181efbd544ee08de5e59119cf765d0319324bf",
-  "to_ref": "da0e73aef4cdd60d440245d8e08ccc466a93b814",
+  "to_ref": "847b2f7bdddbac37977bf520ea87882bfc3cb71e",
   "description": "define semantic START/RESUME rollover policy so reconciled stable boundaries start fresh by default, blocked/recovery paths preserve exact native continuity, and independent verifier routes do not inherit implementation sessions",
   "workspace": {
     "merge": [
