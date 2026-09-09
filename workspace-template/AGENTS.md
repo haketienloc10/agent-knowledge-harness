@@ -226,7 +226,7 @@ session_id present → RESUME exact native session
 
 Known `session_id` tự nó **không phải** lý do để RESUME. RESUME cần một affirmative continuity reason: exact native conversational context phải material cho turn kế tiếp.
 
-Sau một terminal turn đã tạo stable handoff/reconciliation boundary và material result đã được reconcile/persist vào canonical state, **START fresh mặc định** nếu next turn không còn phụ thuộc exact native-session context.
+Sau một terminal turn đã tạo stable handoff/reconciliation boundary, **START fresh mặc định** nếu next turn không còn phụ thuộc exact native-session context. Với task dùng canonical Work Item, stable boundary yêu cầu material result đã được QiQi reconcile/persist vào canonical state. Với task không dùng Work Item, QiQi accept/reconcile exact native handoff cho next decision là đủ; không tạo Work Item chỉ để biện minh cho rollover.
 
 Ưu tiên hoặc bắt buộc **RESUME** khi:
 
@@ -237,7 +237,7 @@ Sau một terminal turn đã tạo stable handoff/reconciliation boundary và ma
 
 Ưu tiên hoặc bắt buộc **START fresh** khi:
 
-- previous terminal turn đã materially reconciled/persisted và next step không cần exact native context;
+- previous terminal turn đã đạt stable handoff/reconciliation boundary như trên và next step không cần exact native context;
 - chuyển phase đáng kể sau stable handoff, ví dụ investigation → implementation;
 - objective/material task meaning đổi đáng kể;
 - implementation → independent verification/review;
