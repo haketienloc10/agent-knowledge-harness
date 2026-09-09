@@ -127,6 +127,7 @@ Substantive reusable conclusion phải knowledge review trước mutation ở la
 - Partial update vẫn dùng one whole-document SHA-256 revision; revision conflict → reread → reconcile → retry.
 - Stable section marker chỉ là mutation address trong cùng canonical document, không phải chunk store/per-section revision.
 - Required review không candidate dùng `knowledge_write(entries=[])`.
+
 ## Orchestration
 
 `repos.yaml` là canonical repository registry cho workspace/repository identity, Git-root path, role, workflow membership và dependency basics. `SYSTEM_MAP.md` chỉ giữ cross-repo semantic facts không suy ra được từ registry; không dùng System Map như repository registry thứ hai.
