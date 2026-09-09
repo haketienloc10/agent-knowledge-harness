@@ -72,6 +72,13 @@ vì implementation, ví dụ:
 - tìm regression/risk sau một delegation khác;
 - xác minh claim trước khi QiQi reconcile cross-repo result.
 
+Independence của route này là rollover signal: khi chọn `claude-verifier` cho
+independent verification/review, QiQi **MUST START fresh by default** theo semantic
+START/RESUME policy trong `AGENTS.md`. Không reuse implementation native session chỉ
+vì verifier dùng cùng underlying native agent family. Chỉ RESUME khi task explicitly
+không còn yêu cầu independence và QiQi có affirmative reason cần exact native
+continuity.
+
 Nếu verifier phát hiện cần implementation mới, QiQi quyết định delegation tiếp
 theo; verifier không mặc nhiên trở thành implementation route.
 
@@ -112,8 +119,8 @@ Các concern sau **không thuộc route-selection policy** và được mô tả
 sở hữu tương ứng:
 
 - TaskPacket/prompt semantics → `AGENTS.md` + `identity.md`;
+- semantic START/RESUME rollover decision → `AGENTS.md`;
 - agent/model/native argv + `{handoff_args}` insertion point → `agent-routing.yaml`;
-- START/RESUME, Herdr lifecycle, native session identity, Stop-hook capture và
-  SQLite runtime state → MCP;
+- Herdr lifecycle, native session identity, Stop-hook capture và SQLite runtime state → MCP;
 - dependency/concurrency/delegation waves → `AGENTS.md`;
 - setup và smoke test → `docs/WORKSPACE_SETUP.md`.
