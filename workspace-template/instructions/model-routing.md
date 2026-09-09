@@ -123,4 +123,5 @@ sở hữu tương ứng:
 - agent/model/native argv + `{handoff_args}` insertion point → `agent-routing.yaml`;
 - Herdr lifecycle, native session identity, Stop-hook capture và SQLite runtime state → MCP;
 - dependency/concurrency/delegation waves → `AGENTS.md`;
-- setup và smoke test → `docs/WORKSPACE_SETUP.md`.
+- setup tổng quát → `docs/WORKSPACE_SETUP.md`;
+- multi-phase session rollover smoke → `docs/SESSION_ROLLOVER.md`.
