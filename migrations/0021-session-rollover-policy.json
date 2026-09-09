@@ -1,0 +1,23 @@
+{
+  "version": 21,
+  "from_ref": "99296b21264c41a3e8aaa54033d18a9ffe34d5ea",
+  "to_ref": "b67eb05c67c13b1c2b80796fb3d97b2f0dac33e7",
+  "description": "define semantic START/RESUME rollover policy so reconciled stable boundaries start fresh by default, blocked/recovery paths preserve exact native continuity, and independent verifier routes do not inherit implementation sessions",
+  "workspace": {
+    "merge": [
+      "workspace-template/AGENTS.md"
+    ],
+    "replace": [
+      "workspace-template/instructions/model-routing.md",
+      "workspace-template/mcp/qiqi_delegate/tests/test_session_rollover_policy.py"
+    ],
+    "delete": [],
+    "manual_review": []
+  },
+  "repo": {
+    "merge": [],
+    "replace": [],
+    "delete": [],
+    "manual_review": []
+  }
+}
