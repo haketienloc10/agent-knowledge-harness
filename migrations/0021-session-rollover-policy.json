@@ -1,8 +1,8 @@
 {
   "version": 21,
   "from_ref": "8c181efbd544ee08de5e59119cf765d0319324bf",
-  "to_ref": "aec83752ded6b9f5b800cdb7944005ee1376de4d",
-  "description": "define semantic START/RESUME rollover policy so stable handoffs start fresh by default when native continuity is no longer material, blocked recovery remains conditional on exact-session need, and independent verifier routes do not inherit implementation sessions",
+  "to_ref": "f0c785bfdb72eb3c5a5eaf11f50bacefd1737581",
+  "description": "define compact semantic START/RESUME rollover policy so stable handoffs start fresh by default when native continuity is no longer material, blocked recovery remains conditional on exact-session need, and independent verifier routes do not inherit implementation sessions",
   "workspace": {
     "merge": [
       "workspace-template/AGENTS.md"
