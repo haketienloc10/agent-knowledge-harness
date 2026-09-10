@@ -136,7 +136,9 @@ class WorkspaceStartupPolicyTests(unittest.TestCase):
 
     def test_rollover_does_not_require_runtime_state_polling(self) -> None:
         rollover = markdown_section(self.agents, "## START/RESUME")
-        self.assertIn("QiQi không đọc/sửa/poll runtime DB để quyết định rollover", rollover)
+        self.assertIn("QiQi không đọc/sửa/poll", rollover)
+        self.assertIn("`.qiqi/state/qiqi_delegate.sqlite3`", rollover)
+        self.assertIn("để quyết định rollover", rollover)
 
 
 if __name__ == "__main__":
