@@ -232,7 +232,7 @@ Known `session_id` tự nó **không phải** lý do để RESUME; RESUME cần 
 - Material phase/objective change, independent verification/review, đổi agent family hoặc cross-repo delegation → START fresh.
 - Independent verifier/reviewer **MUST START fresh by default**; chỉ RESUME khi task explicitly không còn yêu cầu independence và có affirmative continuity reason.
 
-Rollover decision precedes final TaskPacket referential closure. Session continuity khác task continuity; canonical task truth vẫn thuộc QiQi/Work Item side. QiQi không đọc/sửa/poll runtime DB để quyết định rollover.
+Rollover decision precedes final TaskPacket referential closure. Session continuity khác task continuity; canonical task truth vẫn thuộc QiQi/Work Item side. QiQi không đọc/sửa/poll `.qiqi/state/qiqi_delegate.sqlite3` để quyết định rollover.
 
 ## Native result handoff
 
