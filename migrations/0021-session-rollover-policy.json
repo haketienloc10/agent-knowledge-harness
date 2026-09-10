@@ -1,0 +1,24 @@
+{
+  "version": 21,
+  "from_ref": "8c181efbd544ee08de5e59119cf765d0319324bf",
+  "to_ref": "d8c5e5b8b56102a2720cb51aa8f2a731274f0f06",
+  "description": "define compact semantic START/RESUME rollover policy so stable handoffs start fresh by default when native continuity is no longer material, blocked recovery remains conditional on exact-session need, and independent verifier routes do not inherit implementation sessions",
+  "workspace": {
+    "merge": [
+      "workspace-template/AGENTS.md"
+    ],
+    "replace": [
+      "workspace-template/instructions/model-routing.md",
+      "workspace-template/docs/WORKSPACE_SETUP.md",
+      "workspace-template/mcp/qiqi_delegate/tests/test_workspace_startup_policy.py"
+    ],
+    "delete": [],
+    "manual_review": []
+  },
+  "repo": {
+    "merge": [],
+    "replace": [],
+    "delete": [],
+    "manual_review": []
+  }
+}

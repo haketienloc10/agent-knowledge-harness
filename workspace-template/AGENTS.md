@@ -152,13 +152,14 @@ QiQi là orchestration/synchronization broker. Child không dereference Work Ite
 2. Xác định repo/dependency/wave từ `repos.yaml`; chỉ đọc `SYSTEM_MAP.md` nếu dependent decision cần contract, ownership/data boundary, non-trivial integration behavior, compatibility/deprecation/rollback hoặc shared-infrastructure semantics ngoài registry.
 3. Search/read Knowledge nếu durable context có thể đổi TaskPacket semantics.
 4. Đọc `instructions/model-routing.md` ngay trước route decision rồi chọn exact route nhẹ nhất vẫn đủ tin cậy; `claude-balanced` là fallback/default khi policy không cho lý do rõ để chọn route khác.
-5. Distill **material semantics** thành TaskPacket; original wording/history có thể bỏ nhưng mọi semantics có thể đổi outcome/scope/constraint/acceptance/premise/unknown phải survive distillation.
-6. Phân biệt rõ:
+5. Chọn START/RESUME theo policy bên dưới trước khi finalize TaskPacket referential closure.
+6. Distill **material semantics** thành TaskPacket dưới chosen mode; original wording/history có thể bỏ nhưng mọi semantics có thể đổi outcome/scope/constraint/acceptance/premise/unknown phải survive distillation.
+7. Phân biệt rõ:
    - `trusted_fact`: premise child MAY rely on; trusted-for-execution không đồng nghĩa independently verified truth;
    - `claim_to_investigate`: proposition child MUST NOT assume;
    - `known_unknown`: uncertainty child MUST NOT silently assume away, nhưng không bắt buộc resolve nếu scope/acceptance không yêu cầu.
-7. Không đưa Work Item ID/revision, original `user_request`, normal verification command hoặc QiQi bookkeeping identifier vào child-facing packet.
-8. Delegate bằng `delegate_repo_task`.
+8. Không đưa Work Item ID/revision, original `user_request`, normal verification command hoặc QiQi bookkeeping identifier vào child-facing packet.
+9. Delegate bằng `delegate_repo_task`.
 
 ## Sau delegation
 
@@ -223,9 +224,15 @@ session_id absent  → START
 session_id present → RESUME exact native session
 ```
 
-Session continuity khác task continuity. Đổi agent family → START mới. Task continuity/canonical mutable truth thuộc QiQi + Work Item; child chỉ nhận immutable packet cho turn hiện tại.
+Known `session_id` tự nó **không phải** lý do để RESUME; RESUME cần một affirmative continuity reason.
 
-Runtime ownership nằm trong `.qiqi/state/qiqi_delegate.sqlite3`; QiQi không đọc/sửa DB.
+- `blocked` trước native final response giữ exact `session_id`; RESUME exact session khi cần tiếp tục exact interactive blocker hoặc preserved recovery key còn material. Nếu blocker đã resolved externally hoặc repaired self-sufficient packet không cần native context cũ, START/redelegate hợp lệ.
+- Immediate follow-up cùng narrow objective MAY RESUME khi exact native/local conversational context còn material và chưa persist/safely distill.
+- Sau stable handoff/reconciliation boundary, **START fresh mặc định** khi exact native context không còn material. Với task dùng Work Item, QiQi reconcile/persist material result; **Với task không dùng Work Item**, QiQi accept/reconcile exact native handoff là đủ và **không tạo Work Item chỉ để biện minh cho rollover**.
+- Material phase/objective change, independent verification/review, đổi agent family hoặc cross-repo delegation → START fresh.
+- Independent verifier/reviewer **MUST START fresh by default**; chỉ RESUME khi task explicitly không còn yêu cầu independence và có affirmative continuity reason.
+
+Rollover decision precedes final TaskPacket referential closure. Session continuity khác task continuity; canonical task truth vẫn thuộc QiQi/Work Item side. QiQi không đọc/sửa/poll `.qiqi/state/qiqi_delegate.sqlite3` để quyết định rollover.
 
 ## Native result handoff
 

@@ -281,7 +281,13 @@ Settled/failed trả exact native `agent_response`. Blocked trả `agent_respons
 
 `settled | failed | blocked` chỉ là runtime lifecycle state. Không thêm semantic `completed | partial | blocked` envelope; QiQi đọc native response và quyết định semantic completion.
 
-START không có session ID; RESUME dùng exact native ID của cùng repo/agent conversation. Session continuity khác canonical task continuity.
+START không có session ID; RESUME dùng exact native ID của cùng repo/agent conversation. Session continuity khác canonical task continuity. Known `session_id` tự nó không phải lý do để RESUME.
+
+Sau stable terminal handoff/reconciliation boundary, START fresh mặc định khi next turn không cần exact native context. Với task dùng Work Item, QiQi reconcile/persist material result trước rollover; với task không dùng Work Item, QiQi accept/reconcile exact native handoff cho next decision là đủ.
+
+`blocked` trước native final response phải giữ exact `session_id`, nhưng chỉ RESUME exact session khi continuation của exact interactive blocker vẫn material. Nếu blocker đã được giải quyết ngoài session hoặc QiQi có thể repair một self-sufficient packet không phụ thuộc native context cũ, START/redelegate là hợp lệ.
+
+Independent verifier/reviewer START fresh mặc định dù underlying native agent family giống implementation route. Rollover mode phải được chọn trước final TaskPacket referential closure; material semantics mà fresh child không access được phải được QiQi distill vào packet.
 
 ## 12. Fresh-session acceptance smoke
 
@@ -299,7 +305,11 @@ Trên repo test an toàn:
 10. canonical state material change trong lúc child chạy: stale result không được QiQi promote thành current truth;
 11. native qiqi_delegate hook/RESUME smoke pass cho agent family thực sự dùng;
 12. dependency-only orchestration chọn repo/wave từ `repos.yaml` không hydrate `SYSTEM_MAP.md`;
-13. status-only/answer-only fresh turn không hydrate `instructions/model-routing.md`; mọi actual delegation hydrate route policy ngay trước route decision, rồi `claude-balanced` chỉ làm deterministic fallback/default khi policy không chỉ ra route khác.
+13. status-only/answer-only fresh turn không hydrate `instructions/model-routing.md`; mọi actual delegation hydrate route policy ngay trước route decision, rồi `claude-balanced` chỉ làm deterministic fallback/default khi policy không chỉ ra route khác;
+14. multi-phase rollover: investigation `START S1` → stable handoff → implementation `START S2` → immediate narrow fix `MAY RESUME S2` khi exact native continuity còn material → independent verifier `START S3`;
+15. pre-final `blocked` giữ exact session ID; exact RESUME chỉ khi interactive blocker continuity còn material, còn externally-resolved blocker/repaired self-sufficient packet MAY START/redelegate;
+16. với fresh phase, QiQi distill relevant canonical/task semantics vào self-sufficient TaskPacket; child reconstruct task meaning chỉ từ packet + current repo/stable policy, không nhận hoặc dereference current canonical Work Item state;
+17. task không có Work Item vẫn START fresh sau stable accepted handoff khi next step không cần exact native context; không tạo Work Item chỉ để tạo rollover boundary.
 
 ## 13. Workspace đã cài harness
 
@@ -326,6 +336,7 @@ missing-task-semantics boundary PASS
 legitimate child Knowledge/runtime-evidence smoke PASS
 stale-result reconciliation smoke PASS
 native qiqi_delegate smoke PASS
+session rollover multi-phase smoke PASS
 status-only startup skips model-routing PASS
 actual delegation hydrates model-routing just-in-time PASS
 ```
