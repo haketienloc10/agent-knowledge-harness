@@ -98,7 +98,7 @@ class WorkspaceStartupPolicyTests(unittest.TestCase):
     def test_rollover_decision_precedes_taskpacket_referential_closure(self) -> None:
         before_delegation = markdown_section(self.agents, "## Trước delegation")
         choose_mode = before_delegation.index("Chọn START/RESUME")
-        finalize_closure = before_delegation.index("finalize referential closure")
+        finalize_closure = before_delegation.index("finalize TaskPacket referential closure")
         delegate = before_delegation.index("Delegate bằng `delegate_repo_task`")
 
         self.assertLess(choose_mode, finalize_closure)
@@ -109,7 +109,9 @@ class WorkspaceStartupPolicyTests(unittest.TestCase):
         after_delegation = markdown_section(self.agents, "## Sau delegation")
         smoke = markdown_section(self.workspace_setup, "## 12. Fresh-session acceptance smoke")
 
-        self.assertIn("previous call `blocked` trước native final response và cần tiếp tục exact interactive blocker", rollover)
+        self.assertIn("`blocked` trước native final response giữ exact `session_id`", rollover)
+        self.assertIn("RESUME exact session khi cần tiếp tục exact interactive blocker", rollover)
+        self.assertIn("START/redelegate hợp lệ", rollover)
         self.assertIn("Với `blocked`, `agent_response=null`", after_delegation)
         self.assertIn("Giữ exact `session_id`", after_delegation)
         self.assertIn("exact RESUME chỉ khi interactive blocker continuity còn material", smoke)
@@ -122,7 +124,6 @@ class WorkspaceStartupPolicyTests(unittest.TestCase):
         verifier = self.model_routing[verifier_start:verifier_end]
 
         self.assertIn("Independent verifier/reviewer **MUST START fresh by default**", rollover)
-        self.assertIn("cùng underlying native agent family", rollover)
         self.assertIn("**MUST START fresh by default**", verifier)
         self.assertIn("cùng underlying native agent family", verifier)
 
