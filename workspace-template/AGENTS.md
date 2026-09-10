@@ -152,8 +152,8 @@ QiQi là orchestration/synchronization broker. Child không dereference Work Ite
 2. Xác định repo/dependency/wave từ `repos.yaml`; chỉ đọc `SYSTEM_MAP.md` nếu dependent decision cần contract, ownership/data boundary, non-trivial integration behavior, compatibility/deprecation/rollback hoặc shared-infrastructure semantics ngoài registry.
 3. Search/read Knowledge nếu durable context có thể đổi TaskPacket semantics.
 4. Đọc `instructions/model-routing.md` ngay trước route decision rồi chọn exact route nhẹ nhất vẫn đủ tin cậy; `claude-balanced` là fallback/default khi policy không cho lý do rõ để chọn route khác.
-5. Chọn START/RESUME theo semantic rollover policy bên dưới. Known `session_id` tự nó không phải lý do để RESUME; quyết định mode phải có trước khi finalize referential closure.
-6. Distill **material semantics** thành TaskPacket và finalize referential closure dưới chosen START/RESUME mode; original wording/history có thể bỏ nhưng mọi semantics có thể đổi outcome/scope/constraint/acceptance/premise/unknown phải survive distillation.
+5. Chọn START/RESUME theo policy bên dưới trước khi finalize TaskPacket referential closure.
+6. Distill **material semantics** thành TaskPacket dưới chosen mode; original wording/history có thể bỏ nhưng mọi semantics có thể đổi outcome/scope/constraint/acceptance/premise/unknown phải survive distillation.
 7. Phân biệt rõ:
    - `trusted_fact`: premise child MAY rely on; trusted-for-execution không đồng nghĩa independently verified truth;
    - `claim_to_investigate`: proposition child MUST NOT assume;
@@ -224,39 +224,15 @@ session_id absent  → START
 session_id present → RESUME exact native session
 ```
 
-Known `session_id` tự nó **không phải** lý do để RESUME. RESUME cần một affirmative continuity reason: exact native conversational context phải material cho turn kế tiếp.
+Known `session_id` tự nó **không phải** lý do để RESUME; RESUME cần một affirmative continuity reason.
 
-Sau một terminal turn đã tạo stable handoff/reconciliation boundary, **START fresh mặc định** nếu next turn không còn phụ thuộc exact native-session context. Với task dùng canonical Work Item, stable boundary yêu cầu material result đã được QiQi reconcile/persist vào canonical state. Với task không dùng Work Item, QiQi accept/reconcile exact native handoff cho next decision là đủ; không tạo Work Item chỉ để biện minh cho rollover.
+- `blocked` trước native final response giữ exact `session_id`; RESUME exact session khi cần tiếp tục exact interactive blocker hoặc preserved recovery key còn material. Nếu blocker đã resolved externally hoặc repaired self-sufficient packet không cần native context cũ, START/redelegate hợp lệ.
+- Immediate follow-up cùng narrow objective MAY RESUME khi exact native/local conversational context còn material và chưa persist/safely distill.
+- Sau stable handoff/reconciliation boundary, **START fresh mặc định** khi exact native context không còn material. Với task dùng Work Item, QiQi reconcile/persist material result; **Với task không dùng Work Item**, QiQi accept/reconcile exact native handoff là đủ và **không tạo Work Item chỉ để biện minh cho rollover**.
+- Material phase/objective change, independent verification/review, đổi agent family hoặc cross-repo delegation → START fresh.
+- Independent verifier/reviewer **MUST START fresh by default**; chỉ RESUME khi task explicitly không còn yêu cầu independence và có affirmative continuity reason.
 
-Ưu tiên hoặc bắt buộc **RESUME** khi:
-
-- previous call `blocked` trước native final response và cần tiếp tục exact interactive blocker;
-- result-capture/infrastructure recovery explicitly trả preserved resume key;
-- immediate follow-up vẫn cùng narrow objective và phụ thuộc native/local conversational context chưa persist hoặc chưa thể safely distill;
-- cùng implementation thread và previous turn chưa tạo stable reconciliation/handoff boundary.
-
-Ưu tiên hoặc bắt buộc **START fresh** khi:
-
-- previous terminal turn đã đạt stable handoff/reconciliation boundary như trên và next step không cần exact native context;
-- chuyển phase đáng kể sau stable handoff, ví dụ investigation → implementation;
-- objective/material task meaning đổi đáng kể;
-- implementation → independent verification/review;
-- đổi agent family;
-- cross-repo delegation.
-
-Independent verifier/reviewer **MUST START fresh by default**. Không RESUME implementation native session chỉ vì verifier route dùng cùng underlying native agent family. Chỉ RESUME verifier khi task explicitly không còn yêu cầu independence và QiQi có affirmative reason cần exact native continuity.
-
-Rollover decision phải xảy ra **trước khi finalize TaskPacket referential closure**:
-
-```text
-latest canonical/task objective
-  → choose START or RESUME
-  → xác định referent nào child access được dưới mode đó
-  → distill smallest sufficient semantics cho inaccessible material referents
-  → delegate
-```
-
-Session continuity khác task continuity. Task continuity/canonical mutable truth thuộc QiQi + Work Item; child chỉ nhận immutable packet cho turn hiện tại. Runtime ownership nằm trong `.qiqi/state/qiqi_delegate.sqlite3`; QiQi không đọc/sửa/poll runtime DB để quyết định rollover.
+Rollover decision precedes final TaskPacket referential closure. Session continuity khác task continuity; canonical task truth vẫn thuộc QiQi/Work Item side. QiQi không đọc/sửa/poll runtime DB để quyết định rollover.
 
 ## Native result handoff
 
