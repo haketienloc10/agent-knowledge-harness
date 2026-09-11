@@ -43,10 +43,12 @@ TaskPacket, Work Item, Shared Knowledge, START/RESUME runtime identity and exact
 
 ## Reversible transformer
 
+The harness requires Python 3. Use `python3` explicitly; the launcher also detects a legacy Python 2 `python` alias and attempts to re-exec itself with `python3`.
+
 Use the script from this branch against the **real QiQi workspace** used for the rollout:
 
 ```bash
-python scripts/issue49-routing-core-experiment.py \
+python3 scripts/issue49-routing-core-experiment.py \
   --workspace /ABSOLUTE/PATH/TO/QIQI_WORKSPACE \
   --mode check
 ```
@@ -60,7 +62,7 @@ baseline
 Switch to candidate:
 
 ```bash
-python scripts/issue49-routing-core-experiment.py \
+python3 scripts/issue49-routing-core-experiment.py \
   --workspace /ABSOLUTE/PATH/TO/QIQI_WORKSPACE \
   --mode candidate
 ```
@@ -68,7 +70,7 @@ python scripts/issue49-routing-core-experiment.py \
 Verify:
 
 ```bash
-python scripts/issue49-routing-core-experiment.py \
+python3 scripts/issue49-routing-core-experiment.py \
   --workspace /ABSOLUTE/PATH/TO/QIQI_WORKSPACE \
   --mode check
 ```
@@ -82,7 +84,7 @@ candidate
 Restore baseline at any time:
 
 ```bash
-python scripts/issue49-routing-core-experiment.py \
+python3 scripts/issue49-routing-core-experiment.py \
   --workspace /ABSOLUTE/PATH/TO/QIQI_WORKSPACE \
   --mode baseline
 ```
