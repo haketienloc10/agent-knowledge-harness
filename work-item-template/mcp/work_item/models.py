@@ -28,6 +28,11 @@ MUTATION_OPERATION_MAX = 50
 _NON_NULL_EXTRA_PROPERTIES_SCHEMA = {"additionalProperties": {"not": {"type": "null"}}}
 
 
+def _omitted_none() -> None:
+    """Represent an omitted optional mutation field without advertising a JSON Schema default."""
+    return None
+
+
 class _SemanticRecord(BaseModel):
     """Canonical semantic record with open provenance/evidence extensions."""
 
@@ -328,19 +333,19 @@ class _RecordMutation(BaseModel):
 class QuestionMutation(_RecordMutation):
     id: str = Field(description="Stable question id to create or advance.")
     question: str | SkipJsonSchema[None] = Field(
-        default=None,
+        default_factory=_omitted_none,
         description="Required on create; immutable once the question id exists.",
     )
     status: QuestionStatus | SkipJsonSchema[None] = Field(
-        default=None,
+        default_factory=_omitted_none,
         description="Create lifecycle or monotonic transition; resolved cannot return to open.",
     )
     answer: str | SkipJsonSchema[None] = Field(
-        default=None,
+        default_factory=_omitted_none,
         description="Write-once resolution answer; resolving requires answer or decision_id.",
     )
     decision_id: str | SkipJsonSchema[None] = Field(
-        default=None,
+        default_factory=_omitted_none,
         description="Write-once resolving decision reference validated against the final candidate document.",
     )
 
@@ -348,15 +353,15 @@ class QuestionMutation(_RecordMutation):
 class DecisionMutation(_RecordMutation):
     id: str = Field(description="Stable decision id to create or advance.")
     summary: str | SkipJsonSchema[None] = Field(
-        default=None,
+        default_factory=_omitted_none,
         description="Required on create; immutable once the decision id exists.",
     )
     status: DecisionStatus | SkipJsonSchema[None] = Field(
-        default=None,
+        default_factory=_omitted_none,
         description="Create lifecycle or monotonic transition; superseded cannot return to active.",
     )
     superseded_by: str | SkipJsonSchema[None] = Field(
-        default=None,
+        default_factory=_omitted_none,
         description="Write-once replacement decision id when superseding this decision.",
     )
 
@@ -364,18 +369,18 @@ class DecisionMutation(_RecordMutation):
 class RequirementChangeMutation(_RecordMutation):
     id: str = Field(description="Stable requirement/scope change id to create or advance.")
     type: ChangeType | SkipJsonSchema[None] = Field(
-        default=None,
+        default_factory=_omitted_none,
         description="Required on create and immutable once this change id exists.",
     )
     status: ChangeStatus | SkipJsonSchema[None] = Field(
-        default=None,
+        default_factory=_omitted_none,
         description=(
             "Controlled lifecycle transition: proposed may become accepted/rejected/superseded; "
             "accepted may become superseded; terminal states do not reopen."
         ),
     )
     summary: str | SkipJsonSchema[None] = Field(
-        default=None,
+        default_factory=_omitted_none,
         description="Required on create and immutable once this change id exists.",
     )
 
@@ -383,11 +388,11 @@ class RequirementChangeMutation(_RecordMutation):
 class BlockerMutation(_RecordMutation):
     id: str = Field(description="Stable blocker id to create or advance.")
     status: BlockerStatus | SkipJsonSchema[None] = Field(
-        default=None,
+        default_factory=_omitted_none,
         description="Create lifecycle or monotonic transition; resolved cannot reopen.",
     )
     summary: str | SkipJsonSchema[None] = Field(
-        default=None,
+        default_factory=_omitted_none,
         description="Required on create and immutable once this blocker id exists.",
     )
 
@@ -401,20 +406,20 @@ class HandoffMutation(_RecordMutation):
 
     id: str = Field(description="Stable handoff id to create or advance.")
     from_: str | SkipJsonSchema[None] = Field(
-        default=None,
+        default_factory=_omitted_none,
         alias="from",
         description="Required on create and immutable once this handoff id exists.",
     )
     to: str | SkipJsonSchema[None] = Field(
-        default=None,
+        default_factory=_omitted_none,
         description="Required on create and immutable once this handoff id exists.",
     )
     status: HandoffStatus | SkipJsonSchema[None] = Field(
-        default=None,
+        default_factory=_omitted_none,
         description="Create lifecycle or monotonic transition; resolved cannot become pending.",
     )
     summary: str | SkipJsonSchema[None] = Field(
-        default=None,
+        default_factory=_omitted_none,
         description="Required on create and immutable once this handoff id exists.",
     )
 
