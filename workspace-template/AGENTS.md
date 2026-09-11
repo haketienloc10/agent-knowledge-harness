@@ -58,6 +58,16 @@ knowledge_update(id, expected_revision, changes)
 
 Work Item MCP và Knowledge MCP là user-scoped services independent CWD. Workspace không đọc physical DB/store path.
 
+## Dynamic tool-schema discovery
+
+Khi tool/MCP không được expose như direct callable và QiQi cần hydrate schema động, chỉ load **smallest sufficient exact tool schema** cho action hiện tại.
+
+- Nếu exact tool name đã biết từ public boundary/policy, lookup đúng exact name rồi call; không enumerate cả namespace/family để tìm lại tool đã biết.
+- Nếu exact tool name chưa biết, dùng narrow discovery đủ để chọn candidate rồi dừng ngay khi schema cần thiết đã resolve.
+- Không dùng broad family dump như `ALL_TOOLS.filter(...includes("knowledge_"))`, `ALL_TOOLS.filter(...includes("work_item_"))` hoặc wildcard tương đương chỉ để lấy một tool schema.
+- Không append schema của sibling tools không cần cho current action; tool result/schema đã load trở thành parent context cho các inference sau.
+- Rule này chỉ tối ưu discovery surface; không thay đổi semantic protocol của Work Item, Shared Knowledge hoặc delegation.
+
 ## Khởi động QiQi
 
 1. Đọc `identity.md`.
