@@ -1,8 +1,24 @@
 #!/usr/bin/env python3
-from __future__ import annotations
+# -*- coding: utf-8 -*-
+from __future__ import print_function
+
+import os
+import sys
+
+# Some long-lived QiQi workstations still map `python` to Python 2. Keep this
+# experiment launcher parseable there and transparently hand off to Python 3 so
+# the documented harness does not fail before it can explain the requirement.
+if sys.version_info[0] < 3:
+    try:
+        os.execvp("python3", ["python3"] + sys.argv)
+    except OSError:
+        sys.stderr.write(
+            "issue49-routing-core-experiment.py requires Python 3; "
+            "run it with `python3` or install a python3 executable.\n"
+        )
+        raise SystemExit(2)
 
 import argparse
-import os
 from pathlib import Path
 
 
@@ -58,7 +74,7 @@ Mục tiêu của activation rule là tránh cả fixed startup tax lẫn standa
 """
 
 
-def _swap_once(text: str, old: str, new: str, *, label: str) -> tuple[str, bool]:
+def _swap_once(text, old, new, label):
     old_count = text.count(old)
     new_count = text.count(new)
     if old_count == 1 and new_count == 0:
@@ -66,26 +82,28 @@ def _swap_once(text: str, old: str, new: str, *, label: str) -> tuple[str, bool]
     if old_count == 0 and new_count == 1:
         return text, False
     raise RuntimeError(
-        f"{label}: expected exactly one baseline block or one candidate block; "
-        f"found baseline={old_count}, candidate={new_count}. Refusing ambiguous mutation."
+        "{}: expected exactly one baseline block or one candidate block; "
+        "found baseline={}, candidate={}. Refusing ambiguous mutation.".format(
+            label, old_count, new_count
+        )
     )
 
 
-def to_candidate(agents: str, routing: str) -> tuple[str, str, bool]:
+def to_candidate(agents, routing):
     agents, changed_startup = _swap_once(
-        agents, BASELINE_STARTUP, CANDIDATE_STARTUP, label="AGENTS startup"
+        agents, BASELINE_STARTUP, CANDIDATE_STARTUP, "AGENTS startup"
     )
     agents, changed_before = _swap_once(
         agents,
         BASELINE_BEFORE_DELEGATION,
         CANDIDATE_BEFORE_DELEGATION,
-        label="AGENTS before-delegation",
+        "AGENTS before-delegation",
     )
     routing, changed_routing = _swap_once(
         routing,
         BASELINE_ROUTING_ACTIVATION,
         CANDIDATE_ROUTING_ACTIVATION,
-        label="model-routing activation",
+        "model-routing activation",
     )
     changed = changed_startup or changed_before or changed_routing
     if len({changed_startup, changed_before, changed_routing}) != 1:
@@ -93,21 +111,21 @@ def to_candidate(agents: str, routing: str) -> tuple[str, str, bool]:
     return agents, routing, changed
 
 
-def to_baseline(agents: str, routing: str) -> tuple[str, str, bool]:
+def to_baseline(agents, routing):
     agents, changed_startup = _swap_once(
-        agents, CANDIDATE_STARTUP, BASELINE_STARTUP, label="AGENTS startup"
+        agents, CANDIDATE_STARTUP, BASELINE_STARTUP, "AGENTS startup"
     )
     agents, changed_before = _swap_once(
         agents,
         CANDIDATE_BEFORE_DELEGATION,
         BASELINE_BEFORE_DELEGATION,
-        label="AGENTS before-delegation",
+        "AGENTS before-delegation",
     )
     routing, changed_routing = _swap_once(
         routing,
         CANDIDATE_ROUTING_ACTIVATION,
         BASELINE_ROUTING_ACTIVATION,
-        label="model-routing activation",
+        "model-routing activation",
     )
     changed = changed_startup or changed_before or changed_routing
     if len({changed_startup, changed_before, changed_routing}) != 1:
@@ -115,7 +133,7 @@ def to_baseline(agents: str, routing: str) -> tuple[str, str, bool]:
     return agents, routing, changed
 
 
-def detect_state(agents: str, routing: str) -> str:
+def detect_state(agents, routing):
     baseline = (
         BASELINE_STARTUP in agents
         and BASELINE_BEFORE_DELEGATION in agents
@@ -133,13 +151,13 @@ def detect_state(agents: str, routing: str) -> str:
     return "mixed-or-unknown"
 
 
-def _atomic_write(path: Path, content: str) -> None:
-    tmp = path.with_name(f".{path.name}.issue49.tmp")
+def _atomic_write(path, content):
+    tmp = path.with_name(".{}.issue49.tmp".format(path.name))
     tmp.write_text(content, encoding="utf-8")
-    os.replace(tmp, path)
+    os.replace(str(tmp), str(path))
 
 
-def main() -> int:
+def main():
     parser = argparse.ArgumentParser(
         description="Switch one QiQi workspace between issue #49 routing A/B policy states."
     )
@@ -153,7 +171,9 @@ def main() -> int:
     routing_path = root / "instructions" / "model-routing.md"
     if not agents_path.is_file() or not routing_path.is_file():
         raise SystemExit(
-            f"workspace must contain AGENTS.md and instructions/model-routing.md: {root}"
+            "workspace must contain AGENTS.md and instructions/model-routing.md: {}".format(
+                root
+            )
         )
 
     agents = agents_path.read_text(encoding="utf-8")
@@ -171,9 +191,10 @@ def main() -> int:
 
     after = detect_state(next_agents, next_routing)
     if after != args.mode:
-        raise RuntimeError(f"transform did not reach requested state: {after}")
+        raise RuntimeError("transform did not reach requested state: {}".format(after))
 
-    print(f"{before} -> {after}{' (dry-run)' if args.dry_run else ''}")
+    suffix = " (dry-run)" if args.dry_run else ""
+    print("{} -> {}{}".format(before, after, suffix))
     if not args.dry_run and changed:
         _atomic_write(agents_path, next_agents)
         _atomic_write(routing_path, next_routing)
