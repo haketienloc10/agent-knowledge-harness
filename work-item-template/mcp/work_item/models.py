@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic.json_schema import SkipJsonSchema
 
 WorkItemStatus = Literal["active", "waiting", "blocked", "done", "cancelled"]
 RepoStatus = Literal["pending", "active", "waiting", "blocked", "done", "not_required"]
@@ -24,6 +25,7 @@ HistoryStatus = Literal[
     "open", "resolved", "active", "superseded", "proposed", "accepted", "rejected", "pending"
 ]
 MUTATION_OPERATION_MAX = 50
+_NON_NULL_EXTRA_PROPERTIES_SCHEMA = {"additionalProperties": {"not": {"type": "null"}}}
 
 
 class _SemanticRecord(BaseModel):
@@ -303,7 +305,10 @@ class WorkItemStatePatch(BaseModel):
 class _RecordMutation(BaseModel):
     """Partial semantic command for one stable-id canonical record."""
 
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(
+        extra="allow",
+        json_schema_extra=_NON_NULL_EXTRA_PROPERTIES_SCHEMA,
+    )
 
     @model_validator(mode="after")
     def _reject_explicit_null(self) -> "_RecordMutation":
@@ -322,19 +327,19 @@ class _RecordMutation(BaseModel):
 
 class QuestionMutation(_RecordMutation):
     id: str = Field(description="Stable question id to create or advance.")
-    question: str | None = Field(
+    question: str | SkipJsonSchema[None] = Field(
         default=None,
         description="Required on create; immutable once the question id exists.",
     )
-    status: QuestionStatus | None = Field(
+    status: QuestionStatus | SkipJsonSchema[None] = Field(
         default=None,
         description="Create lifecycle or monotonic transition; resolved cannot return to open.",
     )
-    answer: str | None = Field(
+    answer: str | SkipJsonSchema[None] = Field(
         default=None,
         description="Write-once resolution answer; resolving requires answer or decision_id.",
     )
-    decision_id: str | None = Field(
+    decision_id: str | SkipJsonSchema[None] = Field(
         default=None,
         description="Write-once resolving decision reference validated against the final candidate document.",
     )
@@ -342,15 +347,15 @@ class QuestionMutation(_RecordMutation):
 
 class DecisionMutation(_RecordMutation):
     id: str = Field(description="Stable decision id to create or advance.")
-    summary: str | None = Field(
+    summary: str | SkipJsonSchema[None] = Field(
         default=None,
         description="Required on create; immutable once the decision id exists.",
     )
-    status: DecisionStatus | None = Field(
+    status: DecisionStatus | SkipJsonSchema[None] = Field(
         default=None,
         description="Create lifecycle or monotonic transition; superseded cannot return to active.",
     )
-    superseded_by: str | None = Field(
+    superseded_by: str | SkipJsonSchema[None] = Field(
         default=None,
         description="Write-once replacement decision id when superseding this decision.",
     )
@@ -358,18 +363,18 @@ class DecisionMutation(_RecordMutation):
 
 class RequirementChangeMutation(_RecordMutation):
     id: str = Field(description="Stable requirement/scope change id to create or advance.")
-    type: ChangeType | None = Field(
+    type: ChangeType | SkipJsonSchema[None] = Field(
         default=None,
         description="Required on create and immutable once this change id exists.",
     )
-    status: ChangeStatus | None = Field(
+    status: ChangeStatus | SkipJsonSchema[None] = Field(
         default=None,
         description=(
             "Controlled lifecycle transition: proposed may become accepted/rejected/superseded; "
             "accepted may become superseded; terminal states do not reopen."
         ),
     )
-    summary: str | None = Field(
+    summary: str | SkipJsonSchema[None] = Field(
         default=None,
         description="Required on create and immutable once this change id exists.",
     )
@@ -377,34 +382,38 @@ class RequirementChangeMutation(_RecordMutation):
 
 class BlockerMutation(_RecordMutation):
     id: str = Field(description="Stable blocker id to create or advance.")
-    status: BlockerStatus | None = Field(
+    status: BlockerStatus | SkipJsonSchema[None] = Field(
         default=None,
         description="Create lifecycle or monotonic transition; resolved cannot reopen.",
     )
-    summary: str | None = Field(
+    summary: str | SkipJsonSchema[None] = Field(
         default=None,
         description="Required on create and immutable once this blocker id exists.",
     )
 
 
 class HandoffMutation(_RecordMutation):
-    model_config = ConfigDict(extra="allow", populate_by_name=True)
+    model_config = ConfigDict(
+        extra="allow",
+        populate_by_name=True,
+        json_schema_extra=_NON_NULL_EXTRA_PROPERTIES_SCHEMA,
+    )
 
     id: str = Field(description="Stable handoff id to create or advance.")
-    from_: str | None = Field(
+    from_: str | SkipJsonSchema[None] = Field(
         default=None,
         alias="from",
         description="Required on create and immutable once this handoff id exists.",
     )
-    to: str | None = Field(
+    to: str | SkipJsonSchema[None] = Field(
         default=None,
         description="Required on create and immutable once this handoff id exists.",
     )
-    status: HandoffStatus | None = Field(
+    status: HandoffStatus | SkipJsonSchema[None] = Field(
         default=None,
         description="Create lifecycle or monotonic transition; resolved cannot become pending.",
     )
-    summary: str | None = Field(
+    summary: str | SkipJsonSchema[None] = Field(
         default=None,
         description="Required on create and immutable once this handoff id exists.",
     )
