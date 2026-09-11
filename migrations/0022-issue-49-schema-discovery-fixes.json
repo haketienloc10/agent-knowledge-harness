@@ -1,7 +1,7 @@
 {
   "version": 22,
   "from_ref": "ffb650c173f0b16678cc008dd4fae890e8cc4735",
-  "to_ref": "fe71b9edaec28b41d0b998256d8c079055d65d04",
+  "to_ref": "32b310a90ccc2300eb6ecb9a37b38fb4d777b8e8",
   "description": "require exact bounded dynamic tool-schema discovery in existing QiQi workspaces while keeping the Work Item incremental-mutation schema/runtime contract aligned in the harness",
   "workspace": {
     "merge": [
