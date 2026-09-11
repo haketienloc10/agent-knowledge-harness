@@ -7,6 +7,7 @@ import unittest
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
 SCRIPT_PATH = REPO_ROOT / "scripts" / "issue49-routing-core-experiment.py"
+RUNBOOK_PATH = REPO_ROOT / "docs" / "ISSUE_49_ROUTING_CORE_AB.md"
 
 spec = importlib.util.spec_from_file_location("issue49_routing_core_experiment", SCRIPT_PATH)
 assert spec is not None and spec.loader is not None
@@ -23,6 +24,15 @@ class Issue49RoutingCoreExperimentTests(unittest.TestCase):
         cls.baseline_routing = (
             REPO_ROOT / "workspace-template" / "instructions" / "model-routing.md"
         ).read_text(encoding="utf-8")
+        cls.script_source = SCRIPT_PATH.read_text(encoding="utf-8")
+        cls.runbook = RUNBOOK_PATH.read_text(encoding="utf-8")
+
+    def test_launcher_and_runbook_pin_python3(self) -> None:
+        self.assertTrue(self.script_source.startswith("#!/usr/bin/env python3\n# -*- coding: utf-8 -*-\n"))
+        self.assertIn("if sys.version_info[0] < 3:", self.script_source)
+        self.assertIn('os.execvp("python3", ["python3"] + sys.argv)', self.script_source)
+        self.assertIn("python3 scripts/issue49-routing-core-experiment.py", self.runbook)
+        self.assertNotIn("\npython scripts/issue49-routing-core-experiment.py", self.runbook)
 
     def test_baseline_snapshot_is_recognized(self) -> None:
         self.assertEqual(
