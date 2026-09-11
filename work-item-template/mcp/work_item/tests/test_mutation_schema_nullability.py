@@ -60,6 +60,11 @@ class IncrementalMutationSchemaNullabilityTests(unittest.TestCase):
                     schema_accepts_null(properties[field_name]),
                     f"{model_name}.{field_name} must not advertise explicit null",
                 )
+                self.assertNotIn(
+                    "default",
+                    properties[field_name],
+                    f"{model_name}.{field_name} must not advertise a null default",
+                )
 
     def test_runtime_still_rejects_explicit_null_and_accepts_omission(self) -> None:
         valid = WorkItemMutation.model_validate(
