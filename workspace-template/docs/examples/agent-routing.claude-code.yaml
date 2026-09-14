@@ -1,30 +1,40 @@
 # DOCUMENTATION-ONLY EXAMPLE.
+# Canonical runtime registry is instructions/agent-routing.yaml.
 # qiqi_delegate does NOT load this file.
-# To use any route below, copy/adapt it into instructions/agent-routing.yaml,
-# which is the canonical runtime registry.
+# Native result capture is MCP-owned; do not configure result paths or hook
+# commands here.
 #
-# Example registry for a Claude Code-only qiqi_delegate setup.
-version: 1
+# Example registry for a Claude Code-only qiqi_delegate setup. Keep this file
+# structurally aligned with the canonical registry rather than maintaining a
+# separate routing contract.
+version: 2
 
 agents:
   claude:
     command: claude
     adapter: claude
 
+    # Machine-local authorized execution/evidence roots may be supplied through
+    # environment variables so the template does not encode one storage topology.
+    # Never point these entries at canonical Work Item/Knowledge/orchestration
+    # storage; task meaning must already be complete in the TaskPacket.
+    filesystem:
+      additional_dirs:
+        - env: QIQI_CLAUDE_ADDITIONAL_DIR
+          required: false
+
     start_args:
+      - "{handoff_args}"
       - --model
       - "{model}"
-      - --add-dir
-      - "{result_dir}"
       - "{route_args}"
 
     resume_args:
+      - "{handoff_args}"
       - --resume
       - "{session_id}"
       - --model
       - "{model}"
-      - --add-dir
-      - "{result_dir}"
       - "{route_args}"
 
 routes:
