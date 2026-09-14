@@ -91,37 +91,88 @@ python3 scripts/issue49-routing-core-experiment.py \
 
 The transformer is fail-closed: it mutates only the exact reviewed baseline/candidate blocks and refuses mixed or unknown policy text. `--dry-run` is available for candidate/baseline mode.
 
-## Pilot matrix
+## Pilot protocol: use a two-turn parent session
 
-Start with four parent rollouts only:
+A fresh one-turn delegation is **not sufficient** to test the primary hypothesis. In the first clean A/B attempt, baseline combined `identity.md`, `repos.yaml`, and `instructions/model-routing.md` into one startup `exec`, so both baseline and candidate had the same parent-inference count. That run measured payload reduction, not removal of a standalone boundary.
 
-| Run | Policy | Scenario | Expected route |
-| --- | --- | --- | --- |
-| A1 | baseline | ordinary implementation/bugfix | `claude-balanced` |
-| B1 | candidate | materially equivalent ordinary implementation/bugfix | `claude-balanced` |
-| A2 | baseline | independent review/verifier | `claude-verifier`, fresh START |
-| B2 | candidate | materially equivalent independent review/verifier | `claude-verifier`, fresh START |
-
-Use fresh parent sessions for each run. Keep repository, task semantics, expected outcome and relevant environment as equivalent as practical. Do not intentionally change model/route/session settings between A and B beyond the routing policy state.
-
-## Suggested prompts
-
-Balanced pair:
+The representative condition from the rollout corpus is:
 
 ```text
-Trong repo <repo>, thực hiện một bugfix/implementation repo-local có scope rõ,
-bao gồm verification phù hợp. Hãy delegate repo-local work theo policy hiện tại.
+turn 1: startup material already hydrated, no delegation
+turn 2: delegation requested
+baseline -> standalone model-routing read -> parent inference -> delegate
+candidate -> route directly from always-on core -> delegate
 ```
 
-Verifier pair:
+Therefore every A/B session used for the primary boundary test MUST have two turns.
+
+### Turn 1 — identical warm-up, no delegation
+
+Start a fresh parent QiQi session and send exactly the same warm-up under baseline and candidate:
 
 ```text
-Review độc lập change <change> trong repo <repo> so với contract/spec <contract>.
-Mục tiêu là đánh giá evidence, regression và risk; không implementation.
-Hãy delegate theo policy hiện tại.
+Đọc các workspace policy/material bắt buộc để xác nhận repository registry và
+orchestration context hiện tại. Chỉ chuẩn bị context cho lượt tiếp theo;
+không delegate, không sửa file, không đọc instructions/model-routing.md.
+Trả lời ngắn rằng context đã sẵn sàng.
 ```
 
-The concrete task should be real enough to exercise delegation but small enough that child runtime variance does not dominate the parent orchestration comparison.
+Expected baseline behavior: hydrate `identity.md` + `repos.yaml`, but do not read `instructions/model-routing.md` because the turn explicitly does not delegate.
+
+Expected candidate behavior: same external action shape. The compact routing core is already in always-on `AGENTS.md`, so this turn also measures the candidate's small fixed always-on tax.
+
+### Turn 2 — balanced delegation
+
+In the **same parent session**, send this exact prompt for both policies:
+
+```text
+Trong repository skygserv, thực hiện một lượt investigation read-only trên master
+cho segment insurance của MyPage Top C11500.
+
+Truy vết execution flow qua BasketScreenJourneyServiceImpl,
+checkInterlineItnAbleApplyInsOrCxlProtect, CSkygateCheck.isInsCheck
+và CInsRsvManager.getInsAgtCd.
+
+Xác định lookup lặp, side effect, candidate cache/short-circuit và vị trí
+instrumentation phù hợp. Chỉ investigation và báo cáo evidence;
+không sửa code hoặc tài liệu.
+
+Hãy delegate repo-local work theo policy hiện tại.
+```
+
+Expected route: `claude-balanced`; START fresh (`session_id` omitted).
+
+Collect the whole two-turn parent rollout as one file for baseline and one for candidate.
+
+### Turn 2 — verifier variant
+
+Only after the balanced two-turn pair validates the expected boundary shape, repeat the same two-turn structure with an independent-review prompt. Expected route: `claude-verifier`, fresh START by default.
+
+## Evidence from one-turn balanced v2 pair
+
+The one-turn v2 pair is still useful as a payload/context measurement:
+
+| Metric | Baseline | Candidate | Delta |
+| --- | ---: | ---: | ---: |
+| Parent inferences | 3 | 3 | 0 |
+| Pre-delegation input | 46,293 | 45,510 | -783 (-1.69%) |
+| Pre-delegation cached | 27,520 | 27,776 | +256 |
+| Pre-delegation uncached | 18,773 | 17,734 | -1,039 (-5.53%) |
+| Whole-turn input | 76,038 | 74,184 | -1,854 (-2.44%) |
+| Whole-turn cached | 52,352 | 34,176 | -18,176 |
+| Whole-turn uncached | 23,686 | 40,008 | +16,322 |
+| Selected route | `claude-balanced` | `claude-balanced` | same |
+| START/RESUME | START | START | same |
+| Startup tool-result size | ~14.7k chars | ~9.7k chars | ~-5.0k chars |
+| Child result size | ~12.4k chars | ~11.9k chars | comparable |
+
+Interpretation:
+
+- candidate removed the `model-routing.md` payload from the startup read;
+- baseline had no standalone routing boundary in this fresh-session shape because the read was bundled with startup material;
+- pre-delegation parent input/uncached input improved modestly under candidate;
+- whole-turn cached/uncached totals are not a reliable savings claim in this pair because the final candidate inference had an anomalously low cache hit despite comparable child-result size;
+- therefore the primary `-1 parent inference` hypothesis remains **unproven**, not disproven.
 
 ## What to collect
 
@@ -129,12 +180,12 @@ For each run, provide only the parent QiQi rollout JSONL. No child rollout is re
 
 Analysis will compare:
 
-- parent inference count;
+- parent inference count per turn and for the whole session;
 - cumulative input tokens;
 - cached input;
 - uncached input;
 - output tokens;
-- whether a standalone `model-routing.md` read occurred;
+- whether a standalone `model-routing.md` read occurred on delegation turn 2;
 - selected route;
 - START/RESUME mode;
 - TaskPacket material equivalence;
@@ -143,7 +194,7 @@ Analysis will compare:
 Primary hypothesis:
 
 ```text
-candidate ordinary delegation
+candidate delegation turn after startup context is already hydrated
 = same material route decision
 + same correctness invariants
 - one standalone routing-hydration parent inference
@@ -153,15 +204,15 @@ Do not claim exact token savings from the old routing-read inference alone; remo
 
 ## Pilot decision gate
 
-Proceed to a full route matrix only if both A/B pairs show:
+Proceed to a full route matrix only if the two-turn A/B pair shows:
 
-1. same intended route class;
-2. verifier still starts fresh;
-3. candidate removes the ordinary standalone routing read;
-4. candidate reduces parent inference count and materially reduces cumulative parent input without abnormal uncached growth;
-5. no TaskPacket/Work Item/Knowledge/runtime correctness invariant changes.
+1. turn 1 performs no delegation and baseline does not hydrate `model-routing.md`;
+2. same intended route class on turn 2;
+3. candidate removes a standalone turn-2 routing read that baseline performs;
+4. candidate reduces turn-2 parent inference count and materially reduces cumulative parent input without repeatable abnormal uncached growth;
+5. TaskPacket, Work Item, Knowledge, START/RESUME and exact native-result correctness invariants remain unchanged.
 
-If pilot passes, extend to:
+If the balanced pair passes, repeat verifier using the same two-turn structure. Only then extend to:
 
 - `claude-fast` A/B x1;
 - `claude-balanced` A/B x2 total;
