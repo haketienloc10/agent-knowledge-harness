@@ -60,6 +60,11 @@ class ClaudeWorkspaceConfigTests(unittest.TestCase):
         self.assertNotIn("--scope project", self.setup_script)
         self.assertNotIn("--scope user", self.setup_script)
 
+    def test_setup_supports_child_only_execution_agent_mode(self) -> None:
+        self.assertIn("--children-only", self.setup_script)
+        self.assertIn("children_only=1", self.setup_script)
+        self.assertIn("Claude Code child isolation configured", self.setup_script)
+
     def test_setup_generates_machine_local_child_exclusion(self) -> None:
         self.assertIn("settings.local.json", self.setup_script)
         self.assertIn("claudeMdExcludes", self.setup_script)
