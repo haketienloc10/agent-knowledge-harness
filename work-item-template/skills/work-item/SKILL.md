@@ -24,13 +24,13 @@ Canonical Work Item ID MUST match:
 
 Ví dụ: `redmine:116655`.
 
-Không dùng raw ID làm filesystem path. Sau khi validate, derive directory key bằng cách thay **colon separator đầu tiên** bằng `--`:
+Không dùng raw ID làm filesystem path. Sau khi validate, derive directory key bằng cách thay **colon separator đầu tiên** bằng separator `~`:
 
 ```text
-redmine:116655 -> redmine--116655
+redmine:116655 -> redmine~116655
 ```
 
-Canonical dossier là `<workspace>/work-items/<directory-key>/`. Sau khi resolve path, MUST verify nó vẫn nằm dưới resolved `<workspace>/work-items`; reject separator/traversal/non-canonical IDs thay vì normalize âm thầm.
+`~` không hợp lệ trong bất kỳ canonical ID component nào theo grammar trên, nên mapping này MUST collision-free giữa các canonical IDs hợp lệ. Canonical dossier là `<workspace>/work-items/<directory-key>/`. Sau khi resolve path, MUST verify nó vẫn nằm dưới resolved `<workspace>/work-items`; reject separator/traversal/non-canonical IDs thay vì normalize âm thầm.
 
 ## Storage contract
 
