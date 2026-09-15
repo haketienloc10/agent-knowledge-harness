@@ -13,10 +13,10 @@ for pattern in \
   'Child MAY read mounted Work Item' \
   'trực tiếp rewrite canonical Work Item' \
   'Không tạo execution diary'; do
-  rg -q "$pattern" "$agents" || fail "AGENTS.md missing policy: $pattern"
+  grep -Fq -- "$pattern" "$agents" || fail "AGENTS.md missing policy: $pattern"
 done
 
-if rg -q 'Global Work Item MCP|work_item_get|work_item_update|Child không cần Work Item|MUST NOT.*Work Item.*reconstruct' "$agents"; then
+if grep -Eq 'Global Work Item MCP|work_item_get|work_item_update|Child không cần Work Item|MUST NOT.*Work Item.*reconstruct' "$agents"; then
   fail 'legacy child Work Item isolation contract remains'
 fi
 
