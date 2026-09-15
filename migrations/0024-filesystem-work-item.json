@@ -1,8 +1,8 @@
 {
   "version": 24,
   "from_ref": "ce2e758f24c27f9c0f5e5f6d81bb9b9b4d3d88a8",
-  "to_ref": "699ceb46c5b28f8330120edab125cb835070cac1",
-  "description": "replace the user/global Work Item MCP boundary with a workspace-owned filesystem Work Item lifecycle, auto-create and mount QIQI_WORK_ITEMS_DIR for supported delegated agents, and align workspace/repo policy with current-state multi-turn/change-request reconciliation; rerun work-item-template/scripts/install-user-skill.sh after migration and remove any legacy user-scoped work_item MCP registration separately",
+  "to_ref": "c4b8bf775dd84320ffdd0a3bf403979c335bdc9d",
+  "description": "replace the user/global Work Item MCP boundary with a workspace-owned filesystem Work Item lifecycle, resolve canonical parent Work Items from <workspace>/work-items, mount the same resource into Codex and Claude through qiqi_delegate native --add-dir arguments, and align workspace/repo policy with current-state multi-turn/change-request reconciliation; rerun work-item-template/scripts/install-user-skill.sh after migration and remove any legacy user-scoped work_item MCP registration separately",
   "workspace": {
     "merge": [],
     "replace": [
@@ -15,17 +15,18 @@
       "workspace-template/docs/examples/agent-routing.claude-code.yaml",
       "workspace-template/docs/examples/agent-routing.codex.yaml",
       "workspace-template/scripts/qiqi-mcp-server.sh",
-      "workspace-template/scripts/qiqi-codex-agent.sh",
       "workspace-template/scripts/workspace-check.sh",
       "workspace-template/work-items/.gitkeep",
+      "workspace-template/mcp/qiqi_delegate/server.py",
       "workspace-template/mcp/qiqi_delegate/tests/test_claude_filesystem_routing.py",
       "workspace-template/mcp/qiqi_delegate/tests/test_codex_mcp_config.py",
+      "workspace-template/mcp/qiqi_delegate/tests/test_server_schema.py",
       "workspace-template/mcp/qiqi_delegate/tests/test_tool_schema_discovery_policy.py",
-      "workspace-template/mcp/qiqi_delegate/tests/test_work_item_filesystem_contract.py"
+      "workspace-template/mcp/qiqi_delegate/tests/test_work_item_filesystem_contract.py",
+      "workspace-template/mcp/qiqi_delegate/tests/test_workspace_startup_policy.py"
     ],
     "delete": [
-      "workspace-template/mcp/qiqi_delegate/tests/test_taskpacket_minimality_policy.py",
-      "workspace-template/mcp/qiqi_delegate/tests/test_workspace_startup_policy.py"
+      "workspace-template/mcp/qiqi_delegate/tests/test_taskpacket_minimality_policy.py"
     ],
     "manual_review": []
   },
