@@ -55,7 +55,8 @@ class PublicTaskSchemaTests(unittest.TestCase):
         matching = [tool for tool in tools if tool.name == "delegate_repo_task"]
         if len(matching) != 1:
             raise AssertionError(f"expected one delegate_repo_task tool, got {len(matching)}")
-        cls.schema = matching[0].input_schema
+        cls.tool = matching[0]
+        cls.schema = cls.tool.input_schema
 
     def test_required_and_forbidden_top_level_fields(self) -> None:
         properties = self.schema["properties"]
@@ -91,6 +92,13 @@ class PublicTaskSchemaTests(unittest.TestCase):
         self.assertEqual(set(claim_item["properties"]), {"claim", "source"})
         self.assertEqual(set(claim_item["required"]), {"claim", "source"})
         self.assertFalse(claim_item.get("additionalProperties", True))
+
+    def test_tracked_work_item_locator_is_allowed_without_weakening_packet_semantics(self) -> None:
+        description = self.tool.description or ""
+        self.assertIn("context.trusted_facts", description)
+        self.assertIn("work_item=<id>; revision=<revision>", description)
+        self.assertIn("not a substitute for", description)
+        self.assertIn("objective/scope/acceptance", description)
 
     def test_input_models_forbid_extra_fields(self) -> None:
         with self.assertRaises(ValidationError):
