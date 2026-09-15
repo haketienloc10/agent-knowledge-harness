@@ -2,12 +2,13 @@
 
 Work Item là **current task dossier** dùng chung trong một QiQi workspace. Nó không còn là MCP service, không dùng SQLite và không phải lịch sử thao tác của agent.
 
-Canonical location trong workspace:
+Canonical parent-side location trong workspace:
 
 ```text
-$QIQI_WORK_ITEMS_DIR
-= <workspace>/work-items
+<workspace>/work-items
 ```
+
+QiQi/$work-item resolve workspace root trực tiếp; không phụ thuộc vào env do MCP child export. Khi delegate repo-local work, qiqi_delegate expose cùng directory cho child qua delegated-runtime alias `QIQI_WORK_ITEMS_DIR` và native `--add-dir`.
 
 Mỗi tracked task có một directory:
 
