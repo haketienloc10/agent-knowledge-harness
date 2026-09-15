@@ -7,11 +7,36 @@ claude_dir="$workspace_root/.claude"
 claude_md="$claude_dir/CLAUDE.md"
 settings_path="$claude_dir/settings.json"
 repos_yaml="$workspace_root/repos.yaml"
+children_only=0
 
-command -v claude >/dev/null 2>&1 || {
-  printf 'ERROR: missing command: claude\n' >&2
-  exit 69
+usage() {
+  cat <<'EOF'
+Usage: bash scripts/setup-claude.sh [--children-only]
+
+Default mode configures Claude Code as a QiQi coordinator and provisions nested
+repository child isolation. --children-only provisions only repo-local isolation
+for Claude execution agents without enabling Claude as a workspace coordinator.
+EOF
 }
+
+while (($#)); do
+  case "$1" in
+    --children-only)
+      children_only=1
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      printf 'ERROR: unknown argument: %s\n' "$1" >&2
+      usage >&2
+      exit 64
+      ;;
+  esac
+done
+
 command -v python3 >/dev/null 2>&1 || {
   printf 'ERROR: missing command: python3\n' >&2
   exit 69
@@ -20,29 +45,39 @@ command -v yq >/dev/null 2>&1 || {
   printf 'ERROR: missing command: yq v4\n' >&2
   exit 69
 }
-
-[[ -f "$server_wrapper" ]] || {
-  printf 'ERROR: missing qiqi_delegate wrapper: %s\n' "$server_wrapper" >&2
-  exit 66
+command -v git >/dev/null 2>&1 || {
+  printf 'ERROR: missing command: git\n' >&2
+  exit 69
 }
+
 [[ -f "$repos_yaml" ]] || {
   printf 'ERROR: missing workspace registry: %s\n' "$repos_yaml" >&2
   exit 66
 }
 
-mkdir -p "$claude_dir"
+if ((children_only == 0)); then
+  command -v claude >/dev/null 2>&1 || {
+    printf 'ERROR: missing command: claude\n' >&2
+    exit 69
+  }
+  [[ -f "$server_wrapper" ]] || {
+    printf 'ERROR: missing qiqi_delegate wrapper: %s\n' "$server_wrapper" >&2
+    exit 66
+  }
 
-# Keep coordinator policy in .claude/CLAUDE.md instead of workspace/CLAUDE.md.
-# Claude can discover ancestor .claude/CLAUDE.md from nested repositories, so each
-# registered child repository receives a machine-local claudeMdExcludes entry below.
-if [[ ! -f "$claude_md" ]]; then
-  printf '@../AGENTS.md\n' > "$claude_md"
-elif ! grep -Fxq '@../AGENTS.md' "$claude_md"; then
-  printf '\n@../AGENTS.md\n' >> "$claude_md"
-fi
+  mkdir -p "$claude_dir"
 
-# Preserve existing shared Claude settings while enforcing the QiQi boundaries.
-python3 - "$settings_path" <<'PY'
+  # Keep coordinator policy in .claude/CLAUDE.md instead of workspace/CLAUDE.md.
+  # Claude can discover ancestor .claude/CLAUDE.md from nested repositories, so each
+  # registered child repository receives a machine-local claudeMdExcludes entry below.
+  if [[ ! -f "$claude_md" ]]; then
+    printf '@../AGENTS.md\n' > "$claude_md"
+  elif ! grep -Fxq '@../AGENTS.md' "$claude_md"; then
+    printf '\n@../AGENTS.md\n' >> "$claude_md"
+  fi
+
+  # Preserve existing shared Claude settings while enforcing the QiQi boundaries.
+  python3 - "$settings_path" <<'PY'
 from __future__ import annotations
 
 import json
@@ -80,12 +115,17 @@ if tool not in allow:
 
 path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 PY
+fi
 
 # Nested repo Claude sessions must not inherit the workspace coordinator policy.
 # The exclusion requires an absolute path, so generate it machine-locally instead of
 # committing it to any repository. settings.local.json is also excluded through
 # .git/info/exclude to keep repository worktrees clean.
-workspace_claude_md="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$claude_md")"
+workspace_claude_md=""
+if [[ -f "$claude_md" ]]; then
+  workspace_claude_md="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$claude_md")"
+fi
+
 while IFS= read -r relative_repo; do
   [[ -n "$relative_repo" && "$relative_repo" != "null" ]] || continue
   repo_root="$(python3 -c 'import os,sys; print(os.path.realpath(os.path.join(sys.argv[1], sys.argv[2])))' "$workspace_root" "$relative_repo")"
@@ -122,11 +162,12 @@ if path.exists():
 else:
     data = {}
 
-excludes = data.setdefault("claudeMdExcludes", [])
-if not isinstance(excludes, list) or not all(isinstance(item, str) for item in excludes):
-    raise SystemExit(f"ERROR: claudeMdExcludes must be a string list: {path}")
-if workspace_claude_md not in excludes:
-    excludes.append(workspace_claude_md)
+if workspace_claude_md:
+    excludes = data.setdefault("claudeMdExcludes", [])
+    if not isinstance(excludes, list) or not all(isinstance(item, str) for item in excludes):
+        raise SystemExit(f"ERROR: claudeMdExcludes must be a string list: {path}")
+    if workspace_claude_md not in excludes:
+        excludes.append(workspace_claude_md)
 
 data["autoMemoryEnabled"] = False
 env = data.setdefault("env", {})
@@ -145,6 +186,11 @@ PY
   fi
   printf 'Claude child isolation: %s\n' "$repo_root"
 done < <(yq -r '.repositories[].path' "$repos_yaml")
+
+if ((children_only)); then
+  printf 'Claude Code child isolation configured for registered repositories.\n'
+  exit 0
+fi
 
 cd "$workspace_root"
 
