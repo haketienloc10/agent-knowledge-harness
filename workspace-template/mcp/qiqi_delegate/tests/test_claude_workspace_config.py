@@ -10,9 +10,13 @@ class ClaudeWorkspaceConfigTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.workspace_root = Path(__file__).resolve().parents[3]
 
-    def test_workspace_uses_claude_project_instructions_without_root_mcp_json(self) -> None:
+    def test_workspace_uses_claude_project_instructions_without_ancestor_files(self) -> None:
         claude_md = self.workspace_root / ".claude" / "CLAUDE.md"
         self.assertEqual(claude_md.read_text(encoding="utf-8"), "@../AGENTS.md\n")
+        self.assertFalse(
+            (self.workspace_root / "CLAUDE.md").exists(),
+            "workspace-root CLAUDE.md would leak coordinator policy into nested repo children",
+        )
         self.assertFalse(
             (self.workspace_root / ".mcp.json").exists(),
             "qiqi_delegate must not be project-scoped through workspace/.mcp.json",
@@ -33,6 +37,8 @@ class ClaudeWorkspaceConfigTests(unittest.TestCase):
         self.assertIn("claude mcp add --scope local", text)
         self.assertIn("qiqi_delegate", text)
         self.assertIn("scripts/qiqi-mcp-server.sh", text)
+        self.assertIn('data["autoMemoryEnabled"] = False', text)
+        self.assertIn("@../AGENTS.md", text)
         self.assertNotIn("--scope project", text)
         self.assertNotIn("--scope user", text)
 
