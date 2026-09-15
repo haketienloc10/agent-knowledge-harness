@@ -50,7 +50,14 @@ if path.exists():
 else:
     data = {}
 
+# Keep the documented setting for visibility, and also set the environment variable
+# because Claude Code treats CLAUDE_CODE_DISABLE_AUTO_MEMORY=1 as the hard runtime guard.
 data["autoMemoryEnabled"] = False
+env = data.setdefault("env", {})
+if not isinstance(env, dict):
+    raise SystemExit(f"ERROR: Claude settings env must be an object: {path}")
+env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] = "1"
+
 permissions = data.setdefault("permissions", {})
 if not isinstance(permissions, dict):
     raise SystemExit(f"ERROR: Claude settings permissions must be an object: {path}")
