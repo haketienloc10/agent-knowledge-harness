@@ -1,0 +1,41 @@
+{
+  "version": 24,
+  "from_ref": "ce2e758f24c27f9c0f5e5f6d81bb9b9b4d3d88a8",
+  "to_ref": "3de6283f284f1642d6b47f91e8c97aa95033d036",
+  "description": "replace the user/global Work Item MCP boundary with a workspace-owned filesystem Work Item lifecycle, auto-create and mount QIQI_WORK_ITEMS_DIR for supported delegated agents, and align workspace/repo policy with current-state multi-turn/change-request reconciliation; rerun work-item-template/scripts/install-user-skill.sh after migration and remove any legacy user-scoped work_item MCP registration separately",
+  "workspace": {
+    "merge": [],
+    "replace": [
+      "workspace-template/AGENTS.md",
+      "workspace-template/identity.md",
+      "workspace-template/README.md",
+      "workspace-template/docs/WORKSPACE_SETUP.md",
+      "workspace-template/.codex/config.toml",
+      "workspace-template/instructions/agent-routing.yaml",
+      "workspace-template/docs/examples/agent-routing.claude-code.yaml",
+      "workspace-template/docs/examples/agent-routing.codex.yaml",
+      "workspace-template/scripts/qiqi-mcp-server.sh",
+      "workspace-template/scripts/qiqi-codex-agent.sh",
+      "workspace-template/scripts/workspace-check.sh",
+      "workspace-template/work-items/.gitkeep",
+      "workspace-template/mcp/qiqi_delegate/tests/test_claude_filesystem_routing.py",
+      "workspace-template/mcp/qiqi_delegate/tests/test_codex_mcp_config.py",
+      "workspace-template/mcp/qiqi_delegate/tests/test_work_item_filesystem_contract.py"
+    ],
+    "delete": [
+      "workspace-template/mcp/qiqi_delegate/tests/test_taskpacket_minimality_policy.py",
+      "workspace-template/mcp/qiqi_delegate/tests/test_workspace_startup_policy.py"
+    ],
+    "manual_review": []
+  },
+  "repo": {
+    "merge": [],
+    "replace": [
+      "repo-template/AGENTS.md",
+      "repo-template/docs/REPO_SETUP.md",
+      "repo-template/scripts/repo-check.sh"
+    ],
+    "delete": [],
+    "manual_review": []
+  }
+}
