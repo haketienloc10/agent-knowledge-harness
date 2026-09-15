@@ -2,7 +2,7 @@
   "version": 24,
   "from_ref": "ce2e758f24c27f9c0f5e5f6d81bb9b9b4d3d88a8",
   "to_ref": "c4b8bf775dd84320ffdd0a3bf403979c335bdc9d",
-  "description": "replace the user/global Work Item MCP boundary with a workspace-owned filesystem Work Item lifecycle, resolve canonical parent Work Items from <workspace>/work-items, mount the same resource into Codex and Claude through qiqi_delegate native --add-dir arguments, and align workspace/repo policy with current-state multi-turn/change-request reconciliation; rerun work-item-template/scripts/install-user-skill.sh after migration and remove any legacy user-scoped work_item MCP registration separately",
+  "description": "replace the user/global Work Item MCP boundary with a workspace-owned filesystem Work Item lifecycle, preserve legacy SQLite Work Items via work-item-template/scripts/export-legacy-work-items.py before removing the old MCP registration, resolve canonical parent Work Items from <workspace>/work-items, mount the same resource into Codex and Claude through qiqi_delegate native --add-dir arguments, and align workspace/repo policy with current-state multi-turn/change-request reconciliation; rerun work-item-template/scripts/install-user-skill.sh after migration",
   "workspace": {
     "merge": [],
     "replace": [
@@ -31,9 +31,10 @@
     "manual_review": []
   },
   "repo": {
-    "merge": [],
+    "merge": [
+      "repo-template/AGENTS.md"
+    ],
     "replace": [
-      "repo-template/AGENTS.md",
       "repo-template/docs/REPO_SETUP.md",
       "repo-template/scripts/repo-check.sh"
     ],
