@@ -33,10 +33,17 @@ class ClaudeWorkspaceConfigTests(unittest.TestCase):
         if settings_path.exists():
             settings = json.loads(settings_path.read_text(encoding="utf-8"))
             self.assertIs(settings.get("autoMemoryEnabled"), False)
+            self.assertEqual(
+                settings.get("env", {}).get("CLAUDE_CODE_DISABLE_AUTO_MEMORY"),
+                "1",
+            )
             allow = settings.get("permissions", {}).get("allow", [])
             self.assertIn("mcp__qiqi_delegate__delegate_repo_task", allow)
         else:
             self.assertIn('data["autoMemoryEnabled"] = False', self.setup_script)
+            self.assertIn(
+                'env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] = "1"', self.setup_script
+            )
             self.assertIn(
                 'tool = "mcp__qiqi_delegate__delegate_repo_task"', self.setup_script
             )
@@ -46,6 +53,9 @@ class ClaudeWorkspaceConfigTests(unittest.TestCase):
         self.assertIn("qiqi_delegate", self.setup_script)
         self.assertIn("scripts/qiqi-mcp-server.sh", self.setup_script)
         self.assertIn('data["autoMemoryEnabled"] = False', self.setup_script)
+        self.assertIn(
+            'env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] = "1"', self.setup_script
+        )
         self.assertIn("@../AGENTS.md", self.setup_script)
         self.assertNotIn("--scope project", self.setup_script)
         self.assertNotIn("--scope user", self.setup_script)
