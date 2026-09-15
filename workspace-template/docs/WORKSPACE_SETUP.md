@@ -30,7 +30,7 @@ work_item_path=<absolute-workspace-path>/work-items/<directory-key>; id=<canonic
 
 ## Work Item ID/path
 
-Canonical ID match `^[a-z][a-z0-9_-]*:[A-Za-z0-9][A-Za-z0-9._-]*$`. Filesystem key replace colon separator đầu tiên bằng `--`, ví dụ `redmine:116655 -> redmine--116655`. `$work-item` phải reject invalid/traversal ID và verify resolved dossier vẫn nằm dưới Work Items root.
+Canonical ID match `^[a-z][a-z0-9_-]*:[A-Za-z0-9][A-Za-z0-9._-]*$`. Filesystem key replace colon separator đầu tiên bằng `~`, ví dụ `redmine:116655 -> redmine~116655`. Vì `~` không thuộc grammar của source/external-id, mapping không collision giữa canonical IDs hợp lệ. `$work-item` phải reject invalid/traversal ID và verify resolved dossier vẫn nằm dưới Work Items root.
 
 ## Legacy SQLite cutover
 
@@ -41,7 +41,7 @@ cd agent-knowledge-harness/work-item-template
 python3 scripts/export-legacy-work-items.py --workspace /absolute/path/to/workspace
 ```
 
-Default source là `~/.local/share/agent-work-items/work-items.sqlite3` hoặc `WORK_ITEM_DB_PATH`. Exporter tạo current dossiers và lưu full legacy JSON/artifact archive tại `<workspace>/.qiqi/migration-backups/v0024/legacy-work-items/`. Source SQLite không bị sửa/xóa. Nếu exporter báo conflict, reconcile trước; không disable legacy service cho tới khi export thành công.
+Default source là `~/.local/share/agent-work-items/work-items.sqlite3` hoặc `WORK_ITEM_DB_PATH`. Exporter preflight toàn bộ output trước khi ghi, tạo current dossiers và lưu full legacy JSON/artifact archive tại `<workspace>/.qiqi/migration-backups/v0024/legacy-work-items/`. Source SQLite không bị sửa/xóa. Imported investigation/plan/review giữ Work Item revision provenance và imported report giữ Textile syntax. Nếu exporter báo conflict, reconcile trước; không disable legacy service cho tới khi export thành công.
 
 ## Work Item lifecycle
 
