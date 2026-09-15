@@ -21,6 +21,7 @@ Khi tool/MCP không được expose như direct callable và QiQi cần hydrate 
 - Nếu exact tool name chưa biết, dùng narrow discovery đủ để chọn candidate rồi dừng.
 - Không broad-dump family như `ALL_TOOLS.filter(...includes("knowledge_"))` hoặc toàn namespace qiqi_delegate chỉ để lấy một schema.
 - Không append schema của sibling tools không cần cho current action.
+- Rule này chỉ tối ưu discovery surface; không thay đổi semantic protocol của Work Item filesystem, Shared Knowledge hoặc delegation.
 
 ## Startup
 
