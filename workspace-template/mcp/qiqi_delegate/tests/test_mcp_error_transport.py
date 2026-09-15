@@ -24,14 +24,17 @@ def valid_args() -> dict:
     return {
         "repository": "repo-a",
         "route": "codex-balanced",
-        "user_request": "Fix the repository-local behavior.",
         "objective": "Fix the repository-local behavior.",
         "scope": ["current repository"],
-        "out_of_scope": [],
-        "required_context": [],
-        "constraints": [],
         "acceptance_criteria": ["Focused repository verification passes."],
-        "verification": [],
+        "out_of_scope": [],
+        "context": {
+            "trusted_facts": [
+                {"fact": "Run focused verification.", "source": "QiQi task contract"}
+            ],
+            "claims_to_investigate": [],
+        },
+        "constraints": [],
         "known_unknowns": [],
     }
 
