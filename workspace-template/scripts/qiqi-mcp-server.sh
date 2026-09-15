@@ -19,9 +19,8 @@ command -v uv >/dev/null 2>&1 || {
 mkdir -p "$work_items_dir"
 
 export QIQI_WORKSPACE_ROOT="$workspace_root"
+# Delegated-runtime mount alias. Parent QiQi/$work-item resolves
+# <workspace>/work-items directly and does not depend on this child export.
 export QIQI_WORK_ITEMS_DIR="$work_items_dir"
-# qiqi_delegate resolves agent commands through PATH. Keep adapter wrappers
-# workspace-local so all agents receive the same Work Items resource contract.
-export PATH="$workspace_root/scripts:$PATH"
 
 exec uv run --project "$project_dir" python "$server"
