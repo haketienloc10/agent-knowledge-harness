@@ -110,7 +110,8 @@ mcp = MCPServer(
         "delegate_repo_task accepts a semantically self-sufficient repo-local problem "
         "contract: objective, scope, optional exclusions/context/constraints, acceptance "
         "criteria, and optional known unknowns. For a tracked task, context.trusted_facts "
-        "may include a Work Item locator/revision such as work_item=<id>; revision=<n>; "
+        "may include a Work Item locator/revision such as "
+        "work_item_path=<absolute dossier path>; id=<canonical id>; revision=<n>; "
         "the child may dereference the mounted Work Item for durable current-state context, "
         "but objective/scope/acceptance must remain self-sufficient in the TaskPacket. "
         "QiQi owns user/product intent, Work Item state, stale detection, and semantic "
@@ -1057,12 +1058,12 @@ async def delegate_repo_task(
 
     The packet must already contain all material task semantics. For a tracked task,
     `context.trusted_facts` may carry a locator/revision such as
-    `work_item=<id>; revision=<revision>` so the child can read the mounted Work Item
-    for durable current-state continuity. The locator is not a substitute for
-    objective/scope/acceptance, and the child must not reconstruct omitted task meaning
-    from Work Item state, hidden QiQi conversation, or unrelated shared state.
-    Allowed repo/runtime/Knowledge tools may be used for implementation knowledge or
-    evidence under stable policy.
+    `work_item_path=<absolute dossier path>; id=<canonical id>; revision=<n>` so the
+    child can read the mounted Work Item for durable current-state continuity. The
+    locator is not a substitute for objective/scope/acceptance, and the child must not
+    reconstruct omitted task meaning from Work Item state, hidden QiQi conversation,
+    or unrelated shared state. Allowed repo/runtime/Knowledge tools may be used for
+    implementation knowledge or evidence under stable policy.
 
     Omit `session_id` to START. Pass a returned `session_id` to RESUME that exact
     native conversation. Session ownership is stored in `.qiqi/state/qiqi_delegate.sqlite3`.
