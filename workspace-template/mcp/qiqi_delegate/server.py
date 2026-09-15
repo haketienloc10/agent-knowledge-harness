@@ -53,6 +53,7 @@ NATIVE_SESSION_WAIT_SECONDS = 15.0
 NATIVE_RESULT_WAIT_SECONDS = 5.0
 CLAUDE_PROMPT_RETRY_EFFECT_SECONDS = 5.0
 SUPPORTED_ADAPTERS = {"codex", "claude"}
+ADD_DIR_ADAPTERS = {"codex", "claude"}
 PLACEHOLDER_RE = re.compile(r"\{[a-z_][a-z0-9_]*\}")
 ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 LEGACY_META_PREFIX = "<!-- qiqi-session: "
@@ -108,21 +109,23 @@ mcp = MCPServer(
         "The repository argument is the exact repos.yaml name, never a filesystem path. "
         "delegate_repo_task accepts a semantically self-sufficient repo-local problem "
         "contract: objective, scope, optional exclusions/context/constraints, acceptance "
-        "criteria, and optional known unknowns. QiQi owns user/product intent, Work Item "
-        "state, stale detection, and semantic completion; the child owns repository "
-        "discovery, implementation/investigation strategy, verification strategy, and "
-        "native evidence reporting. Task semantics must not depend on hidden QiQi "
-        "conversation or Work Item dereference. Allowed repository/runtime/Knowledge "
-        "tools may still be used for execution evidence or reusable implementation "
-        "knowledge under stable policy, but not to reconstruct omitted task semantics. "
-        "The MCP launches/resumes the native Codex or Claude session through Herdr and "
-        "captures the native final assistant message through a static result-hook command "
-        "routed to MCP-owned active-capture state; it never scrapes terminal scrollback "
-        "or parses agent transcripts. Codex trusts only the exact QiQi session hook by "
-        "matching its computed trusted_hash; global hook-trust bypass is forbidden. "
-        "Settled/failed/blocked are runtime lifecycle states, not semantic completion. "
-        "Runtime session ownership is persisted in MCP-owned SQLite state, not in a "
-        "Markdown result artifact."
+        "criteria, and optional known unknowns. For a tracked task, context.trusted_facts "
+        "may include a Work Item locator/revision such as work_item=<id>; revision=<n>; "
+        "the child may dereference the mounted Work Item for durable current-state context, "
+        "but objective/scope/acceptance must remain self-sufficient in the TaskPacket. "
+        "QiQi owns user/product intent, Work Item state, stale detection, and semantic "
+        "completion; the child owns repository discovery, implementation/investigation "
+        "strategy, verification strategy, and native evidence reporting. Task semantics "
+        "must not depend on hidden QiQi conversation or on using the Work Item to reconstruct "
+        "omitted assignment semantics. Allowed repository/runtime/Knowledge tools may still "
+        "be used for execution evidence or reusable implementation knowledge under stable "
+        "policy. The MCP launches/resumes the native Codex or Claude session through Herdr "
+        "and captures the native final assistant message through a static result-hook command "
+        "routed to MCP-owned active-capture state; it never scrapes terminal scrollback or "
+        "parses agent transcripts. Codex trusts only the exact QiQi session hook by matching "
+        "its computed trusted_hash; global hook-trust bypass is forbidden. Settled/failed/"
+        "blocked are runtime lifecycle states, not semantic completion. Runtime session "
+        "ownership is persisted in MCP-owned SQLite state, not in a Markdown result artifact."
     ),
 )
 
@@ -295,7 +298,7 @@ def _validate_filesystem_config(name: str, adapter: str, config: dict[str, Any])
     additional_dirs = filesystem.get("additional_dirs", [])
     if not isinstance(additional_dirs, list):
         raise RuntimeError(f"agent {name}.filesystem.additional_dirs must be a list")
-    if additional_dirs and adapter != "claude":
+    if additional_dirs and adapter not in ADD_DIR_ADAPTERS:
         raise RuntimeError(
             f"agent {name}.filesystem.additional_dirs is unsupported for adapter {adapter!r}"
         )
@@ -395,7 +398,7 @@ def _build_filesystem_args(agent: dict[str, Any]) -> list[str]:
     if not additional_dirs:
         return []
     adapter = agent["adapter"]
-    if adapter != "claude":
+    if adapter not in ADD_DIR_ADAPTERS:
         raise RuntimeError(
             f"additional directory arguments are unsupported for adapter {adapter!r}"
         )
@@ -1052,11 +1055,14 @@ async def delegate_repo_task(
     claims to investigate must not be assumed true. `out_of_scope`, `constraints`,
     and `known_unknowns` are omitted when empty.
 
-    The packet must already contain all material task semantics. Work Item identity,
-    original user conversation, and normal verification commands are not child-facing
-    task inputs. Allowed repo/runtime/Knowledge tools may be used for implementation
-    knowledge or evidence under stable policy, but not to reconstruct omitted task
-    meaning.
+    The packet must already contain all material task semantics. For a tracked task,
+    `context.trusted_facts` may carry a locator/revision such as
+    `work_item=<id>; revision=<revision>` so the child can read the mounted Work Item
+    for durable current-state continuity. The locator is not a substitute for
+    objective/scope/acceptance, and the child must not reconstruct omitted task meaning
+    from Work Item state, hidden QiQi conversation, or unrelated shared state.
+    Allowed repo/runtime/Knowledge tools may be used for implementation knowledge or
+    evidence under stable policy.
 
     Omit `session_id` to START. Pass a returned `session_id` to RESUME that exact
     native conversation. Session ownership is stored in `.qiqi/state/qiqi_delegate.sqlite3`.
