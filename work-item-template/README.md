@@ -1,28 +1,40 @@
 # Filesystem Work Item
 
-Work Item là **current task dossier** dùng chung trong một QiQi workspace. Nó không còn là MCP service, không dùng SQLite và không phải lịch sử thao tác của agent.
+Work Item là **current task dossier** dùng chung trong một QiQi workspace. Nó không còn là MCP service, không dùng SQLite cho runtime mới và không phải lịch sử thao tác của agent.
 
-Canonical parent-side location trong workspace:
+Canonical parent-side location:
 
 ```text
 <workspace>/work-items
 ```
 
-QiQi/$work-item resolve workspace root trực tiếp; không phụ thuộc vào env do MCP child export. Khi delegate repo-local work, qiqi_delegate expose cùng directory cho child qua delegated-runtime alias `QIQI_WORK_ITEMS_DIR` và native `--add-dir`.
-
-Mỗi tracked task có một directory:
+Canonical ID giữ dạng `source:external-id`, ví dụ `redmine:116655`, và MUST match:
 
 ```text
-work-items/<id>/
-├── WORK_ITEM.md
-├── intake.md            # material request context, khi cần
-├── investigation.md     # living investigation state, khi cần
-├── plan.md              # current agreed approach, khi cần
-├── review.md            # current acceptance assessment, khi cần
-└── report.textile       # final external deliverable, khi workflow cần
+^[a-z][a-z0-9_-]*:[A-Za-z0-9][A-Za-z0-9._-]*$
 ```
 
-Không tạo mặc định `history/`, `turns/`, `executions/`, `checkpoints/` hay file theo turn. Số file và kích thước dossier phải tăng theo **độ phức tạp material của task**, không tăng theo số lần agent chạy.
+Filesystem không dùng raw ID. Directory key được derive bằng cách thay colon separator đầu tiên bằng `--`:
+
+```text
+redmine:116655 -> work-items/redmine--116655/
+```
+
+Resolved task directory phải nằm dưới resolved `<workspace>/work-items`; reject traversal/separator/non-canonical IDs.
+
+Mỗi tracked task có:
+
+```text
+work-items/<directory-key>/
+├── WORK_ITEM.md
+├── intake.md?
+├── investigation.md?
+├── plan.md?
+├── review.md?
+└── report.textile?
+```
+
+Không tạo mặc định `history/`, `turns/`, `executions/`, `checkpoints/` hay file theo turn. Dossier tăng theo độ phức tạp material của task, không theo số agent turn.
 
 ## Truth boundary
 
@@ -34,33 +46,31 @@ Knowledge MCP        = reusable durable truth
 .qiqi/state          = runtime/session truth
 ```
 
-QiQi là canonical writer của `WORK_ITEM.md` và lifecycle documents. Repository child được đọc Work Item được mount qua `--add-dir`, nhưng trả evidence/conclusion bằng native response để QiQi reconcile; child không tự mark global task done.
+QiQi là canonical writer. Repository child đọc dossier đã được mount bằng `--add-dir`, nhưng locator được truyền bằng absolute `work_item_path=...` trong TaskPacket context; child không phụ thuộc vào việc inherit `QIQI_WORK_ITEMS_DIR` từ Herdr server.
 
 ## Current-state, không phải history
 
-Persist chỉ thông tin mà nếu bỏ đi sẽ làm turn sau:
+Persist chỉ thông tin mà nếu bỏ đi sẽ làm turn sau hiểu sai requirement/scope/acceptance, lặp investigation material, đi lại vào hướng implementation đã bị loại, đánh giá sai completion hoặc tạo sai report. Không persist command chronology, agent turn, intermediate attempts hoặc routine progress.
 
-- hiểu sai requirement/scope/acceptance;
-- lặp lại investigation material;
-- đi lại vào hướng implementation đã bị loại vì lý do còn hiệu lực;
-- đánh giá sai verification/completion;
-- tạo sai final report.
+Requirement change rewrite effective current state. Investigation/plan/review là living documents và được merge/rewrite qua nhiều turn.
 
-Không persist command chronology, agent turn, intermediate attempts, routine progress hoặc redundant summaries.
+## Legacy SQLite cutover
 
-Requirement change rewrite `WORK_ITEM.md` thành effective requirement hiện tại. `intake.md` chỉ giữ initial request và **material requirement-change context** còn cần để giải thích/không hiểu sai current state; không ghi request timeline.
+Trước khi gỡ user-scoped legacy `work_item` MCP registration, export dữ liệu cũ:
 
-Investigation/plan/review là living documents: nhiều turn phải merge/rewrite current semantic state, không append turn log.
+```bash
+python3 scripts/export-legacy-work-items.py --workspace /absolute/path/to/workspace
+```
 
-## Revision
+Exporter đọc mặc định `~/.local/share/agent-work-items/work-items.sqlite3` (hoặc `WORK_ITEM_DB_PATH`), tạo current filesystem dossiers, materialize latest lifecycle artifact của mỗi type, và lưu full legacy JSON + toàn bộ artifact content dưới:
 
-`WORK_ITEM.md` giữ integer `revision`. QiQi tăng revision khi canonical task meaning thay đổi material. Delegation tracked task ghi locator + revision trong TaskPacket context. Khi child trả kết quả dựa trên revision cũ, QiQi reconcile từng finding với current requirement trước khi promote.
+```text
+<workspace>/.qiqi/migration-backups/v0024/legacy-work-items/
+```
 
-Revision ở đây dùng stale detection; không phải database CAS và không tạo history store.
+Source SQLite DB không bị sửa/xóa. Nếu target dossier hoặc backup đã tồn tại, exporter fail thay vì overwrite. Chỉ remove legacy MCP registration sau khi export thành công và kiểm tra dossier cần thiết.
 
 ## Lifecycle
-
-Thông thường:
 
 ```text
 request
@@ -73,24 +83,13 @@ request
 → done
 ```
 
-Flow được phép quay lại investigation/planning khi evidence hoặc requirement đổi. Không encode FSM cứng.
+Flow được phép quay lại investigation/planning khi evidence hoặc requirement đổi; không encode FSM cứng.
 
-## Skill
-
-Operational protocol nằm tại:
-
-```text
-skills/work-item/SKILL.md
-```
-
-Cài skill user-scope:
+## Skill + verification
 
 ```bash
 bash scripts/install-user-skill.sh
-```
-
-Kiểm tra template:
-
-```bash
 bash scripts/work-item-template-check.sh
 ```
+
+Operational protocol nằm tại `skills/work-item/SKILL.md`.
