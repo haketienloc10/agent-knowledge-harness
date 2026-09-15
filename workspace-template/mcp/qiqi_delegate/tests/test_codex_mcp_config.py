@@ -10,11 +10,13 @@ class CodexMcpConfigTests(unittest.TestCase):
         self.assertNotIn("env_vars", text)
         self.assertNotIn("QIQI_CLAUDE_ADDITIONAL_DIR", text)
 
-    def test_launcher_owns_work_items_env(self):
+    def test_launcher_owns_only_delegated_work_items_env(self):
         workspace_root = Path(__file__).resolve().parents[3]
         text = (workspace_root / "scripts" / "qiqi-mcp-server.sh").read_text(encoding="utf-8")
         self.assertIn('work_items_dir="$workspace_root/work-items"', text)
         self.assertIn('export QIQI_WORK_ITEMS_DIR="$work_items_dir"', text)
+        self.assertIn("Parent QiQi/$work-item", text)
+        self.assertNotIn('export PATH="$workspace_root/scripts:$PATH"', text)
 
 
 if __name__ == "__main__":
