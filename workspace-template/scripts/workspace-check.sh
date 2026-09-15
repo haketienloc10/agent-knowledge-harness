@@ -64,11 +64,14 @@ fi
 
 for pattern in \
   'Work Item là filesystem current-state dossier' \
-  'parent không phụ thuộc vào env do MCP child export' \
+  'child continuity không được phụ thuộc vào env inheritance từ Herdr server' \
+  'work_item_path=<absolute dossier path>; id=<canonical id>; revision=<n>' \
   'Requirement change rewrite current requirement' \
   'TaskPacket phải là smallest sufficient' \
   'Default delegation route = `claude-balanced`' \
-  'just-in-time ngay trước route decision'; do
+  'just-in-time ngay trước route decision' \
+  'Nếu `state="blocked"`' \
+  'giữ exact returned `session_id`'; do
   grep -Fq -- "$pattern" "$agents" || fail "AGENTS.md missing current policy: $pattern"
 done
 
