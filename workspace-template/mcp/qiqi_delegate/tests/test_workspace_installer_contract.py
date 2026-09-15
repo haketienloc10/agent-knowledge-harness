@@ -24,7 +24,9 @@ class WorkspaceInstallerContractTests(unittest.TestCase):
     def test_installer_owns_global_mcp_and_runtime_setup(self) -> None:
         self.assertIn("work-item-template/scripts/install-user-mcp.sh", self.installer)
         self.assertIn("knowledge-template/scripts/install-user-mcp.sh", self.installer)
+        self.assertIn('--clients "$mcp_clients"', self.installer)
         self.assertIn("scripts/setup-claude.sh", self.installer)
+        self.assertIn("--children-only", self.installer)
         self.assertIn("codex mcp get qiqi_delegate", self.installer)
         self.assertIn("herdr integration install claude", self.installer)
         self.assertIn("herdr integration install codex", self.installer)
