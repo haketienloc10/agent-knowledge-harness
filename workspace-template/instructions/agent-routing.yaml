@@ -1,23 +1,16 @@
 # Canonical machine-readable runtime routing registry for qiqi_delegate.
-# This is the only file under instructions/ loaded by the MCP server.
-#
-# QiQi owns task semantics, route selection, and START vs RESUME.
-# This registry owns only executable/adapter/model/native CLI arguments.
-# qiqi_delegate owns the native result-capture hook and injects it through the
-# {handoff_args} placeholder on every START/RESUME invocation.
-#
-# Do not put result paths, result schemas, hook commands, or handoff persistence
-# mechanics in this file. {handoff_args} must appear exactly once in both the
-# START and RESUME templates for every agent.
-#
-# Scalar placeholders: {model}, {session_id}.
-# List placeholders: {route_args}, {handoff_args}.
+# QiQi owns task semantics, route selection and START/RESUME.
+# qiqi_delegate owns native result capture/handoff injection.
+# QIQI_WORK_ITEMS_DIR is a workspace-owned shared task resource initialized by
+# scripts/qiqi-mcp-server.sh. Adapter integration may differ, but the semantic
+# env name is common for every supported agent.
 
 version: 2
 
 agents:
   codex:
-    command: codex
+    # Wrapper injects: codex --add-dir "$QIQI_WORK_ITEMS_DIR" ...
+    command: qiqi-codex-agent.sh
     adapter: codex
 
     start_args:
@@ -27,8 +20,6 @@ agents:
       - "{model}"
       - "{route_args}"
 
-    # Codex -c session config overrides are top-level options, so both
-    # route_args and handoff_args intentionally precede the resume subcommand.
     resume_args:
       - "{route_args}"
       - "{handoff_args}"
@@ -42,14 +33,11 @@ agents:
     command: claude
     adapter: claude
 
-    # Machine-local authorized execution/evidence roots may be supplied through
-    # environment variables so the template does not encode one storage topology.
-    # Never point these entries at canonical Work Item/Knowledge/orchestration
-    # storage; task meaning must already be complete in the TaskPacket.
+    # qiqi_delegate native filesystem hook maps this common env to --add-dir.
     filesystem:
       additional_dirs:
-        - env: QIQI_CLAUDE_ADDITIONAL_DIR
-          required: false
+        - env: QIQI_WORK_ITEMS_DIR
+          required: true
 
     start_args:
       - "{handoff_args}"
