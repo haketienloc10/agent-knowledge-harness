@@ -5,15 +5,16 @@ home="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 project="$home/mcp/knowledge"
 store_root="$home/store"
 bin_dir="${HOME}/.local/bin"
+clients="both"
 
 usage() {
   cat <<'EOF'
-Usage: install-user-mcp.sh [--store-root PATH] [--bin-dir PATH]
+Usage: install-user-mcp.sh [--store-root PATH] [--bin-dir PATH] [--clients claude|codex|both]
 
 Installs the user-level Shared Knowledge runtime:
 - managed `knowledge-distill` skill for Codex and Claude Code user scope;
 - stable `agent-knowledge-mcp` wrapper;
-- MCP registration named `knowledge` for available Codex/Claude CLIs.
+- MCP registration named `knowledge` for selected Codex/Claude CLIs.
 
 The installer initializes then integrity-checks the target Knowledge store before changing
 user-scope skill/wrapper/MCP registration. If an existing store is incompatible with the
@@ -36,6 +37,11 @@ while (($#)); do
       bin_dir="$2"
       shift 2
       ;;
+    --clients)
+      [[ $# -ge 2 ]] || { usage >&2; exit 64; }
+      clients="$2"
+      shift 2
+      ;;
     -h|--help)
       usage
       exit 0
@@ -47,6 +53,14 @@ while (($#)); do
       ;;
   esac
 done
+
+case "$clients" in
+  claude|codex|both) ;;
+  *)
+    printf 'ERROR: --clients must be claude, codex, or both\n' >&2
+    exit 64
+    ;;
+esac
 
 command -v uv >/dev/null 2>&1 || {
   printf 'ERROR: missing command: uv\n' >&2
@@ -118,37 +132,45 @@ verify_existing_target() {
   fi
 }
 
+client_enabled() {
+  [[ "$clients" == "both" || "$clients" == "$1" ]]
+}
+
 registered=0
-if command -v codex >/dev/null 2>&1; then
-  if existing="$(codex mcp get knowledge 2>&1)"; then
-    verify_existing_target 'Codex' "$existing"
-    printf 'Codex MCP `knowledge` already points to the stable wrapper; keeping registration.\n'
+if client_enabled codex; then
+  if command -v codex >/dev/null 2>&1; then
+    if existing="$(codex mcp get knowledge 2>&1)"; then
+      verify_existing_target 'Codex' "$existing"
+      printf 'Codex MCP `knowledge` already points to the stable wrapper; keeping registration.\n'
+    else
+      codex mcp add knowledge -- "$wrapper"
+    fi
+    verified="$(codex mcp get knowledge 2>&1)"
+    verify_existing_target 'Codex' "$verified"
+    registered=$((registered + 1))
   else
-    codex mcp add knowledge -- "$wrapper"
+    printf 'WARN: codex not found; skipped selected Codex global MCP registration.\n' >&2
   fi
-  verified="$(codex mcp get knowledge 2>&1)"
-  verify_existing_target 'Codex' "$verified"
-  registered=$((registered + 1))
-else
-  printf 'WARN: codex not found; skipped Codex global MCP registration.\n' >&2
 fi
 
-if command -v claude >/dev/null 2>&1; then
-  if existing="$(claude mcp get knowledge 2>&1)"; then
-    verify_existing_target 'Claude' "$existing"
-    printf 'Claude MCP `knowledge` already points to the stable wrapper; keeping registration.\n'
+if client_enabled claude; then
+  if command -v claude >/dev/null 2>&1; then
+    if existing="$(claude mcp get knowledge 2>&1)"; then
+      verify_existing_target 'Claude' "$existing"
+      printf 'Claude MCP `knowledge` already points to the stable wrapper; keeping registration.\n'
+    else
+      claude mcp add knowledge --scope user "$wrapper"
+    fi
+    verified="$(claude mcp get knowledge 2>&1)"
+    verify_existing_target 'Claude' "$verified"
+    registered=$((registered + 1))
   else
-    claude mcp add knowledge --scope user "$wrapper"
+    printf 'WARN: claude not found; skipped selected Claude user MCP registration.\n' >&2
   fi
-  verified="$(claude mcp get knowledge 2>&1)"
-  verify_existing_target 'Claude' "$verified"
-  registered=$((registered + 1))
-else
-  printf 'WARN: claude not found; skipped Claude user MCP registration.\n' >&2
 fi
 
 if ((registered == 0)); then
-  printf 'ERROR: neither codex nor claude was available for MCP registration.\n' >&2
+  printf 'ERROR: no selected Codex/Claude client was available for MCP registration.\n' >&2
   exit 69
 fi
 
