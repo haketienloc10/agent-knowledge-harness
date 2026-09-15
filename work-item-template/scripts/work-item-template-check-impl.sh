@@ -15,6 +15,7 @@ required=(
   skills/work-item/templates/review.md
   skills/work-item/templates/report.textile
   scripts/install-user-skill.sh
+  scripts/export-legacy-work-items.py
 )
 for rel in "${required[@]}"; do
   [[ -f "$home/$rel" ]] || fail "missing required file: $rel"
@@ -31,15 +32,29 @@ for pattern in \
   'current-state task dossier' \
   'Multi-turn continuity MUST be represented as **current semantic state**' \
   'Requirement change không tự invalidate prior findings' \
-  'work_item=<id>; revision=<revision>' \
+  'work_item_path=<absolute-workspace-path>/work-items/<directory-key>; id=<canonical-id>; revision=<revision>' \
+  '^[a-z][a-z0-9_-]*:[A-Za-z0-9][A-Za-z0-9._-]*$' \
+  'verify nó vẫn nằm dưới resolved `<workspace>/work-items`' \
   'Không tạo mặc định history/turn/execution/checkpoint files' \
   'report.textile'; do
   grep -Fq -- "$pattern" "$skill" || fail "skill missing contract: $pattern"
 done
 
-if grep -Eq 'work_item_get|work_item_update|work_item_history_read|Global Work Item MCP|WORK_ITEM_DB_PATH' "$home/README.md" "$home/ARTIFACTS.md" "$skill"; then
-  fail 'legacy MCP/SQLite Work Item contract remains in current docs'
+exporter="$home/scripts/export-legacy-work-items.py"
+for pattern in \
+  'WORK_ITEM_ID_RE = re.compile' \
+  'source, external_id = item_id.split(":", 1)' \
+  'return f"{source}--{external_id}"' \
+  'target.resolve().relative_to(root.resolve())' \
+  'migration-backups' \
+  'source SQLite DB was not modified'; do
+  grep -Fq -- "$pattern" "$exporter" || fail "legacy exporter missing contract: $pattern"
+done
+
+if grep -Eq 'work_item_get|work_item_update|work_item_history_read|Global Work Item MCP|WORK_ITEM_DB_PATH' "$home/ARTIFACTS.md" "$skill"; then
+  fail 'legacy MCP/SQLite Work Item contract remains in current operational docs'
 fi
 
+python3 -m py_compile "$exporter"
 bash -n "$home/scripts/install-user-skill.sh"
 printf 'Work Item filesystem template: OK\n'
