@@ -11,6 +11,11 @@ from typing import Any
 
 WORK_ITEM_ID_RE = re.compile(r"^[a-z][a-z0-9_-]*:[A-Za-z0-9][A-Za-z0-9._-]*$")
 TEXTILE_HEADING_RE = re.compile(r"^h[1-6]\.\s+")
+ARTIFACT_TABLES = {
+    "work_item_artifacts",
+    "work_item_artifact_sections",
+    "work_item_artifact_chunks",
+}
 ARTIFACT_FILE_BY_TYPE = {
     "intake": "intake.md",
     "investigation": "investigation.md",
@@ -27,6 +32,7 @@ VALID_PHASES = {
     "verification",
     "reporting",
 }
+VALID_STATUSES = {"active", "waiting", "blocked", "done", "cancelled"}
 LEGACY_PHASE_ALIASES = {
     "plan": "planning",
     "review": "verification",
@@ -113,10 +119,66 @@ def active_records(
     return result
 
 
+def _next_action_line(item: dict[str, Any]) -> str | None:
+    action = str(item.get("action", "")).strip()
+    if not action:
+        return None
+    targets: list[str] = []
+    repo = str(item.get("repo") or "").strip()
+    owner = str(item.get("owner") or "").strip()
+    if repo:
+        targets.append(f"repo={repo}")
+    if owner:
+        targets.append(f"owner={owner}")
+    suffix = f" ({', '.join(targets)})" if targets else ""
+    return f"{action}{suffix}"
+
+
+def _repo_state_lines(document: dict[str, Any]) -> tuple[list[str], list[str]]:
+    repos = document.get("repos", {})
+    state_lines: list[str] = []
+    verification_lines: list[str] = []
+    if not isinstance(repos, dict):
+        return state_lines, verification_lines
+    for name, value in sorted(repos.items()):
+        if not isinstance(value, dict):
+            continue
+        repo_status = str(value.get("status") or "unknown")
+        repo_summary = str(value.get("summary") or "").strip()
+        state_lines.append(
+            f"{name}: {repo_status}{f' — {repo_summary}' if repo_summary else ''}"
+        )
+        verification = value.get("verification", [])
+        if isinstance(verification, list):
+            for evidence in verification:
+                evidence_text = str(evidence).strip()
+                if evidence_text:
+                    verification_lines.append(f"{name}: {evidence_text}")
+    return state_lines, verification_lines
+
+
+def _handoff_lines(document: dict[str, Any]) -> list[str]:
+    result: list[str] = []
+    for item in active_records(document, "handoffs", "pending"):
+        source = str(item.get("from") or "").strip()
+        target = str(item.get("to") or "").strip()
+        summary = str(item.get("summary") or "").strip()
+        endpoints = " -> ".join(part for part in (source, target) if part)
+        prefix = f"{endpoints}: " if endpoints else ""
+        text = f"{prefix}{summary}".strip()
+        if text:
+            result.append(text)
+    return result
+
+
 def render_work_item(document: dict[str, Any], revision: int, fallback_status: str) -> str:
     item_id = str(document.get("id", "")).strip()
     title = str(document.get("title", "")).strip()
     status = str(document.get("status") or fallback_status or "active").strip()
+    if status not in VALID_STATUSES:
+        die(f"legacy Work Item {item_id!r} has invalid status for filesystem protocol: {status!r}")
+    if not isinstance(revision, int) or isinstance(revision, bool) or revision < 1:
+        die(f"legacy Work Item {item_id!r} has invalid revision: {revision!r}")
     phase, legacy_phase = normalize_phase(document.get("phase"))
     summary = str(document.get("summary") or "").strip()
     requirements = document.get("current_requirements", [])
@@ -141,26 +203,18 @@ def render_work_item(document: dict[str, Any], revision: int, fallback_status: s
         str(item.get("summary", "")).strip()
         for item in active_records(document, "blockers", "open")
     ]
+    handoffs = _handoff_lines(document)
 
     next_actions: list[str] = []
     raw_actions = document.get("next_actions", [])
     if isinstance(raw_actions, list):
         for item in raw_actions:
             if isinstance(item, dict):
-                action = str(item.get("action", "")).strip()
-                target = str(item.get("repo") or item.get("owner") or "").strip()
-                if action:
-                    next_actions.append(f"{action}{f' ({target})' if target else ''}")
+                line = _next_action_line(item)
+                if line:
+                    next_actions.append(line)
 
-    repos = document.get("repos", {})
-    repo_lines: list[str] = []
-    if isinstance(repos, dict):
-        for name, value in sorted(repos.items()):
-            if not isinstance(value, dict):
-                continue
-            repo_status = str(value.get("status") or "unknown")
-            repo_summary = str(value.get("summary") or "").strip()
-            repo_lines.append(f"- {name}: {repo_status}{f' — {repo_summary}' if repo_summary else ''}")
+    repo_lines, repo_verification_lines = _repo_state_lines(document)
 
     legacy_phase_line = (
         f"legacy_phase: {yaml_scalar(legacy_phase)}\n" if legacy_phase is not None else ""
@@ -198,6 +252,10 @@ phase: {phase}
 
 {bullets(repo_lines)}
 
+## Repository Verification
+
+{bullets(repo_verification_lines)}
+
 # Decisions
 
 {bullets(decisions)}
@@ -209,6 +267,10 @@ phase: {phase}
 # Blockers
 
 {bullets(blockers)}
+
+# Pending Handoffs
+
+{bullets(handoffs)}
 
 # Current State
 
@@ -226,32 +288,51 @@ def table_exists(conn: sqlite3.Connection, name: str) -> bool:
     ).fetchone() is not None
 
 
-def read_artifacts(conn: sqlite3.Connection, item_id: str) -> list[dict[str, Any]]:
-    required = {
-        "work_item_artifacts",
-        "work_item_artifact_sections",
-        "work_item_artifact_chunks",
-    }
-    if not all(table_exists(conn, table) for table in required):
+def validate_artifact_schema(conn: sqlite3.Connection) -> bool:
+    present = {table for table in ARTIFACT_TABLES if table_exists(conn, table)}
+    if not present:
+        return False
+    missing = ARTIFACT_TABLES - present
+    if missing:
+        die(
+            "legacy artifact schema is incomplete; present="
+            + ", ".join(sorted(present))
+            + "; missing="
+            + ", ".join(sorted(missing))
+        )
+    return True
+
+
+def read_artifacts(
+    conn: sqlite3.Connection, item_id: str, *, artifact_schema_present: bool
+) -> list[dict[str, Any]]:
+    if not artifact_schema_present:
         return []
     artifacts: list[dict[str, Any]] = []
     rows = conn.execute(
-        "SELECT * FROM work_item_artifacts WHERE work_item_id=? ORDER BY updated_at ASC, artifact_id ASC",
+        "SELECT * FROM work_item_artifacts WHERE work_item_id=? "
+        "ORDER BY updated_at DESC, artifact_id ASC",
         (item_id,),
     ).fetchall()
     for row in rows:
         artifact = dict(row)
         sections: list[dict[str, Any]] = []
         section_rows = conn.execute(
-            "SELECT * FROM work_item_artifact_sections WHERE work_item_id=? AND artifact_id=? ORDER BY section_order ASC, section_id ASC",
+            "SELECT * FROM work_item_artifact_sections "
+            "WHERE work_item_id=? AND artifact_id=? "
+            "ORDER BY section_order ASC, section_id ASC",
             (item_id, row["artifact_id"]),
         ).fetchall()
         for section_row in section_rows:
             section = dict(section_row)
-            chunks = conn.execute(
-                "SELECT content FROM work_item_artifact_chunks WHERE work_item_id=? AND artifact_id=? AND section_id=? ORDER BY chunk_index ASC",
+            chunk_rows = conn.execute(
+                "SELECT * FROM work_item_artifact_chunks "
+                "WHERE work_item_id=? AND artifact_id=? AND section_id=? "
+                "ORDER BY chunk_index ASC",
                 (item_id, row["artifact_id"], section_row["section_id"]),
             ).fetchall()
+            chunks = [dict(chunk) for chunk in chunk_rows]
+            section["chunks"] = chunks
             section["content"] = "".join(str(chunk["content"]) for chunk in chunks)
             sections.append(section)
         artifact["sections"] = sections
@@ -289,18 +370,14 @@ def textile_heading(title: str) -> str:
 
 
 def render_textile_report(artifact: dict[str, Any]) -> str:
-    title = str(artifact.get("title") or artifact.get("artifact_id") or "Imported report")
-    summary = str(artifact.get("summary") or "").strip()
-    parts = [f"h1. {title}"]
-    if summary:
-        parts.extend(["", summary])
+    # The canonical report file is the external Redmine deliverable. Keep artifact
+    # metadata in the JSON archive rather than injecting an extra h1/title/summary
+    # that is absent from the canonical eight-section report template.
+    parts: list[str] = []
     for section in artifact.get("sections", []):
         section_title = str(section.get("title") or section.get("section_id") or "Section")
         content = str(section.get("content") or "")
-        # Legacy report section titles already contain Textile markup (for example
-        # `h3. +1. Root-cause/requirement:+`). Preserve them verbatim; only synthesize
-        # a heading when the stored title is plain text.
-        parts.extend(["", textile_heading(section_title), "", content.rstrip()])
+        parts.extend([textile_heading(section_title), "", content.rstrip(), ""])
     return "\n".join(parts).rstrip() + "\n"
 
 
@@ -325,6 +402,8 @@ def build_export_plan(
     db: Path,
     work_items_root: Path,
     backup_root: Path,
+    *,
+    artifact_schema_present: bool,
 ) -> list[dict[str, Any]]:
     plan: list[dict[str, Any]] = []
     reserved: set[Path] = set()
@@ -349,19 +428,25 @@ def build_export_plan(
         if str(document.get("id", "")).strip() != item_id:
             die(f"legacy Work Item document id does not match row id: {item_id!r}")
 
-        artifacts = read_artifacts(conn, item_id)
+        revision = int(row["revision"])
+        artifacts = read_artifacts(
+            conn, item_id, artifact_schema_present=artifact_schema_present
+        )
         files: list[tuple[Path, str]] = [
             (
                 target / "WORK_ITEM.md",
-                render_work_item(document, int(row["revision"]), str(row["status"])),
+                render_work_item(document, revision, str(row["status"])),
             )
         ]
 
+        # read_artifacts uses the legacy public ordering: newest update first,
+        # artifact_id ascending as deterministic tie-break. Keep the first artifact
+        # per type so materialization matches that read contract.
         latest_by_type: dict[str, dict[str, Any]] = {}
         for artifact in artifacts:
             artifact_type = str(artifact.get("type") or "")
             if artifact_type in ARTIFACT_FILE_BY_TYPE:
-                latest_by_type[artifact_type] = artifact
+                latest_by_type.setdefault(artifact_type, artifact)
         for artifact_type, artifact in latest_by_type.items():
             files.append(
                 (
@@ -373,7 +458,7 @@ def build_export_plan(
         archive = {
             "source_db": str(db),
             "work_item": document,
-            "revision": int(row["revision"]),
+            "revision": revision,
             "status": str(row["status"]),
             "created_at": str(row["created_at"]),
             "updated_at": str(row["updated_at"]),
@@ -401,12 +486,16 @@ def build_export_plan(
     return plan
 
 
-def write_text(path: Path, content: str, dry_run: bool) -> None:
+def write_text(
+    path: Path, content: str, dry_run: bool, *, mode: int | None = None
+) -> None:
     print(f"  + {path}")
     if dry_run:
         return
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
+    if mode is not None:
+        path.chmod(mode)
 
 
 def main() -> int:
@@ -416,34 +505,53 @@ def main() -> int:
         die(f"workspace is missing repos.yaml: {workspace}")
     db = Path(args.db).expanduser().resolve()
     if not db.is_file():
-        print(f"legacy Work Item DB not found; nothing to export: {db}")
-        return 0
+        die(
+            f"legacy Work Item DB not found: {db}; "
+            "if the old installer used --db-path, pass that exact path with --db"
+        )
 
     work_items_root = (workspace / "work-items").resolve()
     backup_root = workspace / ".qiqi" / "migration-backups" / "v0024" / "legacy-work-items"
 
-    conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True, isolation_level=None)
     conn.row_factory = sqlite3.Row
     try:
+        # Keep the Work Item rows, artifact rows, sections and chunks in one SQLite
+        # read snapshot while the legacy service may still exist during cutover.
+        conn.execute("BEGIN")
         if not table_exists(conn, "work_items"):
             die(f"legacy DB has no work_items table: {db}")
+        artifact_schema_present = validate_artifact_schema(conn)
         rows = conn.execute("SELECT * FROM work_items ORDER BY id ASC").fetchall()
         print(f"preflighting {len(rows)} legacy Work Item(s) from {db}")
-        plan = build_export_plan(conn, rows, db, work_items_root, backup_root)
+        plan = build_export_plan(
+            conn,
+            rows,
+            db,
+            work_items_root,
+            backup_root,
+            artifact_schema_present=artifact_schema_present,
+        )
+        conn.execute("ROLLBACK")
     finally:
+        if conn.in_transaction:
+            conn.execute("ROLLBACK")
         conn.close()
 
     # No filesystem mutation occurs until every record, output path, archive path,
-    # legacy document, and phase normalization has passed preflight.
+    # legacy document, artifact schema and phase normalization has passed preflight.
     if not args.dry_run:
         work_items_root.mkdir(parents=True, exist_ok=True)
-        backup_root.mkdir(parents=True, exist_ok=True)
+        backup_root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        backup_root.chmod(0o700)
 
     for entry in plan:
         print(f"{entry['item_id']} -> work-items/{entry['key']}/")
         for path, content in entry["files"]:
             write_text(path, content, args.dry_run)
-        write_text(entry["archive_path"], entry["archive_content"], args.dry_run)
+        write_text(
+            entry["archive_path"], entry["archive_content"], args.dry_run, mode=0o600
+        )
 
     print("legacy Work Item export complete; source SQLite DB was not modified")
     return 0
