@@ -16,4 +16,7 @@ command -v uv >/dev/null 2>&1 || {
 }
 
 export QIQI_WORKSPACE_ROOT="$workspace_root"
+# Claude children are ephemeral TaskPacket executors. Do not let machine-local
+# auto memory become hidden task state across independent delegated sessions.
+export CLAUDE_CODE_DISABLE_AUTO_MEMORY=1
 exec uv run --project "$project_dir" python "$server"
