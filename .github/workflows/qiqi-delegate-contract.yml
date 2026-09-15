@@ -4,17 +4,21 @@ on:
   pull_request:
     paths:
       - '.github/workflows/qiqi-delegate-contract.yml'
+      - 'scripts/setup-workspace.sh'
       - 'workspace-template/identity.md'
       - 'workspace-template/.codex/config.toml'
       - 'workspace-template/.claude/**'
+      - 'workspace-template/.qiqi/.gitignore'
       - 'workspace-template/README.md'
       - 'workspace-template/instructions/agent-routing.yaml'
+      - 'workspace-template/instructions/model-routing.md'
       - 'workspace-template/docs/CLAUDE_CODE_SETUP.md'
       - 'workspace-template/docs/WORKSPACE_SETUP.md'
       - 'workspace-template/mcp/qiqi_delegate/**'
       - 'workspace-template/scripts/setup-claude.sh'
       - 'workspace-template/scripts/workspace-check.sh'
       - 'work-item-template/**'
+      - 'knowledge-template/**'
       - 'migrations/**'
   workflow_dispatch:
 
@@ -50,7 +54,9 @@ jobs:
 
       - name: Check managed shell syntax
         run: |
+          bash -n scripts/setup-workspace.sh
           bash -n workspace-template/scripts/setup-claude.sh
           bash -n workspace-template/scripts/workspace-check.sh
           bash -n repo-template/scripts/repo-check.sh
           bash -n work-item-template/scripts/install-user-mcp.sh
+          bash -n knowledge-template/scripts/install-user-mcp.sh
