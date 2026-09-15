@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 WORK_ITEM_ID_RE = re.compile(r"^[a-z][a-z0-9_-]*:[A-Za-z0-9][A-Za-z0-9._-]*$")
+TEXTILE_HEADING_RE = re.compile(r"^h[1-6]\.\s+")
 ARTIFACT_FILE_BY_TYPE = {
     "intake": "intake.md",
     "investigation": "investigation.md",
@@ -280,6 +281,13 @@ def render_markdown_artifact(artifact_type: str, artifact: dict[str, Any]) -> st
     return "\n".join(parts).rstrip() + "\n"
 
 
+def textile_heading(title: str) -> str:
+    stripped = title.strip()
+    if TEXTILE_HEADING_RE.match(stripped):
+        return stripped
+    return f"h2. {stripped}"
+
+
 def render_textile_report(artifact: dict[str, Any]) -> str:
     title = str(artifact.get("title") or artifact.get("artifact_id") or "Imported report")
     summary = str(artifact.get("summary") or "").strip()
@@ -289,7 +297,10 @@ def render_textile_report(artifact: dict[str, Any]) -> str:
     for section in artifact.get("sections", []):
         section_title = str(section.get("title") or section.get("section_id") or "Section")
         content = str(section.get("content") or "")
-        parts.extend(["", f"h2. {section_title}", "", content.rstrip()])
+        # Legacy report section titles already contain Textile markup (for example
+        # `h3. +1. Root-cause/requirement:+`). Preserve them verbatim; only synthesize
+        # a heading when the stored title is plain text.
+        parts.extend(["", textile_heading(section_title), "", content.rstrip()])
     return "\n".join(parts).rstrip() + "\n"
 
 
