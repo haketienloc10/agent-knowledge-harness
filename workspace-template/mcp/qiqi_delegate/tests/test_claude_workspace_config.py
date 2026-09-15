@@ -60,6 +60,16 @@ class ClaudeWorkspaceConfigTests(unittest.TestCase):
         self.assertNotIn("--scope project", self.setup_script)
         self.assertNotIn("--scope user", self.setup_script)
 
+    def test_setup_generates_machine_local_child_exclusion(self) -> None:
+        self.assertIn("settings.local.json", self.setup_script)
+        self.assertIn("claudeMdExcludes", self.setup_script)
+        self.assertIn("workspace_claude_md", self.setup_script)
+        self.assertIn(".git/info/exclude", self.setup_script)
+        self.assertIn(".claude/settings.local.json", self.setup_script)
+        self.assertIn(
+            'env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] = "1"', self.setup_script
+        )
+
     def test_delegate_server_disables_claude_child_auto_memory(self) -> None:
         text = (self.workspace_root / "scripts" / "qiqi-mcp-server.sh").read_text(
             encoding="utf-8"
