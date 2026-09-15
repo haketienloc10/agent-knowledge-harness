@@ -18,10 +18,69 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
       - uses: astral-sh/setup-uv@v6
+      - name: Validate latest migration manifest coverage
+        run: |
+          python3 - <<'PY'
+          import json
+          import subprocess
+          from pathlib import Path
+
+          manifests = sorted(Path("migrations").glob("*.json"))
+          if not manifests:
+              raise SystemExit("no migration manifests found")
+          path = manifests[-1]
+          migration = json.loads(path.read_text(encoding="utf-8"))
+          from_ref = migration["from_ref"]
+          to_ref = migration["to_ref"]
+
+          for ref in (from_ref, to_ref):
+              subprocess.run(["git", "cat-file", "-e", f"{ref}^{{commit}}"], check=True)
+          subprocess.run(["git", "merge-base", "--is-ancestor", to_ref, "HEAD"], check=True)
+
+          diff = subprocess.run(
+              ["git", "diff", "--no-renames", "--name-status", from_ref, to_ref],
+              check=True,
+              capture_output=True,
+              text=True,
+          ).stdout.splitlines()
+          changed = {}
+          for row in diff:
+              if not row.strip():
+                  continue
+              status, name = row.split("\t", 1)
+              changed[name] = status
+
+          for scope, prefix in (("workspace", "workspace-template/"), ("repo", "repo-template/")):
+              config = migration[scope]
+              listed = {}
+              for strategy in ("merge", "replace", "delete", "manual_review"):
+                  for name in config[strategy]:
+                      if name in listed:
+                          raise SystemExit(f"{path}: duplicate managed path {name}")
+                      listed[name] = strategy
+              actual = {name for name in changed if name.startswith(prefix)}
+              if set(listed) != actual:
+                  missing = sorted(actual - set(listed))
+                  extra = sorted(set(listed) - actual)
+                  raise SystemExit(
+                      f"{path}: {scope} manifest coverage drift; missing={missing}; extra={extra}"
+                  )
+              for name, strategy in listed.items():
+                  status = changed[name]
+                  if strategy == "delete" and status != "D":
+                      raise SystemExit(f"{path}: {name} is delete but git status is {status}")
+                  if strategy in {"merge", "replace"} and status not in {"A", "M"}:
+                      raise SystemExit(
+                          f"{path}: {name} uses {strategy} but git status is {status}"
+                      )
+          print(f"migration manifest coverage: OK ({path.name})")
+          PY
       - name: Sync qiqi_delegate MCP environment
         run: uv sync --project workspace-template/mcp/qiqi_delegate
       - name: Run qiqi_delegate tests
