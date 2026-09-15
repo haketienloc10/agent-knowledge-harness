@@ -18,7 +18,7 @@ QiQi là canonical Work Item writer và cross-repo broker. Child không tự mar
 
 1. Xác nhận current directory là exact Git root.
 2. Đọc TaskPacket để hiểu objective/scope/acceptance/constraints.
-3. Nếu TaskPacket có trusted fact `work_item=<id>; revision=<n>`, đọc `$QIQI_WORK_ITEMS_DIR/<id>/WORK_ITEM.md` và chỉ lifecycle docs relevant.
+3. Nếu TaskPacket có trusted fact `work_item_path=<absolute-path>; id=<canonical-id>; revision=<n>`, đọc `<absolute-path>/WORK_ITEM.md` và chỉ lifecycle docs relevant. Không reconstruct path từ environment variable.
 4. Đọc repo architecture/verification docs khi cần.
 5. Discover source/tests/config nhỏ nhất đủ task.
 6. Dùng Shared Knowledge khi reusable context có thể đổi action; không gọi như ceremony.
@@ -47,11 +47,13 @@ Không tạo execution diary. Report material findings/evidence/open question/re
 - Chỉ đọc/sửa current Git root và authorized external evidence resources.
 - Không sửa/delegate sibling repo.
 - Không đọc/sửa `.qiqi/state`.
-- `$QIQI_WORK_ITEMS_DIR` là exception read-only theo policy cho tracked task.
+- Mounted Work Item path là exception read-only theo policy cho tracked task.
 
 ## Shared Knowledge
 
 Knowledge dùng cho verified reusable repo/domain implementation knowledge, không phải task status hay working log. Live owner source/test thắng stale Knowledge cho current implementation truth.
+
+Không ghi secret, credential, token, private/customer data, raw production payload hoặc sensitive DB/log value vào Shared Knowledge. Khi evidence nhạy cảm material, redact value và chỉ giữ loại dữ liệu, locator/provenance và kết luận tối thiểu cần thiết.
 
 ## Handoff về QiQi
 
@@ -64,5 +66,7 @@ Native final response phải đủ để QiQi reconcile:
 - blocker/missing product input;
 - cross-repo implication nếu có;
 - reusable Knowledge mutation nếu material.
+
+Final response MUST NOT chứa secret/dữ liệu nhạy cảm thô. Redact token/password/key/customer-private value và mô tả evidence theo locator/type/provenance đủ để QiQi hiểu mà không persist sensitive value.
 
 Không cần fixed headings và không thêm synthetic `completed|partial|blocked` semantic status. Runtime state là execution lifecycle; QiQi quyết định semantic completion.
