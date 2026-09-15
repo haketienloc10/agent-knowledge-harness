@@ -504,10 +504,12 @@ def _build_handoff_args(adapter: str) -> list[str]:
     command = _result_hook_command(adapter)
     if adapter == "claude":
         settings = {
+            "autoMemoryEnabled": False,
+            "env": {"CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1"},
             "hooks": {
                 "Stop": [{"hooks": [{"type": "command", "command": command}]}],
                 "StopFailure": [{"hooks": [{"type": "command", "command": command}]}],
-            }
+            },
         }
         return ["--settings", json.dumps(settings, ensure_ascii=False, separators=(",", ":"))]
     if adapter == "codex":
