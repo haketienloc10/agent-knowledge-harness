@@ -33,6 +33,8 @@ Options:
 Interactive mode asks for any missing coordinator/agent/default-route choices.
 The default route is stored machine-locally in .qiqi/config.local.json.
 Claude child isolation is provisioned in each repo's .claude/settings.local.json.
+Global work_item/knowledge MCPs are registered only for the union of selected
+coordinator and execution-agent clients.
 EOF
 }
 
@@ -222,10 +224,17 @@ if [[ "$default_route" == codex-* && "$execution_agents" == "claude" ]]; then
   exit 64
 fi
 
+if [[ "$coordinators" == "both" || "$execution_agents" == "both" || "$coordinators" != "$execution_agents" ]]; then
+  mcp_clients="both"
+else
+  mcp_clients="$coordinators"
+fi
+
 printf '\nQiQi workspace setup\n'
 printf '  workspace:      %s\n' "$workspace_root"
 printf '  coordinators:   %s\n' "$coordinators"
 printf '  agents:         %s\n' "$execution_agents"
+printf '  MCP clients:    %s\n' "$mcp_clients"
 printf '  default route:  %s\n' "$default_route"
 printf '  global MCPs:    %s\n' "$([[ $install_global_mcp -eq 1 ]] && printf install || printf skip)"
 printf '\n'
@@ -235,17 +244,17 @@ require_command herdr
 
 needs_claude=0
 needs_codex=0
-[[ "$coordinators" == "claude" || "$coordinators" == "both" || "$execution_agents" == "claude" || "$execution_agents" == "both" ]] && needs_claude=1
-[[ "$coordinators" == "codex" || "$coordinators" == "both" || "$execution_agents" == "codex" || "$execution_agents" == "both" ]] && needs_codex=1
+[[ "$mcp_clients" == "claude" || "$mcp_clients" == "both" ]] && needs_claude=1
+[[ "$mcp_clients" == "codex" || "$mcp_clients" == "both" ]] && needs_codex=1
 ((needs_claude)) && require_command claude
 ((needs_codex)) && require_command codex
 
 if ((install_global_mcp)); then
-  work_item_args=()
+  work_item_args=(--clients "$mcp_clients")
   [[ -n "$work_item_db" ]] && work_item_args+=(--db-path "$work_item_db")
   bash "$harness_root/work-item-template/scripts/install-user-mcp.sh" "${work_item_args[@]}"
 
-  knowledge_args=()
+  knowledge_args=(--clients "$mcp_clients")
   [[ -n "$knowledge_store" ]] && knowledge_args+=(--store-root "$knowledge_store")
   bash "$harness_root/knowledge-template/scripts/install-user-mcp.sh" "${knowledge_args[@]}"
 fi
