@@ -1,6 +1,6 @@
 # Agent Knowledge Harness
 
-Harness cho multi-repository QiQi workspace với ba lớp chính:
+Harness cho multi-repository QiQi workspace với các thành phần chính:
 
 - `workspace-template/`: orchestration/control plane + `qiqi_delegate`;
 - `repo-template/`: execution-agent policy cho từng Git root;
@@ -32,6 +32,8 @@ bash scripts/install-user-skill.sh
 Operational protocol: `work-item-template/skills/work-item/SKILL.md`.
 
 ## Workspace migration
+
+Trước migration v24 trên máy có legacy Work Item SQLite, export DB theo `work-item-template/README.md`; nếu old installer từng dùng custom `--db-path`, truyền exact path đó cho exporter bằng `--db`.
 
 ```bash
 bash scripts/migrate-workspace.sh /path/to/workspace --dry-run
