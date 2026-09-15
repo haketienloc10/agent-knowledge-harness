@@ -75,11 +75,16 @@ class ClaudeWorkspaceConfigTests(unittest.TestCase):
             'env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] = "1"', self.setup_script
         )
 
-    def test_delegate_server_disables_claude_child_auto_memory(self) -> None:
-        text = (self.workspace_root / "scripts" / "qiqi-mcp-server.sh").read_text(
+    def test_delegate_launch_disables_claude_child_auto_memory(self) -> None:
+        wrapper = (self.workspace_root / "scripts" / "qiqi-mcp-server.sh").read_text(
             encoding="utf-8"
         )
-        self.assertIn("export CLAUDE_CODE_DISABLE_AUTO_MEMORY=1", text)
+        server = (
+            self.workspace_root / "mcp" / "qiqi_delegate" / "server.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn("export CLAUDE_CODE_DISABLE_AUTO_MEMORY=1", wrapper)
+        self.assertIn('"CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1"', server)
+        self.assertIn('"autoMemoryEnabled": False', server)
 
 
 if __name__ == "__main__":
