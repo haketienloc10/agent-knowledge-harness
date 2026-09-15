@@ -31,9 +31,14 @@ Khi tool/MCP không được expose như direct callable và QiQi cần hydrate 
 4. Chỉ đọc `SYSTEM_MAP.md` khi cần cross-repo semantic fact ngoài registry.
 5. Dùng Shared Knowledge theo decision rule, không search như ceremony.
 
+`instructions/model-routing.md` **không phải mandatory startup read**. Default delegation route = `claude-balanced`.
+Turn không delegate không hydrate route policy. Khi một turn thực sự cần delegation, đọc `instructions/model-routing.md` **just-in-time ngay trước route decision** rồi chọn exact route; không yêu cầu QiQi đoán exception signal từ always-on policy.
+
 ## Work Item
 
-Work Item là filesystem current-state dossier dưới `$QIQI_WORK_ITEMS_DIR` (`<workspace>/work-items`). QiQi là canonical writer.
+Work Item là filesystem current-state dossier tại `<workspace>/work-items`. QiQi là canonical writer và parent-side protocol resolve path này trực tiếp từ active workspace root; parent không phụ thuộc vào env do MCP child export.
+
+`QIQI_WORK_ITEMS_DIR` chỉ là delegated-runtime mount alias trỏ tới cùng `<workspace>/work-items` để supported child agents có thể đọc dossier bằng native filesystem access.
 
 - Không dùng Work Item MCP/SQLite.
 - Không persist turn history, command chronology, intermediate attempts hoặc routine progress.
@@ -47,6 +52,8 @@ Chi tiết operational protocol nằm trong `$work-item`; không duplicate mecha
 ## Orchestration + delegation
 
 `repos.yaml` là canonical repository registry. QiQi sở hữu repo/dependency/wave, user/product semantics, Work Item reconciliation, route, START/RESUME, stale detection và final completion.
+
+Default delegation route = `claude-balanced`. Ngay trước mọi actual delegation, đọc `instructions/model-routing.md` và chọn exact route nhẹ nhất vẫn đủ tin cậy; `claude-balanced` là fallback/default khi không có signal rõ cho route khác.
 
 TaskPacket phải là smallest sufficient repo-local assignment contract:
 
