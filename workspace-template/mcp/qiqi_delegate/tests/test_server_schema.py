@@ -25,6 +25,9 @@ FORBIDDEN_PUBLIC_FIELDS = {
     "work_item_ref",
     "work_item_revision",
 }
+TRACKED_LOCATOR_EXAMPLE = (
+    "work_item_path=<absolute dossier path>; id=<canonical id>; revision=<n>"
+)
 
 
 def _resolve_ref(schema: dict, node: dict) -> dict:
@@ -57,6 +60,8 @@ class PublicTaskSchemaTests(unittest.TestCase):
             raise AssertionError(f"expected one delegate_repo_task tool, got {len(matching)}")
         cls.tool = matching[0]
         cls.schema = cls.tool.input_schema
+        cls.workspace = Path(__file__).resolve().parents[3]
+        cls.repo_root = cls.workspace.parent
 
     def test_required_and_forbidden_top_level_fields(self) -> None:
         properties = self.schema["properties"]
@@ -96,9 +101,35 @@ class PublicTaskSchemaTests(unittest.TestCase):
     def test_tracked_work_item_locator_is_allowed_without_weakening_packet_semantics(self) -> None:
         description = self.tool.description or ""
         self.assertIn("context.trusted_facts", description)
-        self.assertIn("work_item=<id>; revision=<revision>", description)
+        self.assertIn(TRACKED_LOCATOR_EXAMPLE, description)
+        self.assertNotIn("work_item=<id>; revision=<revision>", description)
         self.assertIn("not a substitute for", description)
         self.assertIn("objective/scope/acceptance", description)
+
+    def test_tracked_locator_contract_does_not_drift_across_boundaries(self) -> None:
+        sources = {
+            "server": (self.workspace / "mcp" / "qiqi_delegate" / "server.py").read_text(
+                encoding="utf-8"
+            ),
+            "workspace": (self.workspace / "AGENTS.md").read_text(encoding="utf-8"),
+            "repo": (self.repo_root / "repo-template" / "AGENTS.md").read_text(
+                encoding="utf-8"
+            ),
+            "skill": (
+                self.repo_root
+                / "work-item-template"
+                / "skills"
+                / "work-item"
+                / "SKILL.md"
+            ).read_text(encoding="utf-8"),
+        }
+        for name, text in sources.items():
+            with self.subTest(source=name):
+                self.assertIn("work_item_path=", text)
+                self.assertIn("id=<canonical", text)
+                self.assertIn("revision=<", text)
+                self.assertNotIn("work_item=<id>; revision=<revision>", text)
+        self.assertGreaterEqual(sources["server"].count(TRACKED_LOCATOR_EXAMPLE), 2)
 
     def test_input_models_forbid_extra_fields(self) -> None:
         with self.assertRaises(ValidationError):
