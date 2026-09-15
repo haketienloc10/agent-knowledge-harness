@@ -1,0 +1,21 @@
+{
+  "version": 23,
+  "from_ref": "161961ec043fe45827ef805639bfa8e73c8f2b51",
+  "to_ref": "6e4474e3cddb33f831cba56c858b18f79415a6c9",
+  "description": "forward QIQI_CLAUDE_ADDITIONAL_DIR through Codex stdio MCP config so qiqi_delegate can inject Claude --add-dir, and add a regression test for that forwarding contract",
+  "workspace": {
+    "merge": [],
+    "replace": [
+      "workspace-template/.codex/config.toml",
+      "workspace-template/mcp/qiqi_delegate/tests/test_codex_mcp_config.py"
+    ],
+    "delete": [],
+    "manual_review": []
+  },
+  "repo": {
+    "merge": [],
+    "replace": [],
+    "delete": [],
+    "manual_review": []
+  }
+}
