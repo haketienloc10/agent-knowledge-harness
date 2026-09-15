@@ -1,7 +1,7 @@
 {
   "version": 24,
   "from_ref": "ce2e758f24c27f9c0f5e5f6d81bb9b9b4d3d88a8",
-  "to_ref": "610a4b193a2aa158dd6f16ee7f84d870135bccc4",
+  "to_ref": "0eac2c9b68ec4eb4c4d72d44b85a8f2b36dd66bb",
   "description": "replace the user/global Work Item MCP boundary with a workspace-owned filesystem Work Item lifecycle, auto-create and mount QIQI_WORK_ITEMS_DIR for supported delegated agents, and align workspace/repo policy with current-state multi-turn/change-request reconciliation; rerun work-item-template/scripts/install-user-skill.sh after migration and remove any legacy user-scoped work_item MCP registration separately",
   "workspace": {
     "merge": [],
