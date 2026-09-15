@@ -17,6 +17,26 @@ ARTIFACT_FILE_BY_TYPE = {
     "review": "review.md",
     "report": "report.textile",
 }
+VALID_PHASES = {
+    "intake",
+    "investigation",
+    "planning",
+    "implementation",
+    "verification",
+    "reporting",
+}
+LEGACY_PHASE_ALIASES = {
+    "plan": "planning",
+    "review": "verification",
+    "test": "verification",
+    "testing": "verification",
+    "qa": "verification",
+    "uat": "verification",
+    "report": "reporting",
+    "complete": "reporting",
+    "completed": "reporting",
+    "done": "reporting",
+}
 DEFAULT_DB = Path("~/.local/share/agent-work-items/work-items.sqlite3").expanduser()
 
 
@@ -52,6 +72,18 @@ def yaml_scalar(value: str) -> str:
     return json.dumps(value, ensure_ascii=False)
 
 
+def normalize_phase(value: Any) -> tuple[str, str | None]:
+    raw = str(value or "").strip()
+    lowered = raw.lower()
+    if lowered in VALID_PHASES:
+        return lowered, raw if raw and raw != lowered else None
+    if lowered in LEGACY_PHASE_ALIASES:
+        return LEGACY_PHASE_ALIASES[lowered], raw
+    # Legacy phase was intentionally free-form. Unknown values must not leak into
+    # the new enum contract; route the imported item through reconciliation instead.
+    return "investigation", raw or None
+
+
 def bullets(values: list[str], empty: str = "- None") -> str:
     cleaned = [str(value).strip() for value in values if str(value).strip()]
     return "\n".join(f"- {value}" for value in cleaned) if cleaned else empty
@@ -68,7 +100,7 @@ def render_work_item(document: dict[str, Any], revision: int, fallback_status: s
     item_id = str(document.get("id", "")).strip()
     title = str(document.get("title", "")).strip()
     status = str(document.get("status") or fallback_status or "active").strip()
-    phase = str(document.get("phase") or "intake").strip()
+    phase, legacy_phase = normalize_phase(document.get("phase"))
     summary = str(document.get("summary") or "").strip()
     requirements = document.get("current_requirements", [])
     if not isinstance(requirements, list):
@@ -98,12 +130,22 @@ def render_work_item(document: dict[str, Any], revision: int, fallback_status: s
             repo_summary = str(value.get("summary") or "").strip()
             repo_lines.append(f"- {name}: {repo_status}{f' — {repo_summary}' if repo_summary else ''}")
 
+    legacy_phase_line = (
+        f"legacy_phase: {yaml_scalar(legacy_phase)}\n" if legacy_phase is not None else ""
+    )
+    reconciliation_note = (
+        f"\nLegacy phase `{legacy_phase}` was normalized to `{phase}` for the filesystem protocol; "
+        "reconcile the current phase before substantive continuation."
+        if legacy_phase is not None
+        else ""
+    )
+
     return f"""---
 id: {yaml_scalar(item_id)}
 revision: {revision}
 status: {status}
 phase: {phase}
-legacy_imported: true
+{legacy_phase_line}legacy_imported: true
 ---
 
 # Objective
@@ -138,7 +180,7 @@ legacy_imported: true
 
 # Current State
 
-{summary or 'Imported from the legacy Work Item store. Reconcile before substantive continuation.'}
+{summary or 'Imported from the legacy Work Item store. Reconcile before substantive continuation.'}{reconciliation_note}
 
 # Next Actions
 
@@ -198,9 +240,98 @@ def render_artifact(artifact: dict[str, Any]) -> str:
     return "\n".join(parts).rstrip() + "\n"
 
 
-def write_text(path: Path, content: str, dry_run: bool) -> None:
+def reserve_output(path: Path, reserved: set[Path]) -> None:
+    resolved = path.resolve()
+    if resolved in reserved:
+        die(f"multiple legacy records map to the same export path: {path}")
     if path.exists():
         die(f"refusing to overwrite existing filesystem Work Item file: {path}")
+    reserved.add(resolved)
+
+
+def build_export_plan(
+    conn: sqlite3.Connection,
+    rows: list[sqlite3.Row],
+    db: Path,
+    work_items_root: Path,
+    backup_root: Path,
+) -> list[dict[str, Any]]:
+    plan: list[dict[str, Any]] = []
+    reserved: set[Path] = set()
+
+    for row in rows:
+        item_id = str(row["id"])
+        key = safe_key(item_id)
+        target = work_items_root / key
+        ensure_beneath(work_items_root, target)
+        if target.exists():
+            if not target.is_dir():
+                die(f"target dossier path is not a directory: {target}")
+            if any(target.iterdir()):
+                die(f"target dossier already exists and is non-empty: {target}")
+
+        try:
+            document = json.loads(row["document_json"])
+        except json.JSONDecodeError as exc:
+            die(f"legacy Work Item document is invalid JSON for {item_id!r}: {exc}")
+        if not isinstance(document, dict):
+            die(f"legacy Work Item document must be a JSON object for {item_id!r}")
+        if str(document.get("id", "")).strip() != item_id:
+            die(f"legacy Work Item document id does not match row id: {item_id!r}")
+
+        artifacts = read_artifacts(conn, item_id)
+        files: list[tuple[Path, str]] = [
+            (
+                target / "WORK_ITEM.md",
+                render_work_item(document, int(row["revision"]), str(row["status"])),
+            )
+        ]
+
+        latest_by_type: dict[str, dict[str, Any]] = {}
+        for artifact in artifacts:
+            artifact_type = str(artifact.get("type") or "")
+            if artifact_type in ARTIFACT_FILE_BY_TYPE:
+                latest_by_type[artifact_type] = artifact
+        for artifact_type, artifact in latest_by_type.items():
+            files.append(
+                (
+                    target / ARTIFACT_FILE_BY_TYPE[artifact_type],
+                    render_artifact(artifact),
+                )
+            )
+
+        archive = {
+            "source_db": str(db),
+            "work_item": document,
+            "revision": int(row["revision"]),
+            "status": str(row["status"]),
+            "created_at": str(row["created_at"]),
+            "updated_at": str(row["updated_at"]),
+            "artifacts": artifacts,
+        }
+        archive_path = backup_root / f"{key}.json"
+
+        for path, _ in files:
+            reserve_output(path, reserved)
+        reserve_output(archive_path, reserved)
+
+        plan.append(
+            {
+                "item_id": item_id,
+                "key": key,
+                "files": files,
+                "archive_path": archive_path,
+                "archive_content": json.dumps(
+                    archive, ensure_ascii=False, indent=2, sort_keys=True
+                )
+                + "\n",
+            }
+        )
+
+    return plan
+
+
+def write_text(path: Path, content: str, dry_run: bool) -> None:
     print(f"  + {path}")
     if dry_run:
         return
@@ -220,9 +351,6 @@ def main() -> int:
 
     work_items_root = (workspace / "work-items").resolve()
     backup_root = workspace / ".qiqi" / "migration-backups" / "v0024" / "legacy-work-items"
-    if not args.dry_run:
-        work_items_root.mkdir(parents=True, exist_ok=True)
-        backup_root.mkdir(parents=True, exist_ok=True)
 
     conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
     conn.row_factory = sqlite3.Row
@@ -230,56 +358,22 @@ def main() -> int:
         if not table_exists(conn, "work_items"):
             die(f"legacy DB has no work_items table: {db}")
         rows = conn.execute("SELECT * FROM work_items ORDER BY id ASC").fetchall()
-        print(f"exporting {len(rows)} legacy Work Item(s) from {db}")
-        for row in rows:
-            item_id = str(row["id"])
-            key = safe_key(item_id)
-            target = work_items_root / key
-            ensure_beneath(work_items_root, target)
-            if target.exists() and any(target.iterdir()):
-                die(f"target dossier already exists and is non-empty: {target}")
-
-            document = json.loads(row["document_json"])
-            artifacts = read_artifacts(conn, item_id)
-            print(f"{item_id} -> work-items/{key}/")
-            write_text(
-                target / "WORK_ITEM.md",
-                render_work_item(document, int(row["revision"]), str(row["status"])),
-                args.dry_run,
-            )
-
-            latest_by_type: dict[str, dict[str, Any]] = {}
-            for artifact in artifacts:
-                artifact_type = str(artifact.get("type") or "")
-                if artifact_type in ARTIFACT_FILE_BY_TYPE:
-                    latest_by_type[artifact_type] = artifact
-            for artifact_type, artifact in latest_by_type.items():
-                write_text(
-                    target / ARTIFACT_FILE_BY_TYPE[artifact_type],
-                    render_artifact(artifact),
-                    args.dry_run,
-                )
-
-            archive = {
-                "source_db": str(db),
-                "work_item": document,
-                "revision": int(row["revision"]),
-                "status": str(row["status"]),
-                "created_at": str(row["created_at"]),
-                "updated_at": str(row["updated_at"]),
-                "artifacts": artifacts,
-            }
-            archive_path = backup_root / f"{key}.json"
-            if archive_path.exists():
-                die(f"legacy export archive already exists: {archive_path}")
-            print(f"  + {archive_path}")
-            if not args.dry_run:
-                archive_path.write_text(
-                    json.dumps(archive, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-                    encoding="utf-8",
-                )
+        print(f"preflighting {len(rows)} legacy Work Item(s) from {db}")
+        plan = build_export_plan(conn, rows, db, work_items_root, backup_root)
     finally:
         conn.close()
+
+    # No filesystem mutation occurs until every record, output path, archive path,
+    # legacy document, and phase normalization has passed preflight.
+    if not args.dry_run:
+        work_items_root.mkdir(parents=True, exist_ok=True)
+        backup_root.mkdir(parents=True, exist_ok=True)
+
+    for entry in plan:
+        print(f"{entry['item_id']} -> work-items/{entry['key']}/")
+        for path, content in entry["files"]:
+            write_text(path, content, args.dry_run)
+        write_text(entry["archive_path"], entry["archive_content"], args.dry_run)
 
     print("legacy Work Item export complete; source SQLite DB was not modified")
     return 0
