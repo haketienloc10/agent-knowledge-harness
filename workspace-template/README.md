@@ -11,12 +11,14 @@ Repo source/test       = implementation truth
 qiqi_delegate state    = runtime/session truth
 ```
 
-`work_item` và `knowledge` là user-scoped services, không nằm trong workspace. Project `.codex/config.toml` chỉ đăng ký `qiqi_delegate`.
+`work_item` và `knowledge` là user-scoped services, không nằm trong workspace. Codex dùng project `.codex/config.toml` để đăng ký `qiqi_delegate`; Claude Code dùng local-scope MCP registration được tạo một lần bởi `scripts/setup-claude.sh`, không dùng workspace `.mcp.json`.
 
 ## Thành phần
 
 ```text
 AGENTS.md
+.claude/CLAUDE.md
+.claude/settings.json
 identity.md
 repos.yaml
 SYSTEM_MAP.md
@@ -25,7 +27,9 @@ instructions/model-routing.md
 .codex/config.toml
 mcp/qiqi_delegate/
 .qiqi/.gitignore
+scripts/setup-claude.sh
 scripts/workspace-check.sh
+docs/CLAUDE_CODE_SETUP.md
 docs/WORKSPACE_SETUP.md
 ```
 
@@ -157,6 +161,24 @@ Blocked trước native final response giữ exact `session_id` và `agent_respo
 ## Greenfield planning
 
 Trong repo requirement-only, child được tự chọn reversible technical decisions không materially đổi product semantics, external/public contract, security/compliance hoặc significant cost/operational envelope. Decision vượt boundary phải surface về QiQi/user thay vì invent product truth.
+
+## Claude Code coordinator
+
+Setup một lần tại workspace root:
+
+```bash
+bash scripts/setup-claude.sh
+```
+
+Sau đó dùng native startup:
+
+```bash
+claude
+```
+
+`.claude/CLAUDE.md` import canonical `AGENTS.md`; `.claude/settings.json` tắt coordinator auto memory. `qiqi_delegate` được đăng ký ở Claude local scope nên repository child không nhận orchestration MCP registration từ ancestor workspace. Runtime descendants của `qiqi_delegate` cũng tắt Claude auto memory để hidden machine-local memory không trở thành task state ngoài TaskPacket.
+
+Chi tiết xem `docs/CLAUDE_CODE_SETUP.md`.
 
 ## Verification
 
