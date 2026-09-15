@@ -57,4 +57,40 @@ fi
 
 python3 -m py_compile "$exporter"
 bash -n "$home/scripts/install-user-skill.sh"
+
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
+mkdir -p "$tmp/workspace"
+printf 'repositories:\n  - name: demo\n    path: demo\n' > "$tmp/workspace/repos.yaml"
+python3 - "$tmp/legacy.sqlite3" <<'PY'
+import json, sqlite3, sys
+path = sys.argv[1]
+doc = {
+    "id": "redmine:116655",
+    "title": "Legacy task",
+    "status": "active",
+    "phase": "investigation",
+    "summary": "Current imported state",
+    "current_requirements": ["Preserve legacy requirement"],
+    "repos": {"demo": {"status": "active", "summary": "Investigating"}},
+    "questions": [],
+    "decisions": [],
+    "changes": [],
+    "blockers": [],
+    "handoffs": [],
+    "next_actions": [{"action": "Continue investigation", "repo": "demo"}],
+    "checkpoints": [],
+}
+conn = sqlite3.connect(path)
+conn.execute("CREATE TABLE work_items (id TEXT PRIMARY KEY, revision INTEGER NOT NULL, status TEXT NOT NULL, document_json TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)")
+conn.execute("INSERT INTO work_items VALUES (?, ?, ?, ?, ?, ?)", ("redmine:116655", 7, "active", json.dumps(doc), "2026-01-01", "2026-01-02"))
+conn.commit()
+conn.close()
+PY
+python3 "$exporter" --workspace "$tmp/workspace" --db "$tmp/legacy.sqlite3"
+[[ -f "$tmp/workspace/work-items/redmine--116655/WORK_ITEM.md" ]] || fail 'legacy exporter did not create safe dossier'
+[[ -f "$tmp/workspace/.qiqi/migration-backups/v0024/legacy-work-items/redmine--116655.json" ]] || fail 'legacy exporter did not preserve full archive'
+[[ -f "$tmp/legacy.sqlite3" ]] || fail 'legacy exporter modified/deleted source DB'
+grep -Fq 'Preserve legacy requirement' "$tmp/workspace/work-items/redmine--116655/WORK_ITEM.md" || fail 'legacy requirement was not exported'
+
 printf 'Work Item filesystem template: OK\n'
