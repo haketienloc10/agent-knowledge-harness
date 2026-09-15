@@ -19,7 +19,7 @@ Khi tool/MCP không được expose như direct callable và QiQi cần hydrate 
 
 - Nếu exact tool name đã biết từ public boundary/policy, lookup đúng exact tool name rồi call.
 - Nếu exact tool name chưa biết, dùng narrow discovery đủ để chọn candidate rồi dừng.
-- Không broad-dump family hoặc toàn namespace chỉ để lấy một schema.
+- Không broad-dump family như `ALL_TOOLS.filter(...includes("knowledge_"))` hoặc toàn namespace qiqi_delegate chỉ để lấy một schema.
 - Không append schema của sibling tools không cần cho current action.
 
 ## Startup
