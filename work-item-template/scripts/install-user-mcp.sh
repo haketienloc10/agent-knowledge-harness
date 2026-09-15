@@ -5,16 +5,17 @@ home="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 project="$home/mcp/work_item"
 db_path="${HOME}/.local/share/agent-work-items/work-items.sqlite3"
 bin_dir="${HOME}/.local/bin"
+clients="both"
 
 usage() {
   cat <<'EOF'
-Usage: install-user-mcp.sh [--db-path PATH] [--bin-dir PATH]
+Usage: install-user-mcp.sh [--db-path PATH] [--bin-dir PATH] [--clients claude|codex|both]
 
 Installs the user-level Global Work Item tools:
 - managed user-scope `work-item` Agent Skill for QiQi/orchestration;
 - stable `agent-work-item-mcp` wrapper for the user-scope Work Item service;
 - read-only `agent-work-item` CLI for human list/detail inspection;
-- MCP registration named `work_item` for available Codex/Claude CLIs;
+- MCP registration named `work_item` for selected Codex/Claude CLIs;
 - one global SQLite database backing canonical QiQi/orchestration Work Item state.
 
 Repository child processes may still see a user-scope MCP registration depending on
@@ -38,6 +39,11 @@ while (($#)); do
       bin_dir="$2"
       shift 2
       ;;
+    --clients)
+      [[ $# -ge 2 ]] || { usage >&2; exit 64; }
+      clients="$2"
+      shift 2
+      ;;
     -h|--help)
       usage
       exit 0
@@ -49,6 +55,14 @@ while (($#)); do
       ;;
   esac
 done
+
+case "$clients" in
+  claude|codex|both) ;;
+  *)
+    printf 'ERROR: --clients must be claude, codex, or both\n' >&2
+    exit 64
+    ;;
+esac
 
 command -v uv >/dev/null 2>&1 || {
   printf 'ERROR: missing command: uv\n' >&2
@@ -110,37 +124,45 @@ verify_existing_target() {
   fi
 }
 
+client_enabled() {
+  [[ "$clients" == "both" || "$clients" == "$1" ]]
+}
+
 registered=0
-if command -v codex >/dev/null 2>&1; then
-  if existing="$(codex mcp get work_item 2>&1)"; then
-    verify_existing_target 'Codex' "$existing"
-    printf 'Codex MCP `work_item` already points to the stable wrapper; keeping registration.\n'
+if client_enabled codex; then
+  if command -v codex >/dev/null 2>&1; then
+    if existing="$(codex mcp get work_item 2>&1)"; then
+      verify_existing_target 'Codex' "$existing"
+      printf 'Codex MCP `work_item` already points to the stable wrapper; keeping registration.\n'
+    else
+      codex mcp add work_item -- "$mcp_wrapper"
+    fi
+    verified="$(codex mcp get work_item 2>&1)"
+    verify_existing_target 'Codex' "$verified"
+    registered=$((registered + 1))
   else
-    codex mcp add work_item -- "$mcp_wrapper"
+    printf 'WARN: codex not found; skipped selected Codex global MCP registration.\n' >&2
   fi
-  verified="$(codex mcp get work_item 2>&1)"
-  verify_existing_target 'Codex' "$verified"
-  registered=$((registered + 1))
-else
-  printf 'WARN: codex not found; skipped Codex global MCP registration.\n' >&2
 fi
 
-if command -v claude >/dev/null 2>&1; then
-  if existing="$(claude mcp get work_item 2>&1)"; then
-    verify_existing_target 'Claude' "$existing"
-    printf 'Claude MCP `work_item` already points to the stable wrapper; keeping registration.\n'
+if client_enabled claude; then
+  if command -v claude >/dev/null 2>&1; then
+    if existing="$(claude mcp get work_item 2>&1)"; then
+      verify_existing_target 'Claude' "$existing"
+      printf 'Claude MCP `work_item` already points to the stable wrapper; keeping registration.\n'
+    else
+      claude mcp add work_item --scope user "$mcp_wrapper"
+    fi
+    verified="$(claude mcp get work_item 2>&1)"
+    verify_existing_target 'Claude' "$verified"
+    registered=$((registered + 1))
   else
-    claude mcp add work_item --scope user "$mcp_wrapper"
+    printf 'WARN: claude not found; skipped selected Claude user MCP registration.\n' >&2
   fi
-  verified="$(claude mcp get work_item 2>&1)"
-  verify_existing_target 'Claude' "$verified"
-  registered=$((registered + 1))
-else
-  printf 'WARN: claude not found; skipped Claude user MCP registration.\n' >&2
 fi
 
 if ((registered == 0)); then
-  printf 'ERROR: neither codex nor claude was available for MCP registration.\n' >&2
+  printf 'ERROR: no selected Codex/Claude client was available for MCP registration.\n' >&2
   exit 69
 fi
 
