@@ -43,9 +43,14 @@ done
 exporter="$home/scripts/export-legacy-work-items.py"
 for pattern in \
   'WORK_ITEM_ID_RE = re.compile' \
+  'VALID_PHASES = {' \
+  'LEGACY_PHASE_ALIASES = {' \
+  'return "investigation", raw or None' \
   'source, external_id = item_id.split(":", 1)' \
   'return f"{source}--{external_id}"' \
   'target.resolve().relative_to(root.resolve())' \
+  'build_export_plan' \
+  'No filesystem mutation occurs until every record' \
   'migration-backups' \
   'source SQLite DB was not modified'; do
   grep -Fq -- "$pattern" "$exporter" || fail "legacy exporter missing contract: $pattern"
@@ -69,7 +74,7 @@ doc = {
     "id": "redmine:116655",
     "title": "Legacy task",
     "status": "active",
-    "phase": "investigation",
+    "phase": "review: security",
     "summary": "Current imported state",
     "current_requirements": ["Preserve legacy requirement"],
     "repos": {"demo": {"status": "active", "summary": "Investigating"}},
@@ -92,5 +97,42 @@ python3 "$exporter" --workspace "$tmp/workspace" --db "$tmp/legacy.sqlite3"
 [[ -f "$tmp/workspace/.qiqi/migration-backups/v0024/legacy-work-items/redmine--116655.json" ]] || fail 'legacy exporter did not preserve full archive'
 [[ -f "$tmp/legacy.sqlite3" ]] || fail 'legacy exporter modified/deleted source DB'
 grep -Fq 'Preserve legacy requirement' "$tmp/workspace/work-items/redmine--116655/WORK_ITEM.md" || fail 'legacy requirement was not exported'
+grep -Fxq 'phase: investigation' "$tmp/workspace/work-items/redmine--116655/WORK_ITEM.md" || fail 'unknown legacy phase was not normalized to a valid filesystem phase'
+grep -Fxq 'legacy_phase: "review: security"' "$tmp/workspace/work-items/redmine--116655/WORK_ITEM.md" || fail 'raw legacy phase was not preserved safely'
+
+# Preflight must detect a conflict in a later item before writing any earlier item.
+mkdir -p "$tmp/preflight-workspace/work-items/redmine--2"
+printf 'repositories:\n  - name: demo\n    path: demo\n' > "$tmp/preflight-workspace/repos.yaml"
+printf 'occupied\n' > "$tmp/preflight-workspace/work-items/redmine--2/existing.txt"
+python3 - "$tmp/preflight.sqlite3" <<'PY'
+import json, sqlite3, sys
+path = sys.argv[1]
+conn = sqlite3.connect(path)
+conn.execute("CREATE TABLE work_items (id TEXT PRIMARY KEY, revision INTEGER NOT NULL, status TEXT NOT NULL, document_json TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)")
+for item_id in ("redmine:1", "redmine:2"):
+    doc = {
+        "id": item_id,
+        "title": item_id,
+        "status": "active",
+        "phase": "uat",
+        "summary": "legacy",
+        "current_requirements": [],
+        "repos": {},
+        "questions": [],
+        "decisions": [],
+        "changes": [],
+        "blockers": [],
+        "handoffs": [],
+        "next_actions": [],
+        "checkpoints": [],
+    }
+    conn.execute("INSERT INTO work_items VALUES (?, ?, ?, ?, ?, ?)", (item_id, 1, "active", json.dumps(doc), "2026-01-01", "2026-01-01"))
+conn.commit()
+conn.close()
+PY
+if python3 "$exporter" --workspace "$tmp/preflight-workspace" --db "$tmp/preflight.sqlite3" >/dev/null 2>&1; then
+  fail 'legacy exporter must fail preflight when a later target conflicts'
+fi
+[[ ! -e "$tmp/preflight-workspace/work-items/redmine--1/WORK_ITEM.md" ]] || fail 'legacy exporter wrote earlier items before completing preflight'
 
 printf 'Work Item filesystem template: OK\n'
