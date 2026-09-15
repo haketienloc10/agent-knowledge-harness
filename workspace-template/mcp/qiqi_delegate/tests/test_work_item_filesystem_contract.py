@@ -31,11 +31,16 @@ class WorkItemFilesystemContractTests(unittest.TestCase):
         self.assertIn("child continuity không được phụ thuộc vào env inheritance từ Herdr server", agents)
         self.assertIn("work_item_path=<absolute dossier path>; id=<canonical id>; revision=<n>", agents)
 
-    def test_referential_closure_allows_locator_without_weakening_packet_semantics(self):
+    def test_referential_closure_is_active_and_allows_locator_without_weakening_packet(self):
+        agents = (self.workspace / "AGENTS.md").read_text(encoding="utf-8")
         closure = (
             self.workspace / "docs" / "TASKPACKET_REFERENTIAL_CLOSURE.md"
         ).read_text(encoding="utf-8")
         locator = "work_item_path=<absolute dossier path>; id=<canonical-id>; revision=<n>"
+
+        self.assertIn("TaskPacket referential closure", agents)
+        self.assertIn("docs/TASKPACKET_REFERENTIAL_CLOSURE.md", agents)
+        self.assertIn("absence outside observed coverage != negative evidence", agents)
         self.assertIn(locator, closure)
         self.assertIn("continuity/provenance locator", closure)
         self.assertIn("TaskPacket vẫn phải chứa objective/scope/acceptance", closure)
