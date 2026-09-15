@@ -1,17 +1,22 @@
 # Canonical machine-readable runtime routing registry for qiqi_delegate.
 # QiQi owns task semantics, route selection and START/RESUME.
 # qiqi_delegate owns native result capture/handoff injection.
-# QIQI_WORK_ITEMS_DIR is a workspace-owned shared task resource initialized by
-# scripts/qiqi-mcp-server.sh. Adapter integration may differ, but the semantic
-# env name is common for every supported agent.
+# QIQI_WORK_ITEMS_DIR is a delegated-runtime mount alias initialized by
+# scripts/qiqi-mcp-server.sh. Parent-side Work Item writes resolve
+# <workspace>/work-items directly and do not depend on this child-process env.
 
 version: 2
 
 agents:
   codex:
-    # Wrapper injects: codex --add-dir "$QIQI_WORK_ITEMS_DIR" ...
-    command: qiqi-codex-agent.sh
+    command: codex
     adapter: codex
+
+    # qiqi_delegate maps the shared filesystem capability to native --add-dir.
+    filesystem:
+      additional_dirs:
+        - env: QIQI_WORK_ITEMS_DIR
+          required: true
 
     start_args:
       - "{handoff_args}"
@@ -33,7 +38,7 @@ agents:
     command: claude
     adapter: claude
 
-    # qiqi_delegate native filesystem hook maps this common env to --add-dir.
+    # qiqi_delegate maps the shared filesystem capability to native --add-dir.
     filesystem:
       additional_dirs:
         - env: QIQI_WORK_ITEMS_DIR
