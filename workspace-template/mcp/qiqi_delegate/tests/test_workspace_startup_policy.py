@@ -42,7 +42,17 @@ class WorkspaceStartupPolicyTests(unittest.TestCase):
         orchestration = markdown_section(self.agents, "## Orchestration + delegation")
         self.assertIn("Default delegation route = `claude-balanced`", orchestration)
         self.assertIn("đọc `instructions/model-routing.md`", orchestration)
-        self.assertIn("fallback/default", orchestration)
+
+    def test_blocked_delegation_preserves_resume_identity_before_semantic_read(self) -> None:
+        after = markdown_section(self.agents, "## Sau delegation")
+        inspect_state = after.index('Inspect runtime `state`')
+        blocked = after.index('Nếu `state="blocked"`')
+        response = after.index("Nếu turn có native `agent_response`")
+        self.assertLess(inspect_state, blocked)
+        self.assertLess(blocked, response)
+        self.assertIn("giữ exact returned `session_id`", after)
+        self.assertIn("không invent blocker/content", after)
+        self.assertIn("RESUME exact session", after)
 
 
 if __name__ == "__main__":
