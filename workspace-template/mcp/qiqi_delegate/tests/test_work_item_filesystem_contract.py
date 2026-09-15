@@ -25,11 +25,11 @@ class WorkItemFilesystemContractTests(unittest.TestCase):
         self.assertEqual(claude["filesystem"]["additional_dirs"], expected)
         self.assertFalse((self.workspace / "scripts" / "qiqi-codex-agent.sh").exists())
 
-    def test_parent_work_item_policy_does_not_require_child_env(self):
+    def test_parent_and_child_locator_do_not_depend_on_herdr_env_inheritance(self):
         agents = (self.workspace / "AGENTS.md").read_text(encoding="utf-8")
         self.assertIn("<workspace>/work-items", agents)
-        self.assertIn("parent không phụ thuộc vào env do MCP child export", agents)
-        self.assertIn("delegated-runtime mount alias", agents)
+        self.assertIn("child continuity không được phụ thuộc vào env inheritance từ Herdr server", agents)
+        self.assertIn("work_item_path=<absolute dossier path>; id=<canonical id>; revision=<n>", agents)
 
     def test_current_policy_is_not_work_history(self):
         agents = (self.workspace / "AGENTS.md").read_text(encoding="utf-8")
