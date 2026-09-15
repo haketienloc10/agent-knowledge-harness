@@ -17,8 +17,9 @@ class ToolSchemaDiscoveryPolicyTests(unittest.TestCase):
         self.assertIn("narrow discovery", policy)
         self.assertIn("sibling tools", policy)
         self.assertIn('ALL_TOOLS.filter(...includes("knowledge_"))', policy)
-        self.assertIn('ALL_TOOLS.filter(...includes("work_item_"))', policy)
         self.assertIn("không thay đổi semantic protocol", policy)
+        self.assertIn("Work Item filesystem", policy)
+        self.assertNotIn('ALL_TOOLS.filter(...includes("work_item_"))', policy)
 
 
 if __name__ == "__main__":

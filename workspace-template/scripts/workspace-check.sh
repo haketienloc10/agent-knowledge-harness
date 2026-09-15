@@ -2,6 +2,7 @@
 set -euo pipefail
 
 workspace_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+mcp_project="$workspace_root/mcp/qiqi_delegate"
 fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 
 required=(
@@ -55,4 +56,8 @@ done
 bash -n "$launcher"
 bash -n "$workspace_root/scripts/qiqi-codex-agent.sh"
 bash -n "$workspace_root/scripts/workspace-check.sh"
+
+command -v uv >/dev/null 2>&1 || fail 'missing command: uv'
+uv run --project "$mcp_project" python -m unittest discover -s "$mcp_project/tests" -v
+
 printf 'Workspace contract: OK\n'

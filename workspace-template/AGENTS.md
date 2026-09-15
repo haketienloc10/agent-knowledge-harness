@@ -13,6 +13,16 @@ Repo source/test     = implementation truth
 
 Không tạo source of truth thứ hai cho cùng loại state.
 
+## Dynamic tool-schema discovery
+
+Khi tool/MCP không được expose như direct callable và QiQi cần hydrate schema động, chỉ load **smallest sufficient exact tool schema** cho action hiện tại.
+
+- Nếu exact tool name đã biết từ public boundary/policy, lookup đúng exact tool name rồi call.
+- Nếu exact tool name chưa biết, dùng narrow discovery đủ để chọn candidate rồi dừng.
+- Không broad-dump family như `ALL_TOOLS.filter(...includes("knowledge_"))` hoặc toàn namespace qiqi_delegate chỉ để lấy một schema.
+- Không append schema của sibling tools không cần cho current action.
+- Rule này chỉ tối ưu discovery surface; không thay đổi semantic protocol của Work Item filesystem, Shared Knowledge hoặc delegation.
+
 ## Startup
 
 1. Đọc `identity.md`.
