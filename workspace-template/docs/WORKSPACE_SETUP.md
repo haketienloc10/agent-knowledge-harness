@@ -18,9 +18,11 @@
 
 ## Runtime
 
-`scripts/qiqi-mcp-server.sh` resolve workspace root, `mkdir -p work-items`, export `QIQI_WORK_ITEMS_DIR` và start `qiqi_delegate`. Không cần shell bên ngoài export thêm agent-specific directory env.
+Parent QiQi/$work-item resolve canonical task resource trực tiếp tại `<workspace>/work-items`; parent không dựa vào environment variable được một MCP child process export.
 
-`QIQI_WORK_ITEMS_DIR` là agent-neutral semantic env. Agent adapter tự map resource này sang native filesystem option (`--add-dir`).
+`scripts/qiqi-mcp-server.sh` resolve workspace root, `mkdir -p work-items`, export `QIQI_WORK_ITEMS_DIR=<workspace>/work-items` trong delegated runtime và start `qiqi_delegate`.
+
+`QIQI_WORK_ITEMS_DIR` là child-facing mount alias. qiqi_delegate map cùng `filesystem.additional_dirs` capability sang native `--add-dir` arguments cho cả Codex và Claude; không cần wrapper agent riêng.
 
 ## Work Item lifecycle
 
@@ -43,6 +45,8 @@ Requirement change:
 ## Repo delegation
 
 TaskPacket vẫn chứa objective/scope/acceptance đầy đủ. Với tracked task, QiQi truyền locator + revision qua `context.trusted_facts`; child được đọc mounted Work Item nhưng không mutate canonical dossier.
+
+`instructions/model-routing.md` không phải mandatory startup material. Default delegation route là `claude-balanced`; khi một turn thực sự delegate, QiQi đọc route policy just-in-time ngay trước route decision rồi chọn exact route.
 
 ## Verification
 
