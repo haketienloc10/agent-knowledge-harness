@@ -44,6 +44,7 @@ done
 exporter="$home/scripts/export-legacy-work-items.py"
 for pattern in \
   'WORK_ITEM_ID_RE = re.compile' \
+  'TEXTILE_HEADING_RE = re.compile' \
   'VALID_PHASES = {' \
   'LEGACY_PHASE_ALIASES = {' \
   'return "investigation", raw or None' \
@@ -102,7 +103,7 @@ conn.execute("CREATE TABLE work_item_artifact_sections (work_item_id TEXT NOT NU
 conn.execute("CREATE TABLE work_item_artifact_chunks (work_item_id TEXT NOT NULL, artifact_id TEXT NOT NULL, section_id TEXT NOT NULL, chunk_index INTEGER NOT NULL, content TEXT NOT NULL, char_count INTEGER NOT NULL, byte_count INTEGER NOT NULL, created_at TEXT NOT NULL)")
 artifacts = [
     ("investigation:1", "investigation", "Investigation", "Verified finding", 5, "scope", "Scope", "Investigated legacy evidence."),
-    ("report:1", "report", "Final report", "Legacy report summary", 7, "root-cause", "1. Root-cause/requirement", "Legacy root cause."),
+    ("report:1", "report", "Final report", "Legacy report summary", 7, "root-cause", "h3. +1. Root-cause/requirement:+", "Legacy root cause."),
 ]
 for artifact_id, artifact_type, title, summary, based_on, section_id, section_title, content in artifacts:
     conn.execute("INSERT INTO work_item_artifacts VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", ("redmine:116655", artifact_id, artifact_type, "final", title, summary, based_on, 1, "2026-01-01", "2026-01-02"))
@@ -122,9 +123,9 @@ grep -Fxq 'legacy_phase: "review: security"' "$dossier/WORK_ITEM.md" || fail 'ra
 grep -Fq 'Legacy unanswered question' "$dossier/WORK_ITEM.md" || fail 'pre-v1 question without status was dropped'
 grep -Fq 'Legacy active decision' "$dossier/WORK_ITEM.md" || fail 'pre-v1 decision without status was dropped'
 grep -Fxq 'based_on_work_item_revision: 5' "$dossier/investigation.md" || fail 'artifact Work Item revision provenance was dropped'
-grep -Fq 'h2. 1. Root-cause/requirement' "$dossier/report.textile" || fail 'legacy report was not rendered as Textile'
-if grep -Eq '^#{1,6} ' "$dossier/report.textile"; then
-  fail 'legacy report.textile contains Markdown headings'
+grep -Fxq 'h3. +1. Root-cause/requirement:+' "$dossier/report.textile" || fail 'legacy Textile report heading was not preserved verbatim'
+if grep -Fq 'h2. h3.' "$dossier/report.textile" || grep -Eq '^#{1,6} ' "$dossier/report.textile"; then
+  fail 'legacy report.textile was wrapped in non-Textile heading syntax'
 fi
 
 # Directory-key encoding must be injective for every canonical ID pair.
