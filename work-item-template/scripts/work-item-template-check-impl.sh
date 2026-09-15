@@ -29,15 +29,15 @@ done
 skill="$home/skills/work-item/SKILL.md"
 for pattern in \
   'current-state task dossier' \
-  'Multi-turn continuity MUST be represented as \*\*current semantic state\*\*' \
+  'Multi-turn continuity MUST be represented as **current semantic state**' \
   'Requirement change không tự invalidate prior findings' \
   'work_item=<id>; revision=<revision>' \
   'Không tạo mặc định history/turn/execution/checkpoint files' \
   'report.textile'; do
-  rg -q "$pattern" "$skill" || fail "skill missing contract: $pattern"
+  grep -Fq -- "$pattern" "$skill" || fail "skill missing contract: $pattern"
 done
 
-if rg -q 'work_item_get|work_item_update|work_item_history_read|Global Work Item MCP|WORK_ITEM_DB_PATH' "$home/README.md" "$home/ARTIFACTS.md" "$skill"; then
+if grep -Eq 'work_item_get|work_item_update|work_item_history_read|Global Work Item MCP|WORK_ITEM_DB_PATH' "$home/README.md" "$home/ARTIFACTS.md" "$skill"; then
   fail 'legacy MCP/SQLite Work Item contract remains in current docs'
 fi
 
