@@ -263,6 +263,8 @@ uv sync --project "$workspace_root/mcp/qiqi_delegate"
 
 if [[ "$coordinators" == "claude" || "$coordinators" == "both" ]]; then
   bash "$workspace_root/scripts/setup-claude.sh"
+elif [[ "$execution_agents" == "claude" || "$execution_agents" == "both" ]]; then
+  bash "$workspace_root/scripts/setup-claude.sh" --children-only
 fi
 
 if [[ "$coordinators" == "codex" || "$coordinators" == "both" ]]; then
