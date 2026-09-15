@@ -1,0 +1,8 @@
+{
+  "autoMemoryEnabled": false,
+  "permissions": {
+    "allow": [
+      "mcp__qiqi_delegate__delegate_repo_task"
+    ]
+  }
+}
