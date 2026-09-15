@@ -18,7 +18,7 @@
 
 ## Runtime
 
-`scripts/qiqi-mcp-server.sh` resolve workspace root, `mkdir -p work-items`, export `QIQI_WORK_ITEMS_DIR` và start `qiqi_delegate`. Không cần shell ngoài export `QIQI_CLAUDE_ADDITIONAL_DIR` hay path tương đương.
+`scripts/qiqi-mcp-server.sh` resolve workspace root, `mkdir -p work-items`, export `QIQI_WORK_ITEMS_DIR` và start `qiqi_delegate`. Không cần shell bên ngoài export thêm agent-specific directory env.
 
 `QIQI_WORK_ITEMS_DIR` là agent-neutral semantic env. Agent adapter tự map resource này sang native filesystem option (`--add-dir`).
 
