@@ -8,7 +8,7 @@ description: >
 
 # Work Item lifecycle protocol
 
-Work Item là shared **current-state task dossier** tại `$QIQI_WORK_ITEMS_DIR/<id>/`. Không dùng MCP/SQLite và không biến Work Item thành execution history.
+Work Item là shared **current-state task dossier** tại `<workspace>/work-items/<id>/`. Không dùng MCP/SQLite và không biến Work Item thành execution history.
 
 ## Activation
 
@@ -16,14 +16,18 @@ Apply khi:
 
 - request có canonical/tracked task ID cần theo dõi xuyên turn;
 - user yêu cầu tạo/dùng Work Item;
-- conversation tiếp tục một existing `$QIQI_WORK_ITEMS_DIR/<id>`;
+- conversation tiếp tục một existing `<workspace>/work-items/<id>`;
 - workflow yêu cầu final report từ task state/evidence.
 
 Không tự tạo Work Item cho mọi câu hỏi nhỏ/mechanical task.
 
 ## Storage contract
 
-`QIQI_WORK_ITEMS_DIR` phải trỏ tới workspace `work-items/` và được runtime mount cho supported child agents.
+Parent-side canonical path là `<workspace>/work-items`, không phụ thuộc vào env do một MCP child process export.
+
+Resolve `<workspace>` từ active workspace context. Khi cần filesystem discovery, bắt đầu từ current working directory và walk upward tới nearest directory chứa cả `repos.yaml` và `identity.md`; dùng `<workspace>/work-items` ở đó. Nếu `QIQI_WORK_ITEMS_DIR` đã được parent environment set explicitly, chỉ dùng nó khi nó resolve tới intended workspace Work Items resource.
+
+Trong delegated child runtime, qiqi_delegate mount cùng resource qua `QIQI_WORK_ITEMS_DIR`; env này là child-facing mount alias, không phải điều kiện để canonical writer hoạt động.
 
 Per task:
 
@@ -76,7 +80,7 @@ Chỉ giữ current semantic state. `revision` tăng khi canonical task meaning 
 
 Khi nhận request đầu tiên:
 
-1. Resolve/create `<id>/`.
+1. Resolve/create `<workspace>/work-items/<id>/`.
 2. Materialize `WORK_ITEM.md` revision 1 từ effective requirement.
 3. Tạo `intake.md` khi original wording/source/material change context có giá trị cho task/report.
 
@@ -134,7 +138,7 @@ Với tracked Work Item, QiQi SHOULD thêm một `context.trusted_facts` locator
 
 ```text
 fact: "work_item=<id>; revision=<revision>"
-source: "QIQI_WORK_ITEMS_DIR"
+source: "workspace Work Item"
 ```
 
 Child có thể đọc `$QIQI_WORK_ITEMS_DIR/<id>/WORK_ITEM.md` và relevant lifecycle documents để lấy current durable continuity, nhưng assignment semantics vẫn do TaskPacket định nghĩa.
@@ -142,7 +146,7 @@ Child có thể đọc `$QIQI_WORK_ITEMS_DIR/<id>/WORK_ITEM.md` và relevant lif
 Sau child return:
 
 1. Đọc exact native response.
-2. So delegated revision với current `WORK_ITEM.md` revision.
+2. So delegated revision với current `<workspace>/work-items/<id>/WORK_ITEM.md` revision.
 3. Nếu revision đổi, reconcile materiality/finding-by-finding trước khi promote.
 4. Persist chỉ conclusions/evidence/decisions làm đổi current task understanding hoặc acceptance.
 5. Không lưu turn transcript/progress log.
