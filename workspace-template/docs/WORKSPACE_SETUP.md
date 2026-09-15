@@ -41,7 +41,11 @@ cd agent-knowledge-harness/work-item-template
 python3 scripts/export-legacy-work-items.py --workspace /absolute/path/to/workspace
 ```
 
-Default source là `~/.local/share/agent-work-items/work-items.sqlite3` hoặc `WORK_ITEM_DB_PATH`. Exporter preflight toàn bộ output trước khi ghi, tạo current dossiers và lưu full legacy JSON/artifact archive tại `<workspace>/.qiqi/migration-backups/v0024/legacy-work-items/`. Source SQLite không bị sửa/xóa. Imported investigation/plan/review giữ Work Item revision provenance và imported report giữ Textile syntax. Nếu exporter báo conflict, reconcile trước; không disable legacy service cho tới khi export thành công.
+Default source là `~/.local/share/agent-work-items/work-items.sqlite3` hoặc `WORK_ITEM_DB_PATH`. Legacy installer từng hỗ trợ `--db-path`; nếu đã dùng option đó, phải truyền exact DB bằng `--db /absolute/path/to/work-items.sqlite3`. Missing selected DB là lỗi, không được coi như export rỗng thành công.
+
+Exporter đọc toàn bộ Work Item + artifact/section/chunk trong một SQLite read snapshot và preflight toàn bộ output trước filesystem write. Current dossier giữ current-state semantics như pending handoff và repository verification; lifecycle docs giữ revision provenance/Textile shape; full raw backup giữ chunk metadata tại `<workspace>/.qiqi/migration-backups/v0024/legacy-work-items/` với permission hạn chế. Source SQLite không bị sửa/xóa và partial artifact schema fail closed.
+
+Không chạy thêm legacy Work Item mutation trong lúc export. Nếu exporter báo conflict/schema error, reconcile trước; chỉ disable/remove legacy registration sau khi export thành công và kiểm tra dossier cần thiết.
 
 ## Work Item lifecycle
 
@@ -51,6 +55,8 @@ Cài/update `$work-item` skill từ harness:
 cd work-item-template
 bash scripts/install-user-skill.sh
 ```
+
+Installer chỉ adopt một existing unmanaged `work-item` skill khi **toàn bộ skill tree** (SKILL.md + templates) giống source; matching `SKILL.md` đơn lẻ không đủ.
 
 `WORK_ITEM.md` là current canonical state; lifecycle docs là living semantic state, không append-only history. Requirement change rewrite effective requirements, increment revision và reconcile prior investigation/plan/review theo materiality.
 
