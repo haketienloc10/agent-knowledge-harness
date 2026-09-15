@@ -38,5 +38,4 @@ jobs:
       - name: Check managed shell syntax
         run: |
           bash -n workspace-template/scripts/qiqi-mcp-server.sh
-          bash -n workspace-template/scripts/qiqi-codex-agent.sh
           bash -n work-item-template/scripts/install-user-skill.sh
