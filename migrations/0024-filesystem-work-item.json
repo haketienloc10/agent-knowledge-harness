@@ -1,7 +1,7 @@
 {
   "version": 24,
   "from_ref": "ce2e758f24c27f9c0f5e5f6d81bb9b9b4d3d88a8",
-  "to_ref": "dd5feea8394960c32fbc555d91a29a8d28ade77c",
+  "to_ref": "1e79138e93b33eff29924ffc99eadd12f336d9b3",
   "description": "replace the user/global Work Item MCP boundary with a workspace-owned filesystem Work Item lifecycle, preserve legacy SQLite Work Items via work-item-template/scripts/export-legacy-work-items.py before removing the old MCP registration, resolve canonical parent Work Items from <workspace>/work-items, mount the same resource into Codex and Claude through qiqi_delegate native --add-dir arguments, and align workspace/repo policy with current-state multi-turn/change-request reconciliation; rerun work-item-template/scripts/install-user-skill.sh after migration",
   "workspace": {
     "merge": [],
