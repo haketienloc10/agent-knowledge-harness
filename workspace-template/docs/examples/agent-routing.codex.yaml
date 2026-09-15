@@ -3,8 +3,12 @@ version: 2
 
 agents:
   codex:
-    command: qiqi-codex-agent.sh
+    command: codex
     adapter: codex
+    filesystem:
+      additional_dirs:
+        - env: QIQI_WORK_ITEMS_DIR
+          required: true
     start_args:
       - "{handoff_args}"
       - --dangerously-bypass-approvals-and-sandbox
