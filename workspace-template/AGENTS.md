@@ -19,41 +19,39 @@ Khi tool/MCP không được expose như direct callable và QiQi cần hydrate 
 
 - Nếu exact tool name đã biết từ public boundary/policy, lookup đúng exact tool name rồi call.
 - Nếu exact tool name chưa biết, dùng narrow discovery đủ để chọn candidate rồi dừng.
-- Không broad-dump family như `ALL_TOOLS.filter(...includes("knowledge_"))` hoặc toàn namespace qiqi_delegate chỉ để lấy một schema.
+- Không broad-dump family hoặc toàn namespace chỉ để lấy một schema.
 - Không append schema của sibling tools không cần cho current action.
-- Rule này chỉ tối ưu discovery surface; không thay đổi semantic protocol của Work Item filesystem, Shared Knowledge hoặc delegation.
 
 ## Startup
 
 1. Đọc `identity.md`.
 2. Đọc `repos.yaml`.
-3. Nếu request identify/continue tracked task, apply `$work-item` và đọc đúng `work-items/<id>/WORK_ITEM.md` + smallest relevant lifecycle docs.
+3. Nếu request identify/continue tracked task, apply `$work-item` và đọc đúng safe Work Item dossier + smallest relevant lifecycle docs.
 4. Chỉ đọc `SYSTEM_MAP.md` khi cần cross-repo semantic fact ngoài registry.
 5. Dùng Shared Knowledge theo decision rule, không search như ceremony.
 
-`instructions/model-routing.md` **không phải mandatory startup read**. Default delegation route = `claude-balanced`.
-Turn không delegate không hydrate route policy. Khi một turn thực sự cần delegation, đọc `instructions/model-routing.md` **just-in-time ngay trước route decision** rồi chọn exact route; không yêu cầu QiQi đoán exception signal từ always-on policy.
+`instructions/model-routing.md` **không phải mandatory startup read**. Default delegation route = `claude-balanced`. Turn không delegate không hydrate route policy. Khi một turn thực sự cần delegation, đọc `instructions/model-routing.md` **just-in-time ngay trước route decision** rồi chọn exact route.
 
 ## Work Item
 
-Work Item là filesystem current-state dossier tại `<workspace>/work-items`. QiQi là canonical writer và parent-side protocol resolve path này trực tiếp từ active workspace root; parent không phụ thuộc vào env do MCP child export.
+Work Item là filesystem current-state dossier tại `<workspace>/work-items`. QiQi là canonical writer và parent-side protocol resolve path này trực tiếp từ active workspace root.
 
-`QIQI_WORK_ITEMS_DIR` chỉ là delegated-runtime mount alias trỏ tới cùng `<workspace>/work-items` để supported child agents có thể đọc dossier bằng native filesystem access.
+Canonical ID/path mechanics thuộc `$work-item`: validate canonical ID, derive filesystem-safe directory key, và verify resolved dossier vẫn nằm dưới Work Items root.
 
-- Không dùng Work Item MCP/SQLite.
+`QIQI_WORK_ITEMS_DIR` chỉ là qiqi_delegate runtime alias để inject native `--add-dir`; child continuity không được phụ thuộc vào env inheritance từ Herdr server.
+
+- Không dùng Work Item MCP/SQLite cho runtime mới.
 - Không persist turn history, command chronology, intermediate attempts hoặc routine progress.
 - `WORK_ITEM.md` giữ effective current requirements/acceptance/scope/decisions/questions/blockers/state/next actions.
 - `intake.md`, `investigation.md`, `plan.md`, `review.md`, `report.textile` là living lifecycle docs, materialize khi cần.
 - Requirement change rewrite current requirement và tăng `revision`; prior findings phải reconcile materiality thay vì auto discard.
 - Multi-turn continuity merge/rewrite current semantic state; native session giữ short-term conversation continuity.
 
-Chi tiết operational protocol nằm trong `$work-item`; không duplicate mechanics ở đây.
-
 ## Orchestration + delegation
 
 `repos.yaml` là canonical repository registry. QiQi sở hữu repo/dependency/wave, user/product semantics, Work Item reconciliation, route, START/RESUME, stale detection và final completion.
 
-Default delegation route = `claude-balanced`. Ngay trước mọi actual delegation, đọc `instructions/model-routing.md` và chọn exact route nhẹ nhất vẫn đủ tin cậy; `claude-balanced` là fallback/default khi không có signal rõ cho route khác.
+Default delegation route = `claude-balanced`. Ngay trước mọi actual delegation, đọc `instructions/model-routing.md` và chọn exact route nhẹ nhất vẫn đủ tin cậy.
 
 TaskPacket phải là smallest sufficient repo-local assignment contract:
 
@@ -68,17 +66,22 @@ constraints[]?
 known_unknowns[]?
 ```
 
-Với tracked Work Item, thêm locator/revision trong `context.trusted_facts` theo `$work-item`, để child có thể đọc shared dossier. Tuy vậy packet vẫn phải đủ nghĩa; Work Item không phải fallback cho missing objective/scope/acceptance.
+Với tracked Work Item, thêm trusted fact theo `$work-item`:
 
-Child có thể đọc mounted `$QIQI_WORK_ITEMS_DIR`, nhưng không trực tiếp mutate canonical dossier và không tự mark global task done.
+```text
+work_item_path=<absolute dossier path>; id=<canonical id>; revision=<n>
+```
+
+Absolute locator cho child đọc mounted dossier trực tiếp; packet vẫn phải đủ nghĩa và Work Item không phải fallback cho missing objective/scope/acceptance. Child không trực tiếp mutate canonical dossier và không tự mark global task done.
 
 ## Sau delegation
 
-1. Đọc exact native `agent_response`; runtime state không đồng nghĩa semantic completion.
-2. Với tracked task, so delegated Work Item revision với current revision.
-3. Nếu đổi revision, reconcile finding-by-finding với effective requirement mới trước khi promote.
-4. Persist chỉ material current-state facts/decisions/evidence/acceptance; không lưu execution transcript.
-5. Tiếp tục wave/RESUME/redelegate/hỏi user hoặc complete theo current truth.
+1. Inspect runtime `state` trước khi đọc semantic handoff.
+2. Nếu `state="blocked"`, `agent_response` có thể là `null`: giữ exact returned `session_id`, không invent blocker/content, và chỉ RESUME exact session khi interactive continuity còn material; START/redelegate/hỏi user vẫn hợp lệ nếu không cần exact continuity.
+3. Nếu turn có native `agent_response`, đọc exact response; runtime settled/failed không tự đồng nghĩa semantic completion.
+4. Với tracked task, so delegated Work Item revision với current revision; nếu đổi revision, reconcile finding-by-finding với effective requirement mới trước khi promote.
+5. Persist chỉ material current-state facts/decisions/evidence/acceptance; không lưu execution transcript.
+6. Tiếp tục wave/RESUME/redelegate/hỏi user hoặc complete theo current truth.
 
 ## START/RESUME
 
@@ -91,7 +94,7 @@ Known session_id tự nó không phải lý do để resume. Fresh session ưu t
 
 ## Shared Knowledge
 
-Search/read khi reusable knowledge có thể đổi interpretation/implementation/verification. Live owner source/test và reconciled current task truth thắng stale knowledge. Persist chỉ verified reusable conclusion.
+Search/read khi reusable knowledge có thể đổi interpretation/implementation/verification. Live owner source/test và reconciled current task truth thắng stale knowledge. Persist chỉ verified reusable conclusion và không persist secret/dữ liệu nhạy cảm.
 
 ## Delegation Silence
 
