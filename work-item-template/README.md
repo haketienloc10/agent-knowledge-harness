@@ -14,13 +14,13 @@ Canonical ID giữ dạng `source:external-id`, ví dụ `redmine:116655`, và M
 ^[a-z][a-z0-9_-]*:[A-Za-z0-9][A-Za-z0-9._-]*$
 ```
 
-Filesystem không dùng raw ID. Directory key được derive bằng cách thay colon separator đầu tiên bằng `--`:
+Filesystem không dùng raw ID. Directory key được derive bằng cách thay colon separator đầu tiên bằng `~`:
 
 ```text
-redmine:116655 -> work-items/redmine--116655/
+redmine:116655 -> work-items/redmine~116655/
 ```
 
-Resolved task directory phải nằm dưới resolved `<workspace>/work-items`; reject traversal/separator/non-canonical IDs.
+`~` không thuộc grammar của source/external-id, nên mapping này không collision giữa hai canonical IDs hợp lệ. Resolved task directory phải nằm dưới resolved `<workspace>/work-items`; reject traversal/separator/non-canonical IDs.
 
 Mỗi tracked task có:
 
@@ -68,7 +68,7 @@ Exporter đọc mặc định `~/.local/share/agent-work-items/work-items.sqlite
 <workspace>/.qiqi/migration-backups/v0024/legacy-work-items/
 ```
 
-Source SQLite DB không bị sửa/xóa. Nếu target dossier hoặc backup đã tồn tại, exporter fail thay vì overwrite. Chỉ remove legacy MCP registration sau khi export thành công và kiểm tra dossier cần thiết.
+Source SQLite DB không bị sửa/xóa. Exporter preflight toàn bộ target trước khi ghi; nếu target dossier hoặc backup đã tồn tại, exporter fail thay vì partial-write/overwrite. Imported investigation/plan/review giữ `based_on_work_item_revision`; imported report vẫn là Textile. Chỉ remove legacy MCP registration sau khi export thành công và kiểm tra dossier cần thiết.
 
 ## Lifecycle
 
