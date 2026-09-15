@@ -62,13 +62,17 @@ Trước khi gỡ user-scoped legacy `work_item` MCP registration, export dữ l
 python3 scripts/export-legacy-work-items.py --workspace /absolute/path/to/workspace
 ```
 
-Exporter đọc mặc định `~/.local/share/agent-work-items/work-items.sqlite3` (hoặc `WORK_ITEM_DB_PATH`), tạo current filesystem dossiers, materialize latest lifecycle artifact của mỗi type, và lưu full legacy JSON + toàn bộ artifact content dưới:
+Exporter đọc mặc định `~/.local/share/agent-work-items/work-items.sqlite3` hoặc `WORK_ITEM_DB_PATH`. Nếu legacy installer trước đây dùng `--db-path`, truyền **đúng path đó** bằng `--db /absolute/path/to/work-items.sqlite3`; exporter fail nếu selected DB không tồn tại thay vì báo success rỗng.
+
+Exporter lấy Work Item rows + artifact rows/sections/chunks trong một SQLite read snapshot, preflight toàn bộ output trước khi ghi, tạo current filesystem dossiers, materialize latest lifecycle artifact theo legacy ordering, và lưu full legacy JSON + artifact/chunk metadata dưới:
 
 ```text
 <workspace>/.qiqi/migration-backups/v0024/legacy-work-items/
 ```
 
-Source SQLite DB không bị sửa/xóa. Exporter preflight toàn bộ target trước khi ghi; nếu target dossier hoặc backup đã tồn tại, exporter fail thay vì partial-write/overwrite. Imported investigation/plan/review giữ `based_on_work_item_revision`; imported report vẫn là Textile. Chỉ remove legacy MCP registration sau khi export thành công và kiểm tra dossier cần thiết.
+Backup directory/file dùng permission hạn chế (`0700`/`0600`). Source SQLite DB không bị sửa/xóa. Imported current dossier giữ active decisions/open questions/open blockers/pending handoffs, repository status/summary/verification và next-action ownership; imported investigation/plan/review giữ `based_on_work_item_revision`; imported report giữ canonical Textile section shape. Partial legacy artifact schema hoặc target conflict đều fail trước filesystem write.
+
+Trong lúc export, không chạy thêm legacy Work Item mutation. Chỉ remove legacy MCP registration sau khi export thành công và kiểm tra dossier cần thiết.
 
 ## Lifecycle
 
