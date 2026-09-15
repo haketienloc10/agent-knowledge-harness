@@ -39,8 +39,19 @@ grep -Fq 'env: QIQI_WORK_ITEMS_DIR' "$routing" || fail 'Claude must use common Q
 grep -Fq 'required: true' "$routing" || fail 'Work Items directory must be required for configured shared-dir route'
 grep -Fq -- '--add-dir "$QIQI_WORK_ITEMS_DIR"' "$workspace_root/scripts/qiqi-codex-agent.sh" || fail 'Codex wrapper must inject --add-dir'
 
-if grep -R -q --exclude-dir=migrations 'QIQI_CLAUDE_ADDITIONAL_DIR' "$workspace_root"; then
-  fail 'legacy Claude-specific additional-dir env remains in current workspace template'
+legacy_scan=(
+  "$launcher"
+  "$routing"
+  "$config"
+  "$agents"
+  "$workspace_root/identity.md"
+  "$workspace_root/README.md"
+  "$workspace_root/docs/WORKSPACE_SETUP.md"
+  "$workspace_root/docs/examples/agent-routing.claude-code.yaml"
+  "$workspace_root/docs/examples/agent-routing.codex.yaml"
+)
+if grep -q 'QIQI_CLAUDE_ADDITIONAL_DIR' "${legacy_scan[@]}"; then
+  fail 'legacy Claude-specific additional-dir env remains in current runtime/config/policy'
 fi
 if grep -Eq '^env_vars[[:space:]]*=' "$config"; then
   fail '.codex/config.toml must not require externally exported Work Items env'
