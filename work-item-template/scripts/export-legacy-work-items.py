@@ -17,6 +17,7 @@ ARTIFACT_FILE_BY_TYPE = {
     "review": "review.md",
     "report": "report.textile",
 }
+REVISIONED_ARTIFACT_TYPES = {"investigation", "plan", "review"}
 VALID_PHASES = {
     "intake",
     "investigation",
@@ -58,7 +59,9 @@ def safe_key(item_id: str) -> str:
     if not WORK_ITEM_ID_RE.fullmatch(item_id):
         die(f"legacy Work Item id is not canonical/path-safe: {item_id!r}")
     source, external_id = item_id.split(":", 1)
-    return f"{source}--{external_id}"
+    # `~` is outside the canonical ID component grammar, so this separator is
+    # injective: distinct canonical IDs cannot collapse onto one directory key.
+    return f"{source}~{external_id}"
 
 
 def ensure_beneath(root: Path, target: Path) -> None:
@@ -89,11 +92,24 @@ def bullets(values: list[str], empty: str = "- None") -> str:
     return "\n".join(f"- {value}" for value in cleaned) if cleaned else empty
 
 
-def active_records(document: dict[str, Any], collection: str, status: str) -> list[dict[str, Any]]:
+def active_records(
+    document: dict[str, Any],
+    collection: str,
+    status: str,
+    *,
+    legacy_default_status: str | None = None,
+) -> list[dict[str, Any]]:
     values = document.get(collection, [])
     if not isinstance(values, list):
         return []
-    return [item for item in values if isinstance(item, dict) and item.get("status") == status]
+    result: list[dict[str, Any]] = []
+    for item in values:
+        if not isinstance(item, dict):
+            continue
+        item_status = item.get("status", legacy_default_status)
+        if item_status == status:
+            result.append(item)
+    return result
 
 
 def render_work_item(document: dict[str, Any], revision: int, fallback_status: str) -> str:
@@ -106,9 +122,24 @@ def render_work_item(document: dict[str, Any], revision: int, fallback_status: s
     if not isinstance(requirements, list):
         requirements = []
 
-    decisions = [str(item.get("summary", "")).strip() for item in active_records(document, "decisions", "active")]
-    questions = [str(item.get("question", "")).strip() for item in active_records(document, "questions", "open")]
-    blockers = [str(item.get("summary", "")).strip() for item in active_records(document, "blockers", "open")]
+    # Pre-v1 canonical documents could omit lifecycle status fields. Mirror the
+    # legacy migration defaults so unresolved/current semantic records are not lost.
+    decisions = [
+        str(item.get("summary", "")).strip()
+        for item in active_records(
+            document, "decisions", "active", legacy_default_status="active"
+        )
+    ]
+    questions = [
+        str(item.get("question", "")).strip()
+        for item in active_records(
+            document, "questions", "open", legacy_default_status="open"
+        )
+    ]
+    blockers = [
+        str(item.get("summary", "")).strip()
+        for item in active_records(document, "blockers", "open")
+    ]
 
     next_actions: list[str] = []
     raw_actions = document.get("next_actions", [])
@@ -227,10 +258,19 @@ def read_artifacts(conn: sqlite3.Connection, item_id: str) -> list[dict[str, Any
     return artifacts
 
 
-def render_artifact(artifact: dict[str, Any]) -> str:
+def render_markdown_artifact(artifact_type: str, artifact: dict[str, Any]) -> str:
     title = str(artifact.get("title") or artifact.get("artifact_id") or "Imported artifact")
     summary = str(artifact.get("summary") or "").strip()
-    parts = [f"# {title}"]
+    parts: list[str] = []
+    if artifact_type in REVISIONED_ARTIFACT_TYPES:
+        based_on = artifact.get("based_on_work_item_revision")
+        if not isinstance(based_on, int) or isinstance(based_on, bool) or based_on < 1:
+            die(
+                f"legacy {artifact_type} artifact has invalid based_on_work_item_revision: "
+                f"{artifact.get('artifact_id')!r}"
+            )
+        parts.extend(["---", f"based_on_work_item_revision: {based_on}", "---", ""])
+    parts.append(f"# {title}")
     if summary:
         parts.extend(["", summary])
     for section in artifact.get("sections", []):
@@ -238,6 +278,25 @@ def render_artifact(artifact: dict[str, Any]) -> str:
         content = str(section.get("content") or "")
         parts.extend(["", f"## {section_title}", "", content.rstrip()])
     return "\n".join(parts).rstrip() + "\n"
+
+
+def render_textile_report(artifact: dict[str, Any]) -> str:
+    title = str(artifact.get("title") or artifact.get("artifact_id") or "Imported report")
+    summary = str(artifact.get("summary") or "").strip()
+    parts = [f"h1. {title}"]
+    if summary:
+        parts.extend(["", summary])
+    for section in artifact.get("sections", []):
+        section_title = str(section.get("title") or section.get("section_id") or "Section")
+        content = str(section.get("content") or "")
+        parts.extend(["", f"h2. {section_title}", "", content.rstrip()])
+    return "\n".join(parts).rstrip() + "\n"
+
+
+def render_artifact(artifact_type: str, artifact: dict[str, Any]) -> str:
+    if artifact_type == "report":
+        return render_textile_report(artifact)
+    return render_markdown_artifact(artifact_type, artifact)
 
 
 def reserve_output(path: Path, reserved: set[Path]) -> None:
@@ -296,7 +355,7 @@ def build_export_plan(
             files.append(
                 (
                     target / ARTIFACT_FILE_BY_TYPE[artifact_type],
-                    render_artifact(artifact),
+                    render_artifact(artifact_type, artifact),
                 )
             )
 
