@@ -1,0 +1,34 @@
+h3. +1. Root-cause/requirement:+
+
+p((. *Yêu cầu:* <effective requirement>
+
+<verified root cause; do not invent>
+
+h3. +2. Solution:+
+
+p((. <implemented/agreed solution and material behavior changes>
+
+h3. +3. Affected:+
+
+p((. <Service / Site / Device / Chức năng from verified evidence>
+
+h3. +4. Impact Module Analysis+
+
+p((. <affected modules/repositories>
+
+h3. +5. SQL_Report+
+
+p((. <No only when verified; otherwise describe required SQL/report impact>
+
+h3. +6. Commits:+
+
+p((. DDL/DML: <No/Yes only when verified>
+<<branch user tự điền>>
+
+h3. +7. Testcase /UT:+
+
+p((. <actual testcase/UT coverage and results; state missing verification explicitly>
+
+h3. +8. Deploy:+
+
+p((. <<pre4 user tự điền>>
