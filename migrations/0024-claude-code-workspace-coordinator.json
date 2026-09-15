@@ -1,0 +1,27 @@
+{
+  "version": 24,
+  "from_ref": "ce2e758f24c27f9c0f5e5f6d81bb9b9b4d3d88a8",
+  "to_ref": "75d7349d94c4af9a78c04d2add04b22a1ac7b406",
+  "description": "add native Claude Code QiQi coordinator support with local-scope qiqi_delegate registration, shared AGENTS.md import, and auto-memory isolation; after migration run bash scripts/setup-claude.sh once so machine-local MCP registration and merge-safe Claude project settings are applied",
+  "workspace": {
+    "merge": [],
+    "replace": [
+      "workspace-template/README.md",
+      "workspace-template/docs/CLAUDE_CODE_SETUP.md",
+      "workspace-template/mcp/qiqi_delegate/tests/test_claude_workspace_config.py",
+      "workspace-template/scripts/qiqi-mcp-server.sh",
+      "workspace-template/scripts/setup-claude.sh"
+    ],
+    "delete": [],
+    "manual_review": [
+      "workspace-template/.claude/CLAUDE.md",
+      "workspace-template/.claude/settings.json"
+    ]
+  },
+  "repo": {
+    "merge": [],
+    "replace": [],
+    "delete": [],
+    "manual_review": []
+  }
+}
