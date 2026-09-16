@@ -20,22 +20,26 @@ Filesystem directory key replace colon separator đầu tiên bằng `~`:
 redmine:116655 -> work-items/redmine~116655/
 ```
 
-Toàn `work-items/` phải casefold-unique để portable qua filesystem case-insensitive. Existing dossier chỉ reuse khi `WORK_ITEM.md` có exact front-matter `id` khớp canonical ID và resolved path vẫn nằm dưới Work Items root.
+Toàn `work-items/` phải casefold-unique để portable qua filesystem case-insensitive. Existing dossier chỉ reuse khi `00_WORK_ITEM.md` có exact front-matter `id` khớp canonical ID và resolved path vẫn nằm dưới Work Items root.
 
 Mỗi tracked task có thể materialize:
 
 ```text
 work-items/<directory-key>/
-├── WORK_ITEM.md
-├── intake.md?
-├── investigation.md?
-├── plan.md?
-├── review.md?
+├── 00_WORK_ITEM.md
+├── 10_intake.md?
+├── 20_investigation.md?
+├── 30_plan.md?
+├── 40_review.md?
 ├── references/?
-└── report.textile?
+└── 90_report.textile?
 ```
 
+Numeric prefixes là canonical filename contract và dùng khoảng cách `10` để future material phases có thể chèn mà không rename toàn bộ dossier. `00_WORK_ITEM.md` luôn đứng đầu; `90_report.textile` là final external deliverable. `references/` không đánh số vì không phải lifecycle phase.
+
 Không tạo mặc định `history/`, `turns/`, `executions/`, `checkpoints/` hay file theo turn. `references/` chỉ chứa task-specific source material/evidence cần tra cứu; lifecycle state vẫn nằm trong các living documents phía trên.
+
+Legacy unprefixed names (`WORK_ITEM.md`, `intake.md`, `investigation.md`, `plan.md`, `review.md`, `report.textile`) phải được migrate, không giữ song song với numbered canonical names.
 
 ## Ownership boundary
 
@@ -64,12 +68,12 @@ work-item-template/skills/work-item/
 │   ├── planning.md
 │   └── review.md
 └── templates/
-    ├── WORK_ITEM.md
-    ├── intake.md
-    ├── investigation.md
-    ├── plan.md
-    ├── review.md
-    └── report.textile
+    ├── 00_WORK_ITEM.md
+    ├── 10_intake.md
+    ├── 20_investigation.md
+    ├── 30_plan.md
+    ├── 40_review.md
+    └── 90_report.textile
 ```
 
 Các phase file là internal progressive-disclosure references, không phải skill độc lập. `SKILL.md` chỉ đọc phase cần thiết just-in-time:
@@ -110,7 +114,7 @@ Sau install/update, mở fresh QiQi session **từ workspace root** để refres
 
 ## Current-state semantics
 
-`WORK_ITEM.md` là current canonical task truth. `intake.md`, `investigation.md`, `plan.md`, `review.md`, `report.textile` là living lifecycle docs, merge/rewrite theo current meaning; không append execution chronology.
+`00_WORK_ITEM.md` là current canonical task truth. `10_intake.md`, `20_investigation.md`, `30_plan.md`, `40_review.md`, `90_report.textile` là living lifecycle docs, merge/rewrite theo current meaning; không append execution chronology.
 
 Requirement change rewrite effective requirement + increment revision; prior findings được reconcile theo materiality thay vì auto discard. Persist chỉ datum mà nếu bỏ đi có thể làm turn sau hiểu sai requirement, lặp material investigation, đi sai implementation, đánh giá sai acceptance hoặc report sai.
 
@@ -124,7 +128,7 @@ python3 scripts/export-legacy-work-items.py --workspace /absolute/path/to/worksp
 
 Default source DB là `~/.local/share/agent-work-items/work-items.sqlite3` hoặc `WORK_ITEM_DB_PATH`. Nếu legacy installer dùng custom `--db-path`, truyền exact DB bằng `--db /absolute/path/to/work-items.sqlite3`.
 
-Exporter lấy Work Item + artifact/section/chunk trong một SQLite read snapshot, preflight toàn bộ output, reject casefold-equivalent keys, materialize latest lifecycle artifacts và lưu protected raw backup dưới:
+Exporter lấy Work Item + artifact/section/chunk trong một SQLite read snapshot, preflight toàn bộ output, reject casefold-equivalent keys, materialize latest lifecycle artifacts bằng numbered canonical filenames và lưu protected raw backup dưới:
 
 ```text
 <workspace>/.qiqi/migration-backups/v0024/legacy-work-items/
