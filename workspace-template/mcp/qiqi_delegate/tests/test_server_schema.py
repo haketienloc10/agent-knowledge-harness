@@ -203,6 +203,27 @@ class PublicTaskSchemaTests(unittest.TestCase):
                     {"server", "workspace"},
                 )
 
+    def test_harness_marker_keeps_source_tree_completeness_fail_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            harness = Path(directory)
+            workspace = harness / "workspace-template"
+            server = workspace / "mcp" / "qiqi_delegate" / "server.py"
+            server.parent.mkdir(parents=True)
+            server.write_text(TRACKED_LOCATOR_EXAMPLE, encoding="utf-8")
+            (workspace / "AGENTS.md").write_text(TRACKED_LOCATOR_EXAMPLE, encoding="utf-8")
+            (harness / "scripts").mkdir()
+            (harness / "scripts" / "migrate-workspace.sh").write_text("", encoding="utf-8")
+            (harness / "migrations").mkdir()
+            (harness / "migrations" / "0024-filesystem-work-item.json").write_text(
+                "{}", encoding="utf-8"
+            )
+            repo_agents = harness / "repo-template" / "AGENTS.md"
+            repo_agents.parent.mkdir()
+            repo_agents.write_text(TRACKED_LOCATOR_EXAMPLE, encoding="utf-8")
+
+            with self.assertRaisesRegex(AssertionError, "missing locator contract source"):
+                _read_locator_contract_sources(workspace)
+
     def test_input_models_forbid_extra_fields(self) -> None:
         with self.assertRaises(ValidationError):
             TrustedFactInput(fact="x", source="y", certainty="verified")
@@ -223,7 +244,7 @@ class PublicTaskSchemaTests(unittest.TestCase):
             {
                 "trusted_facts": [{"fact": "x", "source": "user decision"}],
                 "claims_to_investigate": [
-                    {"claim": "y", "source": "incident note")
+                    {"claim": "y", "source": "incident note"}
                 ],
             },
         )
