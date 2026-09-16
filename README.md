@@ -33,11 +33,19 @@ Operational protocol: `work-item-template/skills/work-item/SKILL.md`.
 
 ## Workspace migration
 
-Trước migration v24 trên máy có legacy Work Item SQLite, export DB theo `work-item-template/README.md`; nếu old installer từng dùng custom `--db-path`, truyền exact path đó cho exporter bằng `--db`.
+Với máy có legacy Work Item SQLite, cutover v24 theo thứ tự:
+
+1. export exact legacy DB theo `work-item-template/README.md` (nếu old installer dùng custom `--db-path`, truyền exact path bằng `--db`);
+2. kiểm tra imported dossiers/archive rồi chạy `work-item-template/scripts/remove-legacy-user-mcp.sh` để gỡ registration cũ có xác minh ownership;
+3. migrate workspace/repositories;
+4. cài/update `$work-item` skill, cài Herdr Codex/Claude integrations và chạy workspace verification;
+5. mở fresh agent sessions.
 
 ```bash
 bash scripts/migrate-workspace.sh /path/to/workspace --dry-run
 bash scripts/migrate-workspace.sh /path/to/workspace --verify
 ```
+
+`--verify` trên workspace thực kiểm cả canonical repo/dependency registry, exact Git roots, qiqi_delegate tests và Herdr integration readiness.
 
 Historical migration files mô tả các contract cũ tại thời điểm chúng được áp dụng; migration mới supersede current runtime/policy nhưng không rewrite lịch sử.
