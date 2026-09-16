@@ -1,344 +1,101 @@
-# Thiết lập Multi-repository Workspace cho QiQi
+# Workspace setup
 
-## Mục tiêu
-
-Workspace sau setup dùng bốn nguồn truth độc lập:
+## Layout
 
 ```text
-Global Work Item MCP   = mutable product-task truth
-Knowledge MCP          = reusable durable truth
-Repo source/test       = implementation truth
-qiqi_delegate state    = runtime/session truth
+<workspace>/
+├── AGENTS.md
+├── identity.md
+├── repos.yaml
+├── SYSTEM_MAP.md
+├── work-items/
+├── instructions/
+├── mcp/qiqi_delegate/
+└── scripts/
 ```
 
-`work_item` và `knowledge` phải được cài user/global scope; workspace project config chỉ có `qiqi_delegate`.
+`work-items/` là workspace-level current task resource. Runtime mới không cài Global Work Item MCP và không tạo SQLite Work Item DB.
 
-## 1. Cài Global Work Item MCP
+## Runtime
 
-Từ harness checkout:
+Parent QiQi/$work-item resolve canonical task resource trực tiếp tại `<workspace>/work-items`; parent không dựa vào environment variable được một MCP child process export.
+
+`scripts/qiqi-mcp-server.sh` resolve workspace root, `mkdir -p work-items`, export `QIQI_WORK_ITEMS_DIR=<workspace>/work-items` cho qiqi_delegate và start MCP. qiqi_delegate dùng alias này để inject native `--add-dir` cho Codex/Claude.
+
+Child **không phụ thuộc vào env inheritance từ Herdr server**. Với tracked task, TaskPacket truyền absolute dossier locator:
+
+```text
+work_item_path=<absolute-workspace-path>/work-items/<directory-key>; id=<canonical-id>; revision=<n>
+```
+
+## Work Item ID/path
+
+Canonical ID match `^[a-z][a-z0-9_-]*:[A-Za-z0-9][A-Za-z0-9._-]*$`. Filesystem key replace colon separator đầu tiên bằng `~`, ví dụ `redmine:116655 -> redmine~116655`.
+
+`~` loại bỏ collision do separator, nhưng canonical external-id phân biệt hoa/thường trong khi filesystem macOS/Windows thường không. Vì vậy Work Items root dùng contract **casefold-unique**: không được có hai directory key khác spelling nhưng cùng `casefold()`. Trước create/read/write `$work-item` phải reject sibling casefold-equivalent; nếu dossier đã tồn tại thì front-matter `WORK_ITEM.md.id` phải khớp exact canonical ID. Đồng thời reject invalid/traversal ID và verify resolved dossier vẫn nằm dưới Work Items root.
+
+## Legacy SQLite cutover
+
+Nếu máy đã có legacy Work Item DB, **export trước khi gỡ user-scoped/global `work_item` MCP registration**:
+
+```bash
+cd agent-knowledge-harness/work-item-template
+python3 scripts/export-legacy-work-items.py --workspace /absolute/path/to/workspace
+```
+
+Default source là `~/.local/share/agent-work-items/work-items.sqlite3` hoặc `WORK_ITEM_DB_PATH`. Legacy installer từng hỗ trợ `--db-path`; nếu đã dùng option đó, phải truyền exact DB bằng `--db /absolute/path/to/work-items.sqlite3`. Missing selected DB là lỗi, không được coi như export rỗng thành công.
+
+Exporter đọc toàn bộ Work Item + artifact/section/chunk trong một SQLite read snapshot và preflight toàn bộ output trước filesystem write. Current dossier giữ current-state semantics như pending handoff và repository verification; lifecycle docs giữ revision provenance/Textile shape; full raw backup giữ chunk metadata tại `<workspace>/.qiqi/migration-backups/v0024/legacy-work-items/` với permission hạn chế. Source SQLite không bị sửa/xóa và partial artifact schema fail closed. Export cũng reject canonical IDs có directory keys casefold-equivalent để kết quả portable qua case-sensitive lẫn case-insensitive filesystems.
+
+Legacy model cho phép một số decision provenance/evidence extension fields và không có Acceptance Criteria section tương đương protocol mới. Vì vậy imported `WORK_ITEM.md` có `legacy_reconciliation_required: true` và trỏ tới protected archive. Trước substantive continuation/completion/report, QiQi phải reconcile material legacy acceptance/provenance từ archive vào living state, increment revision rồi bỏ flag; archive không trở thành runtime history source sau reconciliation.
+
+Không chạy thêm legacy Work Item mutation trong lúc export. Nếu exporter báo conflict/schema error, reconcile trước. Sau export thành công, kiểm tra dossiers cần thiết rồi **gỡ registration cũ một cách verified**:
+
+```bash
+cd agent-knowledge-harness/work-item-template
+bash scripts/remove-legacy-user-mcp.sh
+```
+
+Helper chỉ remove registration `work_item` khi current definition còn trỏ tới managed legacy `agent-work-item-mcp`/`work-item-mcp-server.sh`; nếu cùng tên nhưng là registration khác, script fail thay vì xóa. Với CLI không cài trên máy, script cảnh báo để user kiểm tra client đó riêng. Sau cleanup, mở fresh agent sessions để stale MCP discovery không còn tồn tại.
+
+## Work Item lifecycle
+
+Cài/update `$work-item` skill từ harness:
 
 ```bash
 cd work-item-template
-bash scripts/work-item-template-check.sh
-bash scripts/install-user-mcp.sh
+bash scripts/install-user-skill.sh
 ```
 
-Default DB:
+Installer chỉ adopt một existing unmanaged `work-item` skill khi **toàn bộ skill tree** (SKILL.md + templates) giống source; matching `SKILL.md` đơn lẻ không đủ.
 
-```text
-~/.local/share/agent-work-items/work-items.sqlite3
-```
+`WORK_ITEM.md` là current canonical state; lifecycle docs là living semantic state, không append-only history. Requirement change rewrite effective requirements, increment revision và reconcile prior investigation/plan/review theo materiality.
 
-Có thể dùng `--db-path`. Mở fresh QiQi session rồi xác minh:
+## Herdr + qiqi_delegate readiness
 
-```bash
-codex mcp get work_item
-claude mcp get work_item
-```
-
-Fresh QiQi client phải discover:
-
-```text
-work_item_get
-work_item_history_read
-work_item_list
-work_item_create
-work_item_update
-```
-
-Work Item là **canonical owner** của mutable product-task state nhưng thuộc QiQi/orchestration side. Repository child không cần discover hoặc gọi Work Item MCP để hiểu/hoàn thành TaskPacket.
-
-Smoke DB test/non-production:
-
-1. create test Work Item;
-2. `work_item_get` revision 1 và xác nhận response là bounded current-state projection;
-3. `work_item_update` bằng revision 1 với `mutation.operations.checkpoint_append=[{summary: ...}]` → compact receipt revision 2;
-4. stale revision 1 phải conflict;
-5. `work_item_history_read(collection="checkpoints")` vẫn đọc exact stored history khi QiQi cần provenance.
-
-`mutation.operations` là grouped typed object, không phải list `{op,value}`. Fresh-agent happy path không probe schema bằng intentionally-invalid calls.
-
-## 2. Cài Shared Knowledge MCP
-
-```bash
-cd knowledge-template
-bash scripts/knowledge-template-check.sh
-bash scripts/install-user-mcp.sh --store-root /path/to/shared-knowledge/store
-```
-
-Fresh session phải có:
-
-```text
-knowledge_search
-knowledge_read
-knowledge_read_metadata
-knowledge_read_section
-knowledge_write
-knowledge_update
-```
-
-Smoke progressive disclosure:
-
-- search trả thin cards và không revision;
-- full read trả full semantic content/sources/revision;
-- metadata read trả provenance/revision + section index nhưng không whole content;
-- section read trả đúng one section body + whole-document revision;
-- partial metadata/section update không yêu cầu caller resend untouched whole document;
-- stale whole-document revision phải conflict.
-
-## 3. Registry và System Map
-
-`repos.yaml` là canonical owner của workspace/repository registry: workspace name, repository name, exact Git-root path, role, `required_for` và dependency basics (`depends_on`).
-
-`repositories[].name` là **logical repository identity** và là giá trị phải truyền vào `delegate_repo_task(repository=...)`. Không truyền filesystem path hoặc `repositories[].path` vào argument `repository`.
-
-`repositories[].path` luôn tính tương đối từ workspace root và phải resolve tới exact Git root. Path có thể nằm dưới workspace (`sgapi`, `services/sgapi`) hoặc là sibling (`../sgapi`). Absolute path không hợp lệ. Ví dụ:
-
-```yaml
-repositories:
-  - name: sgapi
-    path: ../sgapi
-    role: API service
-    required_for: [airlink]
-    depends_on: []
-```
-
-Dù `path` là `../sgapi`, delegation vẫn dùng:
-
-```text
-repository = "sgapi"
-```
-
-Xác nhận dependency reference trỏ tới repository `name` đã khai báo.
-
-`SYSTEM_MAP.md` chỉ giữ cross-repo semantic facts không suy ra được từ registry: contract, ownership/data boundary, non-trivial integration behavior, compatibility/deprecation/rollback và shared-infrastructure facts. Không copy full repository list/path/role/dependency sang System Map. **dependency-only** repository selection/wave không cần đọc `SYSTEM_MAP.md`.
-
-### Startup hydration và route policy
-
-Fresh QiQi startup chỉ có hai explicit mandatory reads:
-
-```text
-identity.md
-repos.yaml
-```
-
-`AGENTS.md` là always-on policy đã được client load theo workspace contract. `instructions/model-routing.md` **không phải mandatory startup read**.
-
-Default delegation route là `claude-balanced`. Với status-only/answer-only/orchestration-only turn không delegate, QiQi không hydrate route policy. Khi một turn thực sự cần delegation, QiQi đọc `instructions/model-routing.md` **just-in-time ngay trước route decision** rồi mới phân loại fast/balanced/deep/verifier/Codex.
-
-Điểm quan trọng: always-on policy không phải tự nhận diện trước “exception signal” mà route-policy file mới định nghĩa. `claude-balanced` chỉ là deterministic default/fallback sau khi policy được áp dụng, không phải lý do để bỏ qua policy ở một actual delegation.
-
-`SYSTEM_MAP.md` và Shared Knowledge vẫn giữ activation rule riêng; optimization startup không được làm yếu TaskPacket semantic completeness, referential closure hoặc cross-repo ownership boundary.
-
-## 4. Herdr/qiqi_delegate
+Fresh workspace phải cài integrations cho các native adapters trước delegation:
 
 ```bash
 herdr integration install codex
 herdr integration install claude
 herdr integration status
 uv sync --project mcp/qiqi_delegate
-uv run --project mcp/qiqi_delegate python -m unittest discover -s mcp/qiqi_delegate/tests -v
+```
+
+`herdr integration status` phải báo `codex: current` và `claude: current` (hoặc mọi adapter được cấu hình trong `instructions/agent-routing.yaml`). `delegate_repo_task` cũng fail closed nếu integration không current, nên đây là setup prerequisite chứ không chỉ troubleshooting step.
+
+## Repo delegation
+
+TaskPacket vẫn chứa objective/scope/acceptance đầy đủ. Child được đọc exact mounted dossier từ `work_item_path`, nhưng không mutate canonical dossier.
+
+`instructions/model-routing.md` không phải mandatory startup material. Default delegation route là `claude-balanced`; khi một turn thực sự delegate, QiQi đọc route policy just-in-time ngay trước route decision.
+
+## Verification
+
+Sau khi `repos.yaml` đã được materialize thành repository thực và Herdr integrations đã cài:
+
+```bash
 bash scripts/workspace-check.sh
 ```
 
-Runtime state nằm dưới `.qiqi/state/` và chỉ là session/turn lifecycle truth, không phải semantic completion truth.
-
-### Claude additional execution directory
-
-Claude có thể được cấp thêm **một machine-local directory cho execution/evidence** qua biến môi trường optional:
-
-```bash
-export QIQI_CLAUDE_ADDITIONAL_DIR=/absolute/path/to/authorized-runtime-evidence
-```
-
-Khi biến có giá trị, `qiqi_delegate` validate đây là absolute directory tồn tại rồi inject `--add-dir` cho cả START và RESUME. Khi biến không set/empty, không inject thêm directory nào. Codex routing không thay đổi.
-
-Directory này chỉ dành cho authorized runtime/log/test fixture/input/evidence mà child được phép dùng trong execution. **Không trỏ nó vào canonical Work Item MCP store, Shared Knowledge store hoặc QiQi orchestration state**, và không dùng nó để cho child reconstruct task semantics bị thiếu; material task meaning vẫn phải có sẵn trong immutable TaskPacket.
-
-Một thư mục chứa raw Redmine artifact có thể được dùng theo cơ chế này chỉ khi các file đó là authorized execution evidence/input và TaskPacket đã self-sufficient. Nếu thư mục đó là canonical mutable task truth thì QiQi phải đọc/reconcile ở orchestration side và distill semantics vào TaskPacket thay vì cấp store cho child.
-
-## 5. Canonical Work Item behavior
-
-Với task có stable ID như `redmine:116655`:
-
-1. QiQi `work_item_get` bounded current state trước orchestration;
-2. nếu task mới/not found, `work_item_create` trước substantive delegation;
-3. scoped `work_item_history_read` chỉ khi exact provenance thực sự cần;
-4. reconcile current requirements/repo state/open lifecycle state/next actions;
-5. choose repo/wave;
-6. QiQi distill repo-local TaskPacket **không chứa Work Item ID/revision**;
-7. child làm current repo từ immutable TaskPacket + repo/stable policy và trả exact native evidence;
-8. QiQi reread latest Work Item khi dependent decision cần current canonical truth;
-9. QiQi reconcile returned evidence, stale materiality, phase/status/next action bằng exact latest revision.
-
-Task có Work Item và task không có Work Item phải có child-facing semantics tương đương khi objective/scope/acceptance/premises giống nhau.
-
-`phase` không phải FSM cứng; UAT → fix → UT → IT → UAT hợp lệ.
-
-## 6. TaskPacket contract
-
-TaskPacket là **smallest sufficient repo-local problem contract** và là **immutable semantic snapshot** cho một delegated turn.
-
-```text
-repository                 runtime routing arg
-route                      runtime routing arg
-objective                  required task semantic
-scope[]                    required task semantic
-acceptance_criteria[]      required task semantic
-out_of_scope[]?            optional
-context?                   optional
-  trusted_facts[]?         {fact, source}
-  claims_to_investigate[]? {claim, source}
-constraints[]?             optional
-known_unknowns[]?          optional
-session_id?                runtime continuity arg
-```
-
-Không có child-facing `user_request`, Work Item ref/revision hoặc normal `verification` field.
-
-- `trusted_fact`: execution premise child MAY rely on; trusted-for-execution không đồng nghĩa independently verified truth.
-- `claim_to_investigate`: child MUST NOT assume; confirm/contradict/unresolved theo scope.
-- `known_unknown`: child MUST NOT silently assume away.
-- Acceptance nói WHAT phải chứng minh; child discover HOW từ current repo/stable policy. Exact method/command chỉ bắt buộc khi method itself là contractual requirement.
-
-### Material semantics survive distillation
-
-QiQi có thể bỏ original wording/history, nhưng mọi semantic element có thể đổi objective/scope/constraint/acceptance/external premise/unresolved decision phải survive distillation.
-
-`smallest sufficient` đánh giá bằng:
-
-- **completeness:** context-naive child hiểu WHAT/boundary/premises/acceptance không cần hidden QiQi/Work Item state;
-- **minimality:** datum task-specific chỉ ở packet nếu bỏ nó có thể làm child hiểu sai assignment hoặc QiQi accept sai result.
-
-Character/token count là performance metric phụ, không được dùng để truncate material semantics.
-
-## 7. Task-semantic closed world
-
-Child MUST NOT dùng Work Item, Shared Knowledge, sibling repo hoặc QiQi workspace/orchestration state để reconstruct objective/scope/product decision/constraint/acceptance bị thiếu.
-
-Missing material semantics là coordinator-contract failure/blocker. Child surface exact missing input để QiQi repair/resume/redelegate; không tự search global task state để đoán.
-
-Self-sufficiency chỉ áp dụng cho **task meaning**. Child vẫn MAY dùng:
-
-```text
-current repo
-stable execution policy/environment
-allowed Shared Knowledge cho reusable repo/domain implementation knowledge
-authorized runtime/log/API/DB/browser/infra evidence
-```
-
-khi task/policy cho phép.
-
-## 8. Knowledge progressive disclosure và child boundary
-
-Ở QiQi layer, Knowledge có thể ảnh hưởng TaskPacket semantics; material external/product premise phải được distill vào TaskPacket.
-
-Ở child layer, Knowledge MAY dùng cho reusable implementation/domain knowledge phát sinh sau repo discovery nếu stable policy cho phép. Knowledge **không phải fallback cho incomplete TaskPacket**.
-
-Progressive read:
-
-1. `knowledge_search`;
-2. chọn exact candidate;
-3. `knowledge_read` / `knowledge_read_metadata` / `knowledge_read_section` ở smallest sufficient scope;
-4. owner source/test thắng stale Knowledge cho current implementation;
-5. mutation chỉ khi authority/policy cho phép và dùng whole-document revision concurrency.
-
-## 9. Greenfield decision authority
-
-Trong requirement-only repo, child MAY tự chọn reversible technical decision không materially đổi:
-
-- observable product semantics;
-- public/external contract;
-- security/compliance semantics;
-- significant cost/operational envelope.
-
-Decision vượt boundary phải surface options/trade-offs/open decision về QiQi/user.
-
-## 10. Stale semantics
-
-Sau START, TaskPacket không mutate. QiQi chịu trách nhiệm stale detection/materiality/reconciliation.
-
-```text
-canonical state change
-        ↓
-QiQi evaluates materiality
-        ↓
-non-material
-  → child may settle
-  → reconcile against latest truth
-
-material
-  → stale result MUST NOT become current truth
-  → cancel / interrupt / resume / redelegate / reconcile
-    tùy runtime capability
-```
-
-Normative requirement là stale result không được promote thành current truth; interrupt không phải mandatory mechanism.
-
-## 11. Native result/RESUME
-
-Settled/failed trả exact native `agent_response`. Blocked trả `agent_response=null` + exact `session_id`. Không viewport/transcript fallback.
-
-`settled | failed | blocked` chỉ là runtime lifecycle state. Không thêm semantic `completed | partial | blocked` envelope; QiQi đọc native response và quyết định semantic completion.
-
-START không có session ID; RESUME dùng exact native ID của cùng repo/agent conversation. Session continuity khác canonical task continuity. Known `session_id` tự nó không phải lý do để RESUME.
-
-Sau stable terminal handoff/reconciliation boundary, START fresh mặc định khi next turn không cần exact native context. Với task dùng Work Item, QiQi reconcile/persist material result trước rollover; với task không dùng Work Item, QiQi accept/reconcile exact native handoff cho next decision là đủ.
-
-`blocked` trước native final response phải giữ exact `session_id`, nhưng chỉ RESUME exact session khi continuation của exact interactive blocker vẫn material. Nếu blocker đã được giải quyết ngoài session hoặc QiQi có thể repair một self-sufficient packet không phụ thuộc native context cũ, START/redelegate là hợp lệ.
-
-Independent verifier/reviewer START fresh mặc định dù underlying native agent family giống implementation route. Rollover mode phải được chọn trước final TaskPacket referential closure; material semantics mà fresh child không access được phải được QiQi distill vào packet.
-
-## 12. Fresh-session acceptance smoke
-
-Trên repo test an toàn:
-
-1. QiQi thấy Work Item + đủ 6 Knowledge tools; repository child không cần Work Item để hiểu assignment;
-2. cùng repo-local assignment được delegate một lần no-Work-Item và một lần tracked-by-Work-Item với child-facing semantics tương đương;
-3. TaskPacket không render original ticket/history/Work Item ID/revision/normal verification command;
-4. empty optional fields không tạo headings/fallback prose;
-5. missing task semantics khiến child surface blocker, không query Work Item/Knowledge để reconstruct task;
-6. child discover reusable legacy connector concern và MAY dùng Shared Knowledge nếu stable policy cho phép;
-7. stale Knowledge không override current owner source/test;
-8. runtime/external evidence task MAY dùng authorized logs/API/DB/browser tools;
-9. greenfield child surface product/security/compliance/material-cost decisions vượt technical authority;
-10. canonical state material change trong lúc child chạy: stale result không được QiQi promote thành current truth;
-11. native qiqi_delegate hook/RESUME smoke pass cho agent family thực sự dùng;
-12. dependency-only orchestration chọn repo/wave từ `repos.yaml` không hydrate `SYSTEM_MAP.md`;
-13. status-only/answer-only fresh turn không hydrate `instructions/model-routing.md`; mọi actual delegation hydrate route policy ngay trước route decision, rồi `claude-balanced` chỉ làm deterministic fallback/default khi policy không chỉ ra route khác;
-14. multi-phase rollover: investigation `START S1` → stable handoff → implementation `START S2` → immediate narrow fix `MAY RESUME S2` khi exact native continuity còn material → independent verifier `START S3`;
-15. pre-final `blocked` giữ exact session ID; exact RESUME chỉ khi interactive blocker continuity còn material, còn externally-resolved blocker/repaired self-sufficient packet MAY START/redelegate;
-16. với fresh phase, QiQi distill relevant canonical/task semantics vào self-sufficient TaskPacket; child reconstruct task meaning chỉ từ packet + current repo/stable policy, không nhận hoặc dereference current canonical Work Item state;
-17. task không có Work Item vẫn START fresh sau stable accepted handoff khi next step không cần exact native context; không tạo Work Item chỉ để tạo rollover boundary.
-
-## 13. Workspace đã cài harness
-
-Không rsync đè template. Từ harness checkout mới:
-
-```bash
-bash scripts/migrate-workspace.sh --dry-run /path/to/workspace
-bash scripts/migrate-workspace.sh /path/to/workspace
-bash scripts/migrate-workspace.sh --status /path/to/workspace
-bash scripts/migrate-workspace.sh --verify /path/to/workspace
-```
-
-Đây là breaking public schema change của `qiqi_delegate` 0.2.x: existing QiQi/workspace policy phải migrate coordinated với server/tool schema. Migration không tự sửa user MCP config hoặc machine-local `QIQI_CLAUDE_ADDITIONAL_DIR`. Sau migration, set biến này ở process environment của QiQi MCP nếu cần Claude access một authorized additional directory và mở fresh agent session.
-
-## Acceptance gate
-
-```text
-work-item-template checker PASS
-knowledge-template checker PASS
-workspace-check PASS
-qiqi_delegate unit/schema checks PASS
-fresh TaskPacket no-Work-Item / Work-Item equivalence PASS
-missing-task-semantics boundary PASS
-legitimate child Knowledge/runtime-evidence smoke PASS
-stale-result reconciliation smoke PASS
-native qiqi_delegate smoke PASS
-session rollover multi-phase smoke PASS
-status-only startup skips model-routing PASS
-actual delegation hydrates model-routing just-in-time PASS
-```
-
-Static/unit test không thay external CLI/user-MCP smoke.
+Checker verify repository registry shape, `required_for`/`depends_on`, duplicate/unknown/self dependencies, dependency cycles, relative paths, exact Git roots, duplicate roots, qiqi_delegate tests và Herdr integration readiness. Harness CI dùng `QIQI_TEMPLATE_CHECK=1` chỉ để validate unmaterialized template placeholders mà không giả vờ kiểm machine-local Git roots/Herdr state.

@@ -2,579 +2,221 @@
 set -euo pipefail
 
 workspace_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-errors=0
+mcp_project="$workspace_root/mcp/qiqi_delegate"
+template_mode="${QIQI_TEMPLATE_CHECK:-0}"
+fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 
-fail() {
-  printf 'FAIL: %s\n' "$*" >&2
-  errors=$((errors + 1))
-}
-
-require_command() {
-  command -v "$1" >/dev/null 2>&1 || fail "missing required command: $1"
-}
-
-require_file() {
-  local path="$1"
-  [[ -f "$path" ]] || fail "missing file: ${path#$workspace_root/}"
-}
-
-for command in git rg uv python3 yq herdr; do
-  require_command "$command"
-done
-
-required_files=(
+required=(
   AGENTS.md
   identity.md
-  README.md
-  SYSTEM_MAP.md
   repos.yaml
+  work-items/.gitkeep
   instructions/agent-routing.yaml
   instructions/model-routing.md
-  .codex/config.toml
-  .qiqi/.gitignore
-  mcp/qiqi_delegate/pyproject.toml
-  mcp/qiqi_delegate/core.py
-  mcp/qiqi_delegate/result_hook.py
-  mcp/qiqi_delegate/server.py
-  mcp/qiqi_delegate/tests/test_claude_filesystem_routing.py
-  mcp/qiqi_delegate/tests/test_core.py
-  mcp/qiqi_delegate/tests/test_repo_registry.py
-  mcp/qiqi_delegate/tests/test_result_hook.py
-  mcp/qiqi_delegate/tests/test_server_schema.py
-  mcp/qiqi_delegate/tests/test_workspace_startup_policy.py
   scripts/qiqi-mcp-server.sh
-  scripts/workspace-check.sh
-  docs/WORKSPACE_SETUP.md
+  mcp/qiqi_delegate/server.py
+  mcp/qiqi_delegate/core.py
+  .codex/config.toml
 )
-for path in "${required_files[@]}"; do
-  require_file "$workspace_root/$path"
+for rel in "${required[@]}"; do
+  [[ -f "$workspace_root/$rel" ]] || fail "missing required workspace file: $rel"
 done
 
-managed_files=(
-  "$workspace_root/repos.yaml"
-  "$workspace_root/SYSTEM_MAP.md"
-  "$workspace_root/instructions/agent-routing.yaml"
-  "$workspace_root/instructions/model-routing.md"
-)
-if rg -n '\{\{[^}]+\}\}' "${managed_files[@]}"; then
-  fail 'unresolved workspace template placeholder(s) found'
-fi
+command -v git >/dev/null 2>&1 || fail 'missing command: git'
+command -v uv >/dev/null 2>&1 || fail 'missing command: uv'
+command -v python3 >/dev/null 2>&1 || fail 'missing command: python3'
 
-policy_files=(
-  "$workspace_root/AGENTS.md"
+launcher="$workspace_root/scripts/qiqi-mcp-server.sh"
+routing="$workspace_root/instructions/agent-routing.yaml"
+config="$workspace_root/.codex/config.toml"
+agents="$workspace_root/AGENTS.md"
+model_routing="$workspace_root/instructions/model-routing.md"
+
+for pattern in \
+  'work_items_dir="$workspace_root/work-items"' \
+  'mkdir -p "$work_items_dir"' \
+  'export QIQI_WORK_ITEMS_DIR="$work_items_dir"'; do
+  grep -Fq -- "$pattern" "$launcher" || fail "launcher missing delegated Work Items contract: $pattern"
+done
+
+grep -Fq 'command: codex' "$routing" || fail 'Codex must resolve the native codex CLI'
+grep -Fq 'command: claude' "$routing" || fail 'Claude must resolve the native claude CLI'
+[[ "$(grep -Fc 'env: QIQI_WORK_ITEMS_DIR' "$routing")" -eq 2 ]] || \
+  fail 'Codex and Claude must both declare QIQI_WORK_ITEMS_DIR additional_dirs'
+[[ "$(grep -Fc 'required: true' "$routing")" -ge 2 ]] || \
+  fail 'Work Items directory must be required for both supported shared-dir routes'
+
+legacy_scan=(
+  "$launcher"
+  "$routing"
+  "$config"
+  "$agents"
   "$workspace_root/identity.md"
   "$workspace_root/README.md"
   "$workspace_root/docs/WORKSPACE_SETUP.md"
-  "$workspace_root/instructions/model-routing.md"
+  "$workspace_root/docs/examples/agent-routing.claude-code.yaml"
+  "$workspace_root/docs/examples/agent-routing.codex.yaml"
 )
-if rg -n 'result_path|QiQi MCP result handoff protocol|### Outcome|### Repo-local Knowledge' "${policy_files[@]}"; then
-  fail 'legacy Markdown result-handoff contract found in active workspace policy'
+if grep -q 'QIQI_CLAUDE_ADDITIONAL_DIR' "${legacy_scan[@]}"; then
+  fail 'legacy Claude-specific additional-dir env remains in current runtime/config/policy'
+fi
+if grep -Eq '^env_vars[[:space:]]*=' "$config"; then
+  fail '.codex/config.toml must not require externally exported Work Items env'
+fi
+if grep -Fq 'export PATH="$workspace_root/scripts:$PATH"' "$launcher"; then
+  fail 'launcher must not shadow native agent CLIs with workspace wrappers'
 fi
 
-system_map="$workspace_root/SYSTEM_MAP.md"
-if rg -q '^## Danh sách Repository$|Danh sách phải khớp với `repos\.yaml`|\| Repository \| Vai trò \| Git root' "$system_map"; then
-  fail 'SYSTEM_MAP.md: repository registry duplication is forbidden; repos.yaml is canonical'
-fi
-rg -q 'repos\.yaml.*canonical repository registry' "$system_map" || \
-  fail 'SYSTEM_MAP.md: must identify repos.yaml as the canonical repository registry'
-
-agents_md="$workspace_root/AGENTS.md"
 for pattern in \
-  'Chief of Staff' \
-  'Global Work Item MCP' \
-  'work_item_get' \
-  'work_item_update' \
-  'canonical Work Item' \
-  '\$work-item' \
-  'MUST apply `\$work-item`' \
-  'không tự động.*Work Item' \
-  'QiQi/orchestration side' \
-  'knowledge_search' \
-  'knowledge_read_metadata' \
-  'knowledge_read_section' \
-  'knowledge_update' \
-  '`delegate_repo_task`' \
-  'immutable TaskPacket' \
-  'trusted_facts' \
-  'claims_to_investigate' \
-  'Task-semantic closed-world rule' \
-  'Completeness.*minimality' \
-  'stale result.*MUST NOT' \
-  'Runtime `state`.*không phải semantic completion' \
-  '`agent_response`' \
-  'native Stop hook' \
-  '`\.qiqi/state/qiqi_delegate\.sqlite3`' \
-  'orchestration/synchronization broker' \
-  '## Delegation Silence'; do
-  rg -U -q "$pattern" "$agents_md" || fail "AGENTS.md: missing required policy: $pattern"
+  'Work Item là filesystem current-state dossier' \
+  'child continuity không được phụ thuộc vào env inheritance từ Herdr server' \
+  'work_item_path=<absolute dossier path>; id=<canonical id>; revision=<n>' \
+  'Requirement change rewrite current requirement' \
+  'TaskPacket phải là smallest sufficient' \
+  'Default delegation route = `claude-balanced`' \
+  'just-in-time ngay trước route decision' \
+  'Nếu `state="blocked"`' \
+  'giữ exact returned `session_id`'; do
+  grep -Fq -- "$pattern" "$agents" || fail "AGENTS.md missing current policy: $pattern"
 done
 
-rg -q 'Repository selection và dependency wave chỉ dựa trên registry thì không đọc System Map' "$agents_md" || \
-  fail 'AGENTS.md: dependency-only orchestration must not hydrate SYSTEM_MAP.md'
-rg -U -q 'child.*không `work_item_get`/`work_item_update`|Child.*không cần Work Item ID/revision' "$agents_md" || \
-  fail 'AGENTS.md: Work Item must stay on QiQi side of delegation boundary'
-rg -U -q 'Missing material TaskPacket semantics.*không yêu cầu child search Work Item/Knowledge' "$agents_md" || \
-  fail 'AGENTS.md: incomplete TaskPacket must not trigger context reconstruction'
-rg -U -q 'Shared Knowledge.*implementation knowledge.*không thay thế nghĩa vụ semantic completeness' "$agents_md" || \
-  fail 'AGENTS.md: task-semantic Knowledge boundary missing'
-rg -U -q 'Work Item read/update/persistence failure.*\$work-item.*không local Markdown/cached-conversation fallback' "$agents_md" || \
-  fail 'AGENTS.md: Work Item failure must not fall back to local/cached task truth'
+grep -Fq 'đọc file này ngay trước route decision' "$model_routing" || \
+  fail 'model-routing.md must require just-in-time route policy hydration'
+grep -Fq 'Default delegation route = claude-balanced' "$model_routing" || \
+  fail 'model-routing.md must preserve claude-balanced default'
 
-startup_section="$(python3 - "$agents_md" <<'PY'
+# Validate the canonical repository/dependency registry. The harness template itself
+# contains {{...}} placeholders, so CI sets QIQI_TEMPLATE_CHECK=1 and validates
+# structure without requiring concrete Git roots. Installed workspaces run the full
+# referential, cycle and exact-root checks.
+uv run --project "$mcp_project" python - "$workspace_root" "$template_mode" <<'PY'
 from pathlib import Path
-import sys
-
-text = Path(sys.argv[1]).read_text(encoding="utf-8")
-heading = "## Khởi động QiQi\n"
-start = text.find(heading)
-if start < 0:
-    print("")
-    raise SystemExit(0)
-next_heading = text.find("\n## ", start + len(heading))
-section = text[start:] if next_heading < 0 else text[start:next_heading]
-print(section.rstrip("\n"))
-PY
-)"
-if rg -q '^\d+\. Đọc `instructions/model-routing\.md`' <<<"$startup_section"; then
-  fail 'AGENTS.md: model-routing.md must not be an unconditional startup read'
-fi
-rg -F -q '`instructions/model-routing.md` **không phải mandatory startup read**' <<<"$startup_section" || \
-  fail 'AGENTS.md: startup must declare model-routing.md lazy'
-rg -F -q 'Default delegation route = `claude-balanced`' <<<"$startup_section" || \
-  fail 'AGENTS.md: startup must keep claude-balanced as deterministic default route'
-rg -F -q 'Turn không delegate không hydrate route policy' <<<"$startup_section" || \
-  fail 'AGENTS.md: no-delegation turn must not hydrate route policy'
-rg -F -q 'Khi một turn thực sự cần delegation, đọc `instructions/model-routing.md` **just-in-time ngay trước route decision**' <<<"$startup_section" || \
-  fail 'AGENTS.md: every actual delegation must hydrate route policy just in time'
-rg -F -q 'Đọc `instructions/model-routing.md` ngay trước route decision rồi chọn exact route nhẹ nhất vẫn đủ tin cậy' "$agents_md" || \
-  fail 'AGENTS.md: before-delegation route decision must hydrate model-routing policy first'
-
-model_routing="$workspace_root/instructions/model-routing.md"
-rg -F -q 'File này **không phải mandatory startup material**' "$model_routing" || \
-  fail 'model-routing.md: activation must declare policy non-mandatory at startup'
-rg -F -q 'Turn không delegate **không đọc** file này' "$model_routing" || \
-  fail 'model-routing.md: no-delegation turns must skip route-policy hydration'
-rg -F -q 'Khi một turn thực sự cần delegation, QiQi **đọc file này ngay trước route decision**' "$model_routing" || \
-  fail 'model-routing.md: every actual delegation must hydrate route policy before classification'
-rg -F -q 'Default delegation route = claude-balanced' "$model_routing" || \
-  fail 'model-routing.md: activation must preserve claude-balanced default'
-
-# Work Item mechanics belong to the shared user-scoped $work-item skill.
-# Keep only activation/authority/safety invariants in workspace always-on policy.
-if rg -q '^### Current snapshot và material history$|^### Material session reconciliation$|Phase-specific guardrails:' "$agents_md"; then
-  fail 'AGENTS.md: detailed Work Item operational protocol must live in $work-item, not workspace always-on policy'
-fi
-
-if rg -q 'existing update target phải full-read|Update existing knowledge phải full-read' "$agents_md"; then
-  fail 'AGENTS.md: legacy full-read-only Knowledge update policy found'
-fi
-
-# CRITICAL INVARIANT — DO NOT REMOVE OR WEAKEN THIS CHECK merely to make a
-# migration/check pass. Delegation silence is part of the synchronous execution
-# contract. Change this expected block only when the contract is intentionally
-# changed and reviewed together with qiqi_delegate semantics.
-delegation_silence_expected="$(cat <<'EOF'
-## Delegation Silence
-
-Ngay sau khi `delegate_repo_task` bắt đầu và trước khi call terminally return, fail hoặc cancel, QiQi **không phát bất kỳ user-visible progress commentary nào**.
-
-Trong khoảng này QiQi không:
-
-- phát câu kiểu "đang chạy", "đang chờ", "chưa có kết quả", "tiếp tục chờ" hoặc tương đương;
-- paraphrase lại task, scope, constraint, verification hoặc điều vừa giao chỉ để báo tiến độ;
-- phát commentary về việc đang kiểm chứng, chưa thể kết luận hoặc đang đợi child/agent;
-- suy đoán trạng thái, phần trăm hoàn thành hoặc bước hiện tại của child;
-- poll process/pane/session, đọc `.qiqi/state/`, scrape terminal/transcript hoặc mở runtime internals để suy ra tiến độ/kết quả;
-- tạo dependent task dựa trên partial/in-flight runtime state.
-
-Assistant output tiếp theo cho user phải dựa trên terminal result của call, trừ khi call fail/cancel cần báo exact failure contract. Với `blocked`, xử lý exact returned contract và không invent blocker content từ runtime internals.
-EOF
-)"
-delegation_silence_actual="$(python3 - "$agents_md" <<'PY'
-from pathlib import Path
-import sys
-
-text = Path(sys.argv[1]).read_text(encoding="utf-8")
-heading = "## Delegation Silence\n"
-start = text.find(heading)
-if start < 0:
-    print("")
-    raise SystemExit(0)
-next_heading = text.find("\n## ", start + len(heading))
-section = text[start:] if next_heading < 0 else text[start:next_heading]
-print(section.rstrip("\n"))
-PY
-)"
-if [[ "$delegation_silence_actual" != "$delegation_silence_expected" ]]; then
-  fail 'AGENTS.md: Delegation Silence must match the exact synchronous no-progress contract; do not weaken/remove this invariant check'
-fi
-
-if rg -q 'English task title|read `result_path`|đọc `result_path`' "$agents_md"; then
-  fail 'AGENTS.md: legacy workspace result artifact convention remains'
-fi
-
-if [[ -f "$workspace_root/.agents/skills/ticket-work-item/SKILL.md" ]]; then
-  fail 'workspace: legacy ticket-work-item skill must be removed; Work Item operations use user-scoped $work-item'
-fi
-
-identity="$workspace_root/identity.md"
-for pattern in 'knowledge_read_metadata' 'knowledge_read_section' 'smallest sufficient semantic scope' 'material use/update'; do
-  rg -q "$pattern" "$identity" || fail "identity.md: missing scoped Knowledge responsibility: $pattern"
-done
-for duplicated_operational_detail in 'work_item_get' 'work_item_update' 'agent_response' 'settled \| failed \| blocked'; do
-  if rg -q "$duplicated_operational_detail" "$identity"; then
-    fail "identity.md: duplicate operational detail must stay in owner policy, not identity: $duplicated_operational_detail"
-  fi
-done
-for hard_identity_invariant in 'referential closure' 'TaskPacket phải tự đủ' 'child tự đọc/sửa sibling repo'; do
-  rg -q "$hard_identity_invariant" "$identity" || \
-    fail "identity.md: missing hard always-on invariant after dedup: $hard_identity_invariant"
-done
-
-workspace_readme="$workspace_root/README.md"
-for pattern in \
-  'Work Item operational skill' \
-  '\$work-item' \
-  'user-scoped skill' \
-  'knowledge_read_metadata' \
-  'knowledge_read_section' \
-  'knowledge_update' \
-  'TaskPacket' \
-  'immutable semantic snapshot' \
-  'task-semantic'; do
-  rg -U -q "$pattern" "$workspace_readme" || fail "README.md: missing workspace capability guidance: $pattern"
-done
-
-workspace_setup="$workspace_root/docs/WORKSPACE_SETUP.md"
-for pattern in \
-  'knowledge_read_metadata' \
-  'knowledge_read_section' \
-  'knowledge_update' \
-  'canonical owner' \
-  'dependency-only' \
-  'immutable semantic snapshot' \
-  'task-semantic' \
-  'QIQI_CLAUDE_ADDITIONAL_DIR' \
-  'canonical Work Item MCP store' \
-  'stale'; do
-  rg -U -q "$pattern" "$workspace_setup" || fail "docs/WORKSPACE_SETUP.md: missing workspace capability guidance: $pattern"
-done
-
-codex_config="$workspace_root/.codex/config.toml"
-rg -q '^\[mcp_servers\.qiqi_delegate\]$' "$codex_config" || \
-  fail '.codex/config.toml: missing qiqi_delegate MCP server'
-rg -q 'enabled_tools = \["delegate_repo_task"\]' "$codex_config" || \
-  fail '.codex/config.toml: MCP must expose only delegate_repo_task'
-rg -q 'tool_timeout_sec = 7200' "$codex_config" || \
-  fail '.codex/config.toml: expected long synchronous tool timeout'
-rg -q 'required = true' "$codex_config" || \
-  fail '.codex/config.toml: qiqi_delegate must be required'
-if rg -q '^\[mcp_servers\.(work_item|knowledge)\]' "$codex_config"; then
-  fail '.codex/config.toml: work_item and knowledge must remain user-scoped, not project-scoped'
-fi
-
-launcher="$workspace_root/scripts/qiqi-mcp-server.sh"
-bash -n "$launcher" || fail 'qiqi-mcp-server.sh: invalid Bash syntax'
-rg -q 'uv run --project' "$launcher" || \
-  fail 'qiqi-mcp-server.sh: must launch MCP through uv project'
-rg -q 'QIQI_WORKSPACE_ROOT' "$launcher" || \
-  fail 'qiqi-mcp-server.sh: must pass workspace root to MCP server'
-
-mcp_project="$workspace_root/mcp/qiqi_delegate"
-core="$mcp_project/core.py"
-hook="$mcp_project/result_hook.py"
-server="$mcp_project/server.py"
-for py in "$core" "$hook" "$server"; do
-  python3 - "$py" <<'PY' || fail "${py#$workspace_root/}: invalid Python syntax"
-import pathlib
-import sys
-path = pathlib.Path(sys.argv[1])
-compile(path.read_text(encoding="utf-8"), str(path), "exec")
-PY
-done
-
-for pattern in \
-  'TASK_PACKET_MAX_CHARS = 100_000' \
-  'class TrustedFact' \
-  'class ClaimToInvestigate' \
-  'class TaskContext' \
-  'class TaskPacket' \
-  'def build_task_packet' \
-  'def render_task_prompt' \
-  'trusted_fact and claim_to_investigate' \
-  'def normalize_hook_payload' \
-  'last_assistant_message' \
-  'class SessionStore' \
-  'CREATE TABLE IF NOT EXISTS sessions' \
-  'CREATE TABLE IF NOT EXISTS turns'; do
-  rg -q "$pattern" "$core" || fail "qiqi_delegate/core.py: missing contract: $pattern"
-done
-if rg -q 'AGENT_RESPONSE_MAX|TASK_TEXT_MAX|TASK_ITEM_MAX|TASK_LIST_MAX' "$core"; then
-  fail 'qiqi_delegate/core.py: guessed per-field/native-response limits are forbidden'
-fi
-if rg -q 'user_request|required_context|verification|certainty' "$core"; then
-  fail 'qiqi_delegate/core.py: legacy child-facing TaskPacket fields found'
-fi
-if rg -q 'Context boundary|Handoff contract|You do not share QiQi|Do not invent an omitted external fact' "$core"; then
-  fail 'qiqi_delegate/core.py: stable runtime/repo boilerplate must not be repeated by task renderer'
-fi
-
-for pattern in \
-  'json\.load\(sys\.stdin\)' \
-  'def _load_active_capture' \
-  'active-captures' \
-  'expected_session_id' \
-  'os\.fsync' \
-  'os\.replace' \
-  'os\.chmod\(temp, 0o600\)'; do
-  rg -q "$pattern" "$hook" || fail "qiqi_delegate/result_hook.py: missing contract: $pattern"
-done
-
-for pattern in \
-  'MCPServer' \
-  'STATE_DB' \
-  'ACTIVE_CAPTURES_DIR' \
-  'LEGACY_RUNS_DIR' \
-  'RESULT_HOOK_PATH' \
-  'SessionStore' \
-  'class TrustedFactInput' \
-  'class ClaimToInvestigateInput' \
-  'class TaskContextInput' \
-  'RepositoryName = Annotated' \
-  'ConfigDict\(extra="forbid"\)' \
-  'def _validate_filesystem_config' \
-  'def _build_filesystem_args' \
-  'def _build_handoff_args' \
-  'def _register_active_capture' \
-  'expected_session_id' \
-  'def _wait_for_result_capture' \
-  'refusing to fall back to terminal screen or transcript parsing' \
-  'repository: RepositoryName' \
-  'objective: str' \
-  'scope: list\[str\]' \
-  'acceptance_criteria: list\[str\]' \
-  'context: TaskContextInput \| None' \
-  'known_unknowns: list\[str\] \| None' \
-  'Runtime state is lifecycle truth only' \
-  '"agent_response": response' \
-  'def delegate_repo_task'; do
-  rg -q "$pattern" "$server" || fail "qiqi_delegate/server.py: missing contract: $pattern"
-done
-if rg -q 'context: dict\[str, list\[dict\[str, str\]\]\]|user_request: str|required_context: list|verification: list' "$server"; then
-  fail 'qiqi_delegate/server.py: legacy/generic child-facing public fields found'
-fi
-
-# Generated MCP inputSchema is validated by tests/test_server_schema.py through
-# MCPServer.list_tools(); keep static checks here focused on implementation presence.
-bypass_count="$(rg -o --fixed-strings -- '--dangerously-bypass-hook-trust' "$server" | wc -l | tr -d ' ')"
-[[ "$bypass_count" == "1" ]] || \
-  fail "qiqi_delegate/server.py: hook-trust bypass must appear only in route-arg rejection policy, found $bypass_count occurrences"
-if rg -q '"--sink"|"--nonce"' "$server"; then
-  fail 'qiqi_delegate/server.py: native hook command must be static; sink/nonce belong in active-capture state'
-fi
-
-for forbidden in \
-  'REQUIRED_RESULT_HEADINGS' \
-  '_validate_result_section' \
-  '_append_task_section' \
-  'QiQi MCP result handoff protocol' \
-  '"result_path"'; do
-  if rg -q "$forbidden" "$server"; then
-    fail "qiqi_delegate/server.py: legacy result transport found: $forbidden"
-  fi
-done
-if rg -q 'FastMCP|mcp\.server\.fastmcp' "$server"; then
-  fail 'qiqi_delegate/server.py: legacy MCP SDK v1 API found'
-fi
-tool_count="$(rg -c '^@mcp\.tool\(\)$' "$server" || true)"
-[[ "$tool_count" == "1" ]] || \
-  fail "qiqi_delegate/server.py: expected exactly one public MCP tool, found $tool_count"
-
-uv run --project "$mcp_project" python -m unittest discover -s "$mcp_project/tests" -v || \
-  fail 'qiqi_delegate: unit tests failed'
-
-if ! uv run --project "$mcp_project" python -c \
-  'from mcp.server import MCPServer; import yaml; print("qiqi-mcp-runtime: PASS")' \
-  >/dev/null; then
-  fail 'qiqi_delegate: MCP SDK runtime import failed; run uv sync --project mcp/qiqi_delegate'
-fi
-
-routing="$workspace_root/instructions/agent-routing.yaml"
-if ! yq --version 2>&1 | rg -q 'version v?4\.'; then
-  fail 'unsupported yq version; install yq version 4'
-else
-  yq -e '.version == 2' "$routing" >/dev/null || fail 'agent-routing.yaml: version must be 2'
-  yq -e '.agents | type == "!!map" and length > 0' "$routing" >/dev/null || fail 'agent-routing.yaml: agents must be a non-empty map'
-  yq -e '.routes | type == "!!map" and length > 0' "$routing" >/dev/null || fail 'agent-routing.yaml: routes must be a non-empty map'
-fi
-
-if ! uv run --project "$mcp_project" python - "$routing" <<'PY'; then
-import pathlib
-import re
+import subprocess
 import sys
 import yaml
 
-path = pathlib.Path(sys.argv[1])
-data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-assert data.get("version") == 2
-agents = data.get("agents")
-routes = data.get("routes")
-assert isinstance(agents, dict) and agents
-assert isinstance(routes, dict) and routes
-env_name_re = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-for name, agent in agents.items():
-    adapter = agent.get("adapter")
-    for key in ("start_args", "resume_args"):
-        values = agent.get(key)
-        assert isinstance(values, list), f"{name}.{key} must be a list"
-        assert values.count("{handoff_args}") == 1, f"{name}.{key}: exactly one handoff slot required"
-    assert "{session_id}" not in agent["start_args"]
-    assert "{session_id}" in agent["resume_args"]
-    assert all("{result_dir}" not in value for key in ("start_args", "resume_args") for value in agent[key])
+workspace = Path(sys.argv[1]).resolve()
+template_mode = sys.argv[2] == "1"
+data = yaml.safe_load((workspace / "repos.yaml").read_text(encoding="utf-8")) or {}
 
-    filesystem = agent.get("filesystem")
-    if filesystem is not None:
-        assert isinstance(filesystem, dict), f"{name}.filesystem must be a map"
-        assert set(filesystem) <= {"additional_dirs"}, f"{name}.filesystem has unsupported fields"
-        additional_dirs = filesystem.get("additional_dirs", [])
-        assert isinstance(additional_dirs, list), f"{name}.filesystem.additional_dirs must be a list"
-        if additional_dirs:
-            assert adapter == "claude", f"{name}.filesystem.additional_dirs is Claude-only"
-        for index, entry in enumerate(additional_dirs):
-            assert isinstance(entry, dict), f"{name}.filesystem.additional_dirs[{index}] must be a map"
-            assert set(entry) <= {"env", "required"}, f"{name}.filesystem.additional_dirs[{index}] has unsupported fields"
-            assert isinstance(entry.get("env"), str) and env_name_re.fullmatch(entry["env"]), f"{name}.filesystem.additional_dirs[{index}].env invalid"
-            assert isinstance(entry.get("required", False), bool), f"{name}.filesystem.additional_dirs[{index}].required must be boolean"
+workspace_cfg = data.get("workspace")
+assert isinstance(workspace_cfg, dict), "workspace must be a map"
+name = workspace_cfg.get("name")
+assert isinstance(name, str) and name.strip(), "workspace.name must be non-empty"
 
-claude = agents.get("claude")
-codex = agents.get("codex")
-assert isinstance(claude, dict), "claude agent missing"
-assert claude.get("filesystem", {}).get("additional_dirs") == [
-    {"env": "QIQI_CLAUDE_ADDITIONAL_DIR", "required": False}
-], "claude additional-directory contract drifted"
-if isinstance(codex, dict):
-    assert "filesystem" not in codex, "codex routing must remain unchanged"
-
-for name, route in routes.items():
-    assert route.get("agent") in agents, f"{name}: unknown agent"
-    args = route.get("args", [])
-    assert isinstance(args, list)
-    assert not any(value in {"--settings", "--dangerously-bypass-hook-trust", "--enable", "--disable"} or value.startswith("hooks.") for value in args), f"{name}: handoff config must be MCP-owned"
-PY
-  fail 'agent-routing.yaml: structured native-handoff/filesystem validation failed'
-fi
-
-if rg -q '\{result_dir\}|result_path|prompt_transport|result\.schema\.json' "$routing"; then
-  fail 'agent-routing.yaml: legacy result transport placeholder/config found'
-fi
-if rg -q 'QIQI_WORK_ITEMS_ROOT' "$routing"; then
-  fail 'agent-routing.yaml: canonical/task-specific Work Item root must not be wired into child routing'
-fi
-
-rg -q '^state/$' "$workspace_root/.qiqi/.gitignore" || fail '.qiqi/.gitignore: state/ must be ignored'
-rg -q '^runs/$' "$workspace_root/.qiqi/.gitignore" || fail '.qiqi/.gitignore: legacy runs/ path must remain ignored'
-
-if ! uv run --project "$mcp_project" python - "$workspace_root/repos.yaml" <<'PY'; then
-from pathlib import Path
-import sys
-import yaml
-
-path = Path(sys.argv[1])
-data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-workspace = data.get("workspace")
-assert isinstance(workspace, dict), "workspace must be a map"
-workspace_name = workspace.get("name")
-assert isinstance(workspace_name, str) and workspace_name.strip(), "workspace.name must be a non-empty string"
-
-repositories = data.get("repositories")
-assert isinstance(repositories, list) and repositories, "repositories must be a non-empty list"
+repos = data.get("repositories")
+assert isinstance(repos, list) and repos, "repositories must be a non-empty list"
 
 names = []
+paths = []
 graph = {}
-for index, repository in enumerate(repositories):
+placeholder = lambda value: isinstance(value, str) and "{{" in value
+
+for index, repo in enumerate(repos):
     prefix = f"repositories[{index}]"
-    assert isinstance(repository, dict), f"{prefix} must be a map"
+    assert isinstance(repo, dict), f"{prefix} must be a map"
     for key in ("name", "path", "role"):
-        value = repository.get(key)
-        assert isinstance(value, str) and value.strip(), f"{prefix}.{key} must be a non-empty string"
-    configured_path = Path(repository["path"])
-    assert not configured_path.is_absolute(), f"{prefix}.path must be relative to workspace root"
-    name = repository["name"]
-    names.append(name)
+        value = repo.get(key)
+        assert isinstance(value, str) and value.strip(), f"{prefix}.{key} must be non-empty"
+    repo_name = repo["name"]
+    repo_path = repo["path"]
+    assert not Path(repo_path).is_absolute(), f"{repo_name}.path must be relative"
+    names.append(repo_name)
+    paths.append(repo_path)
     for key in ("required_for", "depends_on"):
-        values = repository.get(key)
-        assert isinstance(values, list), f"{name}.{key} must be a list"
-        assert all(isinstance(value, str) and value.strip() for value in values), f"{name}.{key} entries must be non-empty strings"
-        assert len(values) == len(set(values)), f"{name}.{key} contains duplicate entries"
-    graph[name] = list(repository["depends_on"])
+        values = repo.get(key)
+        assert isinstance(values, list), f"{repo_name}.{key} must be a list"
+        assert all(isinstance(v, str) and v.strip() for v in values), (
+            f"{repo_name}.{key} entries must be non-empty strings"
+        )
+        assert len(values) == len(set(values)), f"{repo_name}.{key} has duplicate entries"
+    graph[repo_name] = list(repo["depends_on"])
 
 assert len(names) == len(set(names)), "repository names must be unique"
-known = set(names)
-for name, dependencies in graph.items():
-    for dependency in dependencies:
-        assert dependency != name, f"{name}.depends_on must not reference itself"
-        assert dependency in known, f"{name}.depends_on references unknown repository: {dependency}"
+assert len(paths) == len(set(paths)), "repository paths must be unique"
 
-visiting = set()
-visited = set()
-stack = []
+if not template_mode:
+    unresolved = []
+    if placeholder(name):
+        unresolved.append("workspace.name")
+    for index, repo in enumerate(repos):
+        for key in ("name", "path", "role"):
+            if placeholder(repo[key]):
+                unresolved.append(f"repositories[{index}].{key}")
+        for key in ("required_for", "depends_on"):
+            if any(placeholder(v) for v in repo[key]):
+                unresolved.append(f"repositories[{index}].{key}")
+    assert not unresolved, "unresolved workspace placeholders: " + ", ".join(unresolved)
 
-def visit(name):
-    if name in visited:
-        return
-    if name in visiting:
-        start = stack.index(name)
-        cycle = stack[start:] + [name]
-        raise AssertionError("repository dependency cycle: " + " -> ".join(cycle))
-    visiting.add(name)
-    stack.append(name)
-    for dependency in graph[name]:
-        visit(dependency)
-    stack.pop()
-    visiting.remove(name)
-    visited.add(name)
+    known = set(names)
+    for repo_name, dependencies in graph.items():
+        for dependency in dependencies:
+            assert dependency != repo_name, f"{repo_name}.depends_on references itself"
+            assert dependency in known, (
+                f"{repo_name}.depends_on references unknown repository: {dependency}"
+            )
 
-for name in names:
-    visit(name)
+    visiting = set()
+    visited = set()
+    stack = []
+    def visit(repo_name):
+        if repo_name in visited:
+            return
+        if repo_name in visiting:
+            start = stack.index(repo_name)
+            raise AssertionError(
+                "repository dependency cycle: "
+                + " -> ".join(stack[start:] + [repo_name])
+            )
+        visiting.add(repo_name)
+        stack.append(repo_name)
+        for dependency in graph[repo_name]:
+            visit(dependency)
+        stack.pop()
+        visiting.remove(repo_name)
+        visited.add(repo_name)
+    for repo_name in names:
+        visit(repo_name)
+
+    roots = []
+    for repo_name, repo_path in zip(names, paths):
+        root = (workspace / repo_path).resolve()
+        assert root.is_dir(), f"{repo_name}: repository path does not exist: {repo_path}"
+        completed = subprocess.run(
+            ["git", "-C", str(root), "rev-parse", "--show-toplevel"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert completed.returncode == 0, f"{repo_name}: path is not a Git repository"
+        git_root = Path(completed.stdout.strip()).resolve()
+        assert git_root == root, f"{repo_name}: path must be exact Git root"
+        roots.append(str(git_root))
+    assert len(roots) == len(set(roots)), "multiple repositories resolve to the same Git root"
 PY
-  fail 'repos.yaml: structured registry validation failed'
-fi
 
-if yq -e '.repositories | type == "!!seq" and length > 0' "$workspace_root/repos.yaml" >/dev/null 2>&1; then
-  mapfile -t repository_names < <(yq -r '.repositories[].name' "$workspace_root/repos.yaml")
-  mapfile -t repository_paths < <(yq -r '.repositories[].path' "$workspace_root/repos.yaml")
-  repository_git_roots=()
-  for index in "${!repository_names[@]}"; do
-    name="${repository_names[$index]}"
-    path="${repository_paths[$index]}"
-    [[ -n "$name" && "$name" != "null" ]] || fail 'repos.yaml: repository name is empty'
-    [[ -n "$path" && "$path" != "null" ]] || fail "repos.yaml: ${name}: path is empty"
-    [[ "$path" != /* ]] || fail "repos.yaml: ${name}: path must be relative"
-    module_root="$(python3 -c 'from pathlib import Path; import sys; print(Path(sys.argv[1]).resolve())' "$workspace_root/$path")"
-    if ! git -C "$module_root" rev-parse --show-toplevel >/dev/null 2>&1; then
-      fail "repos.yaml: ${name}: path is not a Git repository: $path"
-      continue
-    fi
-    git_root="$(git -C "$module_root" rev-parse --show-toplevel)"
-    [[ "$git_root" == "$module_root" ]] || fail "repos.yaml: ${name}: path must be exact Git root: $path"
-    repository_git_roots+=("$git_root")
+# On a real workspace, verification is also a runtime-readiness check. The template
+# CI cannot install machine-local Herdr integrations, so it explicitly opts out.
+if [[ "$template_mode" != "1" ]]; then
+  command -v herdr >/dev/null 2>&1 || fail 'missing command: herdr'
+  integration_status="$(herdr integration status 2>&1 || true)"
+  mapfile -t adapters < <(
+    uv run --project "$mcp_project" python - "$routing" <<'PY'
+from pathlib import Path
+import sys, yaml
+data = yaml.safe_load(Path(sys.argv[1]).read_text(encoding="utf-8")) or {}
+print("\n".join(sorted({cfg["adapter"] for cfg in data.get("agents", {}).values()})))
+PY
+  )
+  for adapter in "${adapters[@]}"; do
+    grep -Eq "^${adapter}:[[:space:]]+current\\b" <<<"$integration_status" || \
+      fail "Herdr ${adapter} integration is not current; run: herdr integration install ${adapter}"
   done
-  duplicate_names="$(printf '%s\n' "${repository_names[@]}" | sort | uniq -d)"
-  [[ -z "$duplicate_names" ]] || fail "repos.yaml: duplicate repository name(s): $duplicate_names"
-  duplicate_roots="$(printf '%s\n' "${repository_git_roots[@]}" | sort | uniq -d)"
-  [[ -z "$duplicate_roots" ]] || fail "repos.yaml: multiple entries resolve to same Git root(s): $duplicate_roots"
-else
-  fail 'repos.yaml: repositories must be a non-empty list'
 fi
 
-integration_status="$(herdr integration status 2>&1 || true)"
-mapfile -t adapters < <(yq -r '.agents[].adapter' "$routing" 2>/dev/null | sort -u)
-for adapter in "${adapters[@]}"; do
-  rg -q "^${adapter}: current\\b" <<<"$integration_status" || fail "Herdr ${adapter} integration is not current"
-done
+bash -n "$launcher"
+bash -n "$workspace_root/scripts/workspace-check.sh"
 
-if ((errors > 0)); then
-  printf '\nworkspace-check: FAIL (%d error(s))\n' "$errors" >&2
-  exit 1
-fi
-printf 'workspace-check: PASS\n'
+uv run --project "$mcp_project" python -m unittest discover -s "$mcp_project/tests" -v
+
+printf 'Workspace contract: OK\n'

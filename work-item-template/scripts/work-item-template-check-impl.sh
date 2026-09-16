@@ -2,668 +2,287 @@
 set -euo pipefail
 
 home="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-project="$home/mcp/work_item"
-errors=0
+fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 
-fail() {
-  printf 'FAIL: %s\n' "$*" >&2
-  errors=$((errors + 1))
-}
-
-for command in python3 uv rg; do
-  command -v "$command" >/dev/null 2>&1 || fail "missing command: $command"
-done
-
-for file in "$home/CLI.md" "$home/ARTIFACTS.md" "$home/config/artifact-templates.json"; do
-  [[ -f "$file" ]] || fail "missing required Work Item file: ${file#$home/}"
-done
-
-PYTHONPATH="$project" python3 -m unittest discover -s "$project/tests" -v || \
-  fail 'Work Item core/CLI/artifact/template unit tests failed'
-PYTHONPATH="$project" uv run --project "$project" python -m unittest discover -s "$project/mcp_tests" -v || \
-  fail 'Work Item typed MCP/template contract tests failed'
-python3 -m py_compile \
-  "$project/core.py" \
-  "$project/mutations.py" \
-  "$project/server.py" \
-  "$project/artifacts.py" \
-  "$project/artifact_templates.py" \
-  "$project/cli.py" \
-  "$project/models.py" || \
-  fail 'Work Item Python syntax check failed'
-bash -n "$home/scripts/work-item-mcp-server.sh" || \
-  fail 'work-item-mcp-server.sh: invalid Bash syntax'
-bash -n "$home/scripts/work-item-cli.sh" || \
-  fail 'work-item-cli.sh: invalid Bash syntax'
-bash -n "$home/scripts/install-user-mcp.sh" || \
-  fail 'install-user-mcp.sh: invalid Bash syntax'
-
-server="$project/server.py"
-core="$project/core.py"
-mutations="$project/mutations.py"
-artifacts="$project/artifacts.py"
-artifact_templates="$project/artifact_templates.py"
-artifact_template_config="$home/config/artifact-templates.json"
-models="$project/models.py"
-cli="$project/cli.py"
-installer="$home/scripts/install-user-mcp.sh"
-cli_launcher="$home/scripts/work-item-cli.sh"
-
-for pattern in \
-  'MCPServer' \
-  'WORK_ITEM_DB_PATH' \
-  'work_item_get' \
-  'work_item_history_read' \
-  'work_item_list' \
-  'work_item_create' \
-  'work_item_update' \
-  'WorkItemSnapshot' \
-  'WorkItemHistoryPage' \
-  'HistoryCollection' \
-  'HistoryReadLimit' \
-  'history_revision_conflict' \
-  'WorkItemMutation' \
-  'mutate_work_item' \
-  '_work_item_update_error_result' \
-  '"updated": False' \
-  'work_item_validation' \
-  'expected_revision' \
-  'except NotFoundError as exc' \
-  '"found": False' \
-  'work_item_not_found' \
-  'question_upsert' \
-  'decision_upsert' \
-  'change_upsert' \
-  'blocker_upsert' \
-  'handoff_upsert' \
-  'checkpoint_append' \
-  'grouped typed operations object' \
-  'do not send op/value envelopes' \
-  'compact receipt' \
-  'work_item_artifact_list' \
-  'work_item_artifact_get' \
-  'work_item_artifact_create' \
-  'work_item_artifact_append' \
-  'work_item_artifact_read' \
-  'work_item_artifact_finalize' \
-  'ArtifactContent' \
-  'ArtifactReadLimit' \
-  'ARTIFACT_LIST_MAX' \
-  'ARTIFACT_READ_MIN_BYTES' \
-  'Do not create artifacts merely as normal progress' \
-  'Artifact read cursors are bound to one artifact revision' \
-  'Artifact mutations never advance' \
-  'load_artifact_templates' \
-  'ARTIFACT_TEMPLATES = load_artifact_templates()' \
-  '_with_template_guidance' \
-  'template_guidance' \
-  'not persisted' \
-  'does not enforce'; do
-  rg -F -q "$pattern" "$server" || fail "server.py: missing contract: $pattern"
-done
-
-tool_count="$(rg -c '^@mcp\.tool\(\)$' "$server" || true)"
-[[ "$tool_count" == "11" ]] || \
-  fail "server.py: expected exactly eleven public MCP tools (5 Work Item + 6 artifact), found $tool_count"
-
-# CRITICAL TYPED GROUPED UPDATE INVARIANT — DO NOT REMOVE OR WEAKEN THIS CHECK.
-# Historical semantic collections must not return to public full-array replacement or
-# nested discriminated-union op/value envelopes. Semantic prose is checked through AST/
-# generated schema below so source line wrapping cannot create false failures.
-if ! SERVER_PATH="$server" python3 - <<'PY'
-import ast
-import os
-from pathlib import Path
-
-path = Path(os.environ["SERVER_PATH"])
-text = path.read_text(encoding="utf-8")
-tree = ast.parse(text)
-funcs = {
-    node.name: node
-    for node in tree.body
-    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-}
-update = funcs["work_item_update"]
-mutation_arg = next(arg for arg in update.args.args if arg.arg == "mutation")
-source = ast.get_source_segment(text, update) or ""
-source_lower = source.lower()
-assert isinstance(mutation_arg.annotation, ast.Name)
-assert mutation_arg.annotation.id == "WorkItemMutation"
-assert "mutation.to_core_mutation()" in source
-assert "mutate_work_item(" in source
-assert "update_work_item(" not in source
-assert "_work_item_update_error_result" in source
-assert "except (ValidationError, ConflictError, NotFoundError)" in source
-assert "direct typed groups" in source_lower
-assert "there is no op/value envelope" in source_lower
-assert "cross-group ordering is not" in source_lower
-assert "applied in caller order" not in source_lower
-PY
-then
-  fail 'server.py: work_item_update must expose grouped WorkItemMutation and route only through incremental mutation engine'
-fi
-
-# CRITICAL BOUNDED READ INVARIANT — public GET must never regress to raw full-document
-# hydration. History is a separate one-collection typed tool with revision-bound cursor semantics.
-if ! SERVER_PATH="$server" python3 - <<'PY'
-import ast
-import os
-from pathlib import Path
-
-path = Path(os.environ["SERVER_PATH"])
-text = path.read_text(encoding="utf-8")
-tree = ast.parse(text)
-funcs = {
-    node.name: node
-    for node in tree.body
-    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-}
-get_fn = funcs["work_item_get"]
-history_fn = funcs["work_item_history_read"]
-get_source = ast.get_source_segment(text, get_fn) or ""
-history_source = ast.get_source_segment(text, history_fn) or ""
-assert "get_work_item_snapshot(" in get_source
-assert "WorkItemSnapshot.model_validate" in get_source
-assert "get_work_item(_db_path()" not in get_source
-args = {
-    arg.arg: ast.unparse(arg.annotation)
-    for arg in history_fn.args.args
-    if arg.annotation is not None
-}
-assert args["collection"] == "HistoryCollection"
-assert args["status"] == "HistoryStatus | None"
-assert "read_work_item_history(" in history_source
-assert "WorkItemHistoryPage.model_validate" in history_source
-PY
-then
-  fail 'server.py: bounded snapshot/scoped-history read contract regressed'
-fi
-
-# CRITICAL ARTIFACT TEMPLATE BOUNDARY — guidance is startup advisory data only.
-if ! SERVER_PATH="$server" python3 - <<'PY'
-import ast
-import os
-from pathlib import Path
-
-path = Path(os.environ["SERVER_PATH"])
-text = path.read_text(encoding="utf-8")
-tree = ast.parse(text)
-funcs = {
-    node.name: ast.get_source_segment(text, node) or ""
-    for node in tree.body
-    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-}
-create = funcs["work_item_artifact_create"]
-helper = funcs["_with_template_guidance"]
-assert "create_artifact(" in create
-assert "_with_template_guidance" in create
-assert "template_guidance_for" in helper
-assert "list_artifacts(" not in create
-assert "get_artifact(" not in create
-PY
-then
-  fail 'server.py: artifact create must attach advisory in-memory guidance without a post-commit DB enrichment query'
-fi
-
-# CRITICAL MUTATION RESPONSE INVARIANT — committed updates return the bounded receipt
-# produced by the transaction and never depend on a second snapshot/history query.
-if ! SERVER_PATH="$server" python3 - <<'PY'
-import ast
-import os
-from pathlib import Path
-
-path = Path(os.environ["SERVER_PATH"])
-text = path.read_text(encoding="utf-8")
-tree = ast.parse(text)
-funcs = {
-    node.name: ast.get_source_segment(text, node) or ""
-    for node in tree.body
-    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-}
-assert "_with_artifacts" in funcs["work_item_get"]
-assert "_with_artifacts" not in funcs["work_item_create"]
-assert "_with_artifacts" not in funcs["work_item_update"]
-assert "get_work_item_snapshot" not in funcs["work_item_update"]
-assert "read_work_item_history" not in funcs["work_item_update"]
-PY
-then
-  fail 'server.py: update must return its compact committed receipt without post-commit enrichment/history hydration'
-fi
-
-for pattern in \
-  'CREATE TABLE IF NOT EXISTS work_items' \
-  'PRAGMA journal_mode=WAL' \
-  'BEGIN IMMEDIATE' \
-  'revision conflict' \
-  'current_requirements' \
-  'questions' \
-  'decisions' \
-  'changes' \
-  'handoffs' \
-  'next_actions' \
-  'checkpoints' \
-  'DERIVED_FIELDS = \{"artifacts"\}' \
-  'must not persist derived fields' \
-  'must not modify derived fields' \
-  'load_work_item_document' \
-  'project_work_item_snapshot' \
-  'get_work_item_snapshot' \
-  'read_work_item_history' \
-  'HISTORY_COLLECTIONS' \
-  'HISTORY_STATUS_BY_COLLECTION' \
-  'HISTORY_REPOSITORY_FILTER_COLLECTIONS' \
-  'history revision conflict' \
-  'history cursor does not match collection or filters' \
-  'PRAGMA user_version' \
-  'WORK_ITEM_DATA_VERSION = 1' \
-  '_migrate_legacy_lifecycle_statuses'; do
-  rg -q "$pattern" "$core" || fail "core.py: missing read/storage contract: $pattern"
-done
-
-for pattern in \
-  'MUTATION_OPERATION_MAX = 50' \
-  'STATE_FIELDS' \
-  'OPERATION_GROUP_ORDER' \
-  'mutation.operations must be a grouped object' \
-  'at most .* total records' \
-  'LIFECYCLE_TRANSITIONS' \
-  'IMMUTABLE_FIELDS' \
-  'WRITE_ONCE_FIELDS' \
-  'question_upsert' \
-  'decision_upsert' \
-  'change_upsert' \
-  'blocker_upsert' \
-  'handoff_upsert' \
-  'checkpoint_append' \
-  'duplicate target' \
-  '_validate_cross_record_references' \
-  'BEGIN IMMEDIATE' \
-  'revision conflict' \
-  'cross-group ordering is not part of the public contract' \
-  'mutation does not change canonical Work Item state' \
-  '"updated": True' \
-  '"changed": changed'; do
-  rg -q "$pattern" "$mutations" || fail "mutations.py: missing grouped mutation invariant: $pattern"
-done
-
-# Mutation write path must stay one whole-document optimistic transaction. It must not
-# hydrate public read surfaces, loop on conflicts, or recursively re-enter itself. The
-# current canonical document and final candidate must both pass validate_document before
-# mutation continuation/persistence; pin those semantics structurally rather than through
-# regex over Python call syntax.
-if ! MUTATIONS_PATH="$mutations" python3 - <<'PY'
-import ast
-import os
-from pathlib import Path
-
-path = Path(os.environ["MUTATIONS_PATH"])
-tree = ast.parse(path.read_text(encoding="utf-8"))
-mutate = next(
-    node
-    for node in tree.body
-    if isinstance(node, ast.FunctionDef) and node.name == "mutate_work_item"
+required=(
+  README.md
+  ARTIFACTS.md
+  skills/work-item/SKILL.md
+  skills/work-item/templates/WORK_ITEM.md
+  skills/work-item/templates/intake.md
+  skills/work-item/templates/investigation.md
+  skills/work-item/templates/plan.md
+  skills/work-item/templates/review.md
+  skills/work-item/templates/report.textile
+  scripts/install-user-skill.sh
+  scripts/export-legacy-work-items.py
+  scripts/remove-legacy-user-mcp.sh
 )
-call_names = {
-    node.func.id
-    for node in ast.walk(mutate)
-    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-}
-validation_targets = set()
-for node in ast.walk(mutate):
-    if not isinstance(node, ast.Assign) or len(node.targets) != 1:
-        continue
-    target = node.targets[0]
-    value = node.value
-    if not isinstance(target, ast.Name) or not isinstance(value, ast.Call):
-        continue
-    if not isinstance(value.func, ast.Name) or value.func.id != "validate_document":
-        continue
-    if len(value.args) != 1 or not isinstance(value.args[0], ast.Name):
-        continue
-    if value.args[0].id == target.id:
-        validation_targets.add(target.id)
-assert {"current", "candidate"} <= validation_targets
-assert "get_work_item_snapshot" not in call_names
-assert "read_work_item_history" not in call_names
-assert "mutate_work_item" not in call_names
-assert not any(isinstance(node, ast.While) for node in ast.walk(mutate))
-assert not any(
-    isinstance(node, ast.ExceptHandler)
-    and isinstance(node.type, ast.Name)
-    and node.type.id == "ConflictError"
-    for node in ast.walk(mutate)
-)
-PY
-then
-  fail 'mutations.py: mutation engine must validate current/final documents and must not hydrate public reads or auto-retry/rebase stale operations'
-fi
-
-for pattern in \
-  'class QuestionRecord' \
-  'class DecisionRecord' \
-  'class RequirementChangeRecord' \
-  'class BlockerRecord' \
-  'class HandoffRecord' \
-  'class NextActionRecord' \
-  'class CheckpointRecord' \
-  'class WorkItemSnapshot' \
-  'class WorkItemHistoryPage' \
-  'class WorkItemStatePatch' \
-  'class QuestionMutation' \
-  'class DecisionMutation' \
-  'class RequirementChangeMutation' \
-  'class BlockerMutation' \
-  'class HandoffMutation' \
-  'class WorkItemOperations' \
-  'operation_count' \
-  'to_core_operations' \
-  'class WorkItemMutation' \
-  'MUTATION_OPERATION_MAX = 50' \
-  'Required canonical question lifecycle' \
-  'Required canonical decision lifecycle' \
-  'extra="forbid"' \
-  'extra="allow"' \
-  'to_merge_patch' \
-  'to_core_mutation' \
-  'exclude_unset=True' \
-  'by_alias=True' \
-  'Current effective repository contribution/state' \
-  'not a narrative of the latest session' \
-  'kind: str | None' \
-  'artifact_id: str | None' \
-  'not an enum or workflow FSM' \
-  'Partial semantic command' \
-  'there is no op/value envelope' \
-  'Historical semantic collections are intentionally not replaceable here'; do
-  rg -F -q "$pattern" "$models" || fail "models.py: missing typed grouped mutation contract: $pattern"
+for rel in "${required[@]}"; do
+  [[ -f "$home/$rel" ]] || fail "missing required file: $rel"
 done
 
-# Public mutation schema must expose direct typed groups and make both historical
-# full-array replacement and the old op/value union shape unrepresentable.
-if ! PYTHONPATH="$project" uv run --project "$project" python - <<'PY'
-from pydantic import ValidationError
-from models import (
-    DecisionRecord,
-    MUTATION_OPERATION_MAX,
-    QuestionRecord,
-    WorkItemMutation,
-    WorkItemStatePatch,
-)
-assert WorkItemStatePatch.model_validate({}).to_merge_patch() == {}
-assert WorkItemMutation.model_validate({"state": {"repos": {"old": None}}}).to_core_mutation() == {
-    "state": {"repos": {"old": None}}
-}
-partial = WorkItemMutation.model_validate({
-    "operations": {
-        "question_upsert": [
-            {"id": "q1", "status": "resolved", "decision_id": "d2"}
-        ]
-    }
-}).to_core_mutation()
-assert partial["operations"]["question_upsert"][0] == {
-    "id": "q1", "status": "resolved", "decision_id": "d2"
-}
-checkpoint = WorkItemMutation.model_validate({
-    "operations": {
-        "checkpoint_append": [{
-            "repo": "repo-a",
-            "kind": "implementation-rework",
-            "artifact_id": "review:2",
-            "summary": "Fixed review finding and reverified.",
-        }]
-    }
-}).to_core_mutation()["operations"]["checkpoint_append"][0]
-assert checkpoint["kind"] == "implementation-rework"
-assert checkpoint["artifact_id"] == "review:2"
-state_properties = WorkItemStatePatch.model_json_schema()["properties"]
-for historical in ("questions", "decisions", "changes", "blockers", "handoffs", "checkpoints"):
-    assert historical not in state_properties
-schema = WorkItemMutation.model_json_schema()
-defs = schema["$defs"]
-operation_properties = defs["WorkItemOperations"]["properties"]
-assert set(operation_properties) == {
-    "decision_upsert",
-    "question_upsert",
-    "change_upsert",
-    "blocker_upsert",
-    "handoff_upsert",
-    "checkpoint_append",
-}
-assert "WorkItemOperation" not in defs
-assert "CheckpointAppendOperation" not in defs
-for prop in operation_properties.values():
-    assert prop["maxItems"] == MUTATION_OPERATION_MAX
-operations_description = schema["properties"]["operations"]["description"].lower()
-assert "there is no op/value envelope" in operations_description
-assert "cross-group order is not part of the public contract" in operations_description
-try:
-    WorkItemMutation.model_validate({
-        "operations": [{"op": "question_upsert", "value": {"id": "q1"}}]
-    })
-except ValidationError:
-    pass
-else:
-    raise AssertionError("legacy op/value operation list must be rejected")
-try:
-    WorkItemMutation.model_validate({
-        "operations": {"question_upsert": [{"id": "q1", "answer": None}]}
-    })
-except ValidationError:
-    pass
-else:
-    raise AssertionError("incremental semantic mutation must reject explicit null")
-try:
-    WorkItemMutation.model_validate({
-        "operations": {
-            "checkpoint_append": [{"summary": f"checkpoint {i}"} for i in range(30)],
-            "blocker_upsert": [
-                {"id": f"b{i}", "status": "open", "summary": f"blocker {i}"}
-                for i in range(21)
-            ],
-        }
-    })
-except ValidationError:
-    pass
-else:
-    raise AssertionError("total semantic mutation count must be limited across groups")
-try:
-    QuestionRecord.model_validate({"id": "q1", "question": "missing status"})
-except ValidationError:
-    pass
-else:
-    raise AssertionError("QuestionRecord.status must be required")
-try:
-    DecisionRecord.model_validate({"id": "d1", "summary": "missing status"})
-except ValidationError:
-    pass
-else:
-    raise AssertionError("DecisionRecord.status must be required")
-PY
-then
-  fail 'models.py: bounded state + direct grouped mutation schema invariants failed'
-fi
-
-for pattern in \
-  'ARTIFACT_TEMPLATES_ENV = "WORK_ITEM_ARTIFACT_TEMPLATES_PATH"' \
-  'config" / "artifact-templates.json"' \
-  'ARTIFACT_TEMPLATE_FILE_MAX_BYTES = 64_000' \
-  'ARTIFACT_TEMPLATE_SECTION_MAX = 100' \
-  'class ArtifactTemplateConfigError' \
-  'resolve_artifact_templates_path' \
-  'validate_artifact_templates' \
-  'load_artifact_templates' \
-  'template_guidance_for' \
-  'unsupported types' \
-  'duplicate id' \
-  'unknown fields' \
-  'copy.deepcopy'; do
-  rg -F -q "$pattern" "$artifact_templates" || \
-    fail "artifact_templates.py: missing config contract: $pattern"
+[[ ! -e "$home/mcp" ]] || fail 'legacy Work Item MCP directory must not exist'
+[[ ! -e "$home/config/artifact-templates.json" ]] || fail 'legacy MCP artifact template config must not exist'
+for rel in CLI.md scripts/install-user-mcp.sh scripts/work-item-cli.sh scripts/work-item-mcp-server.sh; do
+  [[ ! -e "$home/$rel" ]] || fail "legacy Work Item MCP surface remains: $rel"
 done
 
-if ! PYTHONPATH="$project" ARTIFACT_TEMPLATE_CONFIG="$artifact_template_config" python3 - <<'PY'
-import os
-from artifact_templates import load_artifact_templates
-
-templates = load_artifact_templates(os.environ["ARTIFACT_TEMPLATE_CONFIG"])
-assert set(templates) == {"intake", "investigation", "plan", "review", "report"}
-report = templates["report"]
-assert [section["id"] for section in report["sections"]] == [
-    "root-cause-requirement",
-    "solution",
-    "affected",
-    "impact-module-analysis",
-    "sql-report",
-    "commits",
-    "testcase-ut",
-    "deploy",
-]
-assert report["sections"][0]["title"] == "h3. +1. Root-cause/requirement:+"
-assert report["sections"][-1]["title"] == "h3. +8. Deploy:+"
-commits = next(section for section in report["sections"] if section["id"] == "commits")
-deploy = next(section for section in report["sections"] if section["id"] == "deploy")
-testcase = next(section for section in report["sections"] if section["id"] == "testcase-ut")
-assert "<<branch user tự điền>>" in commits["purpose"]
-assert "<<pre4 user tự điền>>" in deploy["purpose"]
-assert "never invent passing tests" in testcase["purpose"]
-PY
-then
-  fail 'config/artifact-templates.json: default artifact template config is invalid'
-fi
-
+skill="$home/skills/work-item/SKILL.md"
 for pattern in \
-  'ARTIFACT_TYPES = .*intake.*investigation.*plan.*review.*report' \
-  'ARTIFACT_CHUNK_MAX_BYTES = 32_000' \
-  'ARTIFACT_READ_MIN_BYTES = 4' \
-  'ARTIFACT_READ_MAX_BYTES = 32_000' \
-  'ARTIFACT_PER_WORK_ITEM_MAX = 50' \
-  'ARTIFACT_SECTION_MAX = 100' \
-  '_connect as _connect_work_items' \
-  'CREATE TABLE IF NOT EXISTS work_item_artifacts' \
-  'CREATE TABLE IF NOT EXISTS work_item_artifact_sections' \
-  'CREATE TABLE IF NOT EXISTS work_item_artifact_chunks' \
+  'current-state task dossier' \
+  'Multi-turn continuity MUST be represented as **current semantic state**' \
+  'Requirement change không tự invalidate prior findings' \
+  'work_item_path=<absolute-workspace-path>/work-items/<directory-key>; id=<canonical-id>; revision=<revision>' \
+  '^[a-z][a-z0-9_-]*:[A-Za-z0-9][A-Za-z0-9._-]*$' \
+  'casefold-unique directory keys' \
+  'front-matter `id` khớp **exact canonical ID**' \
+  'legacy_reconciliation_required: true' \
+  'verify nó vẫn nằm dưới resolved `<workspace>/work-items`' \
+  'Không tạo mặc định history/turn/execution/checkpoint files' \
+  'report.textile'; do
+  grep -Fq -- "$pattern" "$skill" || fail "skill missing contract: $pattern"
+done
+
+exporter="$home/scripts/export-legacy-work-items.py"
+for pattern in \
+  'WORK_ITEM_ID_RE = re.compile' \
+  'ARTIFACT_TABLES = {' \
+  'VALID_STATUSES = {' \
+  'def casefold_key' \
+  'legacy_reconciliation_required: true' \
+  'DECISION_CORE_FIELDS' \
+  'REVISIONED_ARTIFACT_TYPES' \
   'based_on_work_item_revision' \
-  'artifact revision conflict' \
-  'cursor revision' \
-  '_parse_cursor' \
-  '_cursor' \
-  'artifact is complete and immutable' \
-  'split it into smaller chunks' \
-  'cursor is invalid' \
-  'cannot finalize an artifact without content' \
-  'ON DELETE CASCADE'; do
-  rg -q "$pattern" "$artifacts" || fail "artifacts.py: missing bounded artifact contract: $pattern"
+  'render_textile_report' \
+  'legacy_default_status="active"' \
+  'legacy_default_status="open"' \
+  'validate_artifact_schema' \
+  'conn.execute("BEGIN")' \
+  'section["chunks"] = chunks' \
+  'latest_by_type.setdefault' \
+  'if the old installer used --db-path' \
+  'mode=0o600' \
+  'target.resolve().relative_to(root.resolve())' \
+  'case-insensitive-equivalent' \
+  'source SQLite DB was not modified'; do
+  grep -Fq -- "$pattern" "$exporter" || fail "legacy exporter missing contract: $pattern"
 done
 
-if rg -q 'artifact_templates|ARTIFACT_TEMPLATES|template_guidance' "$artifacts"; then
-  fail 'artifacts.py: artifact storage must not import, persist, or enforce template guidance'
-fi
+python3 -m py_compile "$exporter"
+bash -n "$home/scripts/install-user-skill.sh"
+bash -n "$home/scripts/remove-legacy-user-mcp.sh"
 
-rg -q 'len\(value\.encode\("utf-8"\)\) > ARTIFACT_CHUNK_MAX_BYTES' "$artifacts" || \
-  fail 'artifacts.py: append must enforce UTF-8 byte limit server-side'
-rg -q 'ARTIFACT_READ_MIN_BYTES <= limit_bytes <= ARTIFACT_READ_MAX_BYTES' "$artifacts" || \
-  fail 'artifacts.py: read must enforce bounded response size server-side'
-rg -q 'return value' "$artifacts" || \
-  fail 'artifacts.py: chunk content must be preserved rather than stripped/reformatted'
-rg -q 'SET revision = \?, updated_at = \?' "$artifacts" || \
-  fail 'artifacts.py: artifact append must advance artifact revision'
-rg -q "SET state = 'complete', revision = \?, updated_at = \?" "$artifacts" || \
-  fail 'artifacts.py: artifact finalize must advance artifact revision'
-if rg -q 'UPDATE work_items|SET revision = .*work_items' "$artifacts"; then
-  fail 'artifacts.py: artifact mutations must never update Work Item revision/state'
-fi
-if rg -q 'PRAGMA journal_mode|PRAGMA synchronous' "$artifacts"; then
-  fail 'artifacts.py: base SQLite connection policy belongs to core.py and must not be duplicated'
-fi
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
 
-for pattern in \
-  'prog="agent-work-item"' \
-  'mode=ro' \
-  'SELECT status, COUNT\(\*\)' \
-  'SELECT \* FROM work_items' \
-  'CURRENT REQUIREMENTS' \
-  'REPOSITORIES' \
-  'ARTIFACTS' \
-  'artifact_parser' \
-  '_list_artifacts_readonly' \
-  '_stream_artifact_section_chunks' \
-  '_print_artifact_stream' \
-  '_print_artifact_raw_stream' \
-  '_get_artifact_json_readonly' \
-  'SELECT content FROM work_item_artifact_chunks' \
-  '--raw' \
-  'QUESTIONS' \
-  'DECISIONS' \
-  'CHANGES' \
-  'BLOCKERS' \
-  'HANDOFFS' \
-  'NEXT ACTIONS' \
-  'CHECKPOINTS' \
-  'revision='; do
-  rg -q -- "$pattern" "$cli" || fail "cli.py: missing human-view contract: $pattern"
-done
-
-if rg -i -q '\b(insert|update|delete|replace|alter|drop|create|pragma|vacuum|reindex)\b[^\n]*(work_items|work_item_artifact|table|index|journal|synchronous)' "$cli"; then
-  fail 'cli.py: human CLI must remain strictly read-only; SQL mutation/schema/PRAGMA path detected'
-fi
-if rg -q 'from (core|artifacts) import .*update_|from (core|artifacts) import .*create_|create_work_item\(|append_artifact\(|finalize_artifact\(' "$cli"; then
-  fail 'cli.py: human CLI must not import/call Work Item or artifact mutation functions'
-fi
-
-if ! CLI_PATH="$cli" python3 - <<'PY'
-import ast
-import os
-from pathlib import Path
-
-path = Path(os.environ["CLI_PATH"])
-text = path.read_text(encoding="utf-8")
-tree = ast.parse(text)
-funcs = {
-    node.name: ast.get_source_segment(text, node) or ""
-    for node in tree.body
-    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+# Main legacy fixture.
+mkdir -p "$tmp/workspace"
+printf 'repositories:\n  - name: demo\n    path: demo\n' > "$tmp/workspace/repos.yaml"
+python3 - "$tmp/legacy.sqlite3" <<'PY'
+import json, sqlite3, sys
+doc = {
+    "id": "redmine:116655",
+    "title": "Legacy task",
+    "status": "active",
+    "phase": "review: security",
+    "summary": "Current imported state",
+    "current_requirements": ["Preserve legacy requirement"],
+    "repos": {
+        "demo": {
+            "status": "active",
+            "summary": "Investigating",
+            "verification": ["pytest -q: pass"],
+        }
+    },
+    "questions": [{"id": "q1", "question": "Legacy unanswered question"}],
+    "decisions": [{
+        "id": "d1",
+        "summary": "Legacy active decision",
+        "source": "user request",
+        "rationale": "legacy rationale",
+    }],
+    "changes": [],
+    "blockers": [],
+    "handoffs": [{
+        "id": "h1", "from": "demo", "to": "api", "status": "pending",
+        "summary": "Finish API change",
+    }],
+    "next_actions": [{
+        "action": "Coordinate remaining work", "repo": "demo", "owner": "platform",
+    }],
+    "checkpoints": [],
 }
-stream = funcs["_stream_artifact_section_chunks"]
-diagnostic = funcs["_print_artifact_stream"]
-raw = funcs["_print_artifact_raw_stream"]
-build_parser = funcs["_build_parser"]
-main = funcs["main"]
-assert "SELECT content FROM work_item_artifact_chunks" in stream
-assert "sys.stdout.write(text)" in stream
-assert "_get_artifact_json_readonly" not in stream
-assert "_stream_artifact_section_chunks" in diagnostic
-assert "_get_artifact_json_readonly" not in diagnostic
-assert "_stream_artifact_section_chunks" in raw
-assert "_get_artifact_json_readonly" not in raw
-assert "add_mutually_exclusive_group" in build_parser
-assert '"--raw"' in build_parser
-assert "_get_artifact_json_readonly" in main
-assert "_print_artifact_stream" in main
-assert "_print_artifact_raw_stream" in main
+conn = sqlite3.connect(sys.argv[1])
+conn.execute("CREATE TABLE work_items (id TEXT PRIMARY KEY, revision INTEGER NOT NULL, status TEXT NOT NULL, document_json TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)")
+conn.execute("INSERT INTO work_items VALUES (?, ?, ?, ?, ?, ?)", ("redmine:116655", 7, "active", json.dumps(doc), "2026-01-01", "2026-01-02"))
+conn.execute("CREATE TABLE work_item_artifacts (work_item_id TEXT NOT NULL, artifact_id TEXT NOT NULL, type TEXT NOT NULL, state TEXT NOT NULL, title TEXT NOT NULL, summary TEXT NOT NULL, based_on_work_item_revision INTEGER NOT NULL, revision INTEGER NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)")
+conn.execute("CREATE TABLE work_item_artifact_sections (work_item_id TEXT NOT NULL, artifact_id TEXT NOT NULL, section_id TEXT NOT NULL, title TEXT NOT NULL, section_order INTEGER NOT NULL, chunk_count INTEGER NOT NULL DEFAULT 0, char_count INTEGER NOT NULL DEFAULT 0, byte_count INTEGER NOT NULL DEFAULT 0)")
+conn.execute("CREATE TABLE work_item_artifact_chunks (work_item_id TEXT NOT NULL, artifact_id TEXT NOT NULL, section_id TEXT NOT NULL, chunk_index INTEGER NOT NULL, content TEXT NOT NULL, char_count INTEGER NOT NULL, byte_count INTEGER NOT NULL, created_at TEXT NOT NULL)")
+def add_artifact(artifact_id, artifact_type, title, summary, based_on, section_id, section_title, chunks, updated_at):
+    conn.execute(
+        "INSERT INTO work_item_artifacts VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        ("redmine:116655", artifact_id, artifact_type, "final", title, summary, based_on, 1, "2026-01-01", updated_at),
+    )
+    content = "".join(chunks)
+    conn.execute(
+        "INSERT INTO work_item_artifact_sections VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        ("redmine:116655", artifact_id, section_id, section_title, 0, len(chunks), len(content), len(content.encode())),
+    )
+    for index, chunk in enumerate(chunks):
+        conn.execute(
+            "INSERT INTO work_item_artifact_chunks VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            ("redmine:116655", artifact_id, section_id, index, chunk, len(chunk), len(chunk.encode()), f"2026-01-02T00:00:0{index}"),
+        )
+add_artifact("investigation:2", "investigation", "Wrong tie winner", "Do not materialize", 6, "scope", "Scope", ["wrong"], "2026-01-03")
+add_artifact("investigation:1", "investigation", "Investigation", "Verified finding", 5, "scope", "Scope", ["Investigated ", "legacy evidence."], "2026-01-03")
+add_artifact("report:1", "report", "Final report", "Legacy report summary", 7, "root-cause", "h3. +1. Root-cause/requirement:+", ["Legacy root cause."], "2026-01-02")
+conn.commit()
+conn.close()
 PY
-then
-  fail 'cli.py: diagnostic/raw artifact views must stream chunks; full materialization is reserved for explicit --json'
+
+python3 "$exporter" --workspace "$tmp/workspace" --db "$tmp/legacy.sqlite3"
+dossier="$tmp/workspace/work-items/redmine~116655"
+archive="$tmp/workspace/.qiqi/migration-backups/v0024/legacy-work-items/redmine~116655.json"
+[[ -f "$dossier/WORK_ITEM.md" ]] || fail 'legacy exporter did not create dossier'
+[[ -f "$archive" ]] || fail 'legacy exporter did not preserve archive'
+grep -Fxq 'legacy_reconciliation_required: true' "$dossier/WORK_ITEM.md" || fail 'legacy reconciliation gate missing'
+grep -Fq 'Active decision d1 has legacy extension/provenance fields (rationale, source)' "$dossier/WORK_ITEM.md" || fail 'decision provenance reconciliation was not surfaced'
+grep -Fq 'Protected legacy archive:' "$dossier/WORK_ITEM.md" || fail 'legacy archive locator missing'
+grep -Fq 'demo -> api: Finish API change' "$dossier/WORK_ITEM.md" || fail 'pending handoff dropped'
+grep -Fq 'demo: pytest -q: pass' "$dossier/WORK_ITEM.md" || fail 'repository verification dropped'
+grep -Fq 'Coordinate remaining work (repo=demo, owner=platform)' "$dossier/WORK_ITEM.md" || fail 'next-action ownership collapsed'
+grep -Fxq 'based_on_work_item_revision: 5' "$dossier/investigation.md" || fail 'artifact revision provenance/tie ordering drifted'
+[[ "$(head -n 1 "$dossier/report.textile")" == 'h3. +1. Root-cause/requirement:+' ]] || fail 'Textile report heading drifted'
+
+python3 - "$archive" <<'PY'
+import json, stat, sys
+from pathlib import Path
+path = Path(sys.argv[1])
+data = json.loads(path.read_text(encoding="utf-8"))
+assert data["work_item"]["decisions"][0]["source"] == "user request"
+assert data["work_item"]["decisions"][0]["rationale"] == "legacy rationale"
+assert data["artifacts"][0]["sections"][0]["chunks"][0]["chunk_index"] == 0
+assert stat.S_IMODE(path.stat().st_mode) == 0o600
+PY
+
+# Separator mapping remains distinct.
+mkdir -p "$tmp/separator-workspace"
+printf 'repositories:\n  - name: demo\n    path: demo\n' > "$tmp/separator-workspace/repos.yaml"
+python3 - "$tmp/separator.sqlite3" <<'PY'
+import json, sqlite3, sys
+conn = sqlite3.connect(sys.argv[1])
+conn.execute("CREATE TABLE work_items (id TEXT PRIMARY KEY, revision INTEGER NOT NULL, status TEXT NOT NULL, document_json TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)")
+for item_id in ("a:b--c", "a--b:c"):
+    doc = {"id": item_id, "title": item_id, "status": "active", "phase": "intake", "summary": "", "current_requirements": [], "repos": {}, "questions": [], "decisions": [], "changes": [], "blockers": [], "handoffs": [], "next_actions": [], "checkpoints": []}
+    conn.execute("INSERT INTO work_items VALUES (?, ?, ?, ?, ?, ?)", (item_id, 1, "active", json.dumps(doc), "2026-01-01", "2026-01-01"))
+conn.commit(); conn.close()
+PY
+python3 "$exporter" --workspace "$tmp/separator-workspace" --db "$tmp/separator.sqlite3" >/dev/null
+[[ -f "$tmp/separator-workspace/work-items/a~b--c/WORK_ITEM.md" ]] || fail 'separator-safe key missing'
+[[ -f "$tmp/separator-workspace/work-items/a--b~c/WORK_ITEM.md" ]] || fail 'separator-safe key missing'
+
+# Cross-platform policy rejects casefold-equivalent keys before any write.
+mkdir -p "$tmp/casefold-workspace"
+printf 'repositories:\n  - name: demo\n    path: demo\n' > "$tmp/casefold-workspace/repos.yaml"
+python3 - "$tmp/casefold.sqlite3" <<'PY'
+import json, sqlite3, sys
+conn = sqlite3.connect(sys.argv[1])
+conn.execute("CREATE TABLE work_items (id TEXT PRIMARY KEY, revision INTEGER NOT NULL, status TEXT NOT NULL, document_json TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)")
+for item_id in ("redmine:ABC", "redmine:abc"):
+    doc = {"id": item_id, "title": item_id, "status": "active", "phase": "intake", "summary": "", "current_requirements": [], "repos": {}, "questions": [], "decisions": [], "changes": [], "blockers": [], "handoffs": [], "next_actions": [], "checkpoints": []}
+    conn.execute("INSERT INTO work_items VALUES (?, ?, ?, ?, ?, ?)", (item_id, 1, "active", json.dumps(doc), "2026-01-01", "2026-01-01"))
+conn.commit(); conn.close()
+PY
+if python3 "$exporter" --workspace "$tmp/casefold-workspace" --db "$tmp/casefold.sqlite3" >/dev/null 2>&1; then
+  fail 'casefold-equivalent Work Item keys must be rejected'
+fi
+[[ ! -e "$tmp/casefold-workspace/work-items/redmine~ABC/WORK_ITEM.md" ]] || fail 'casefold collision wrote partial output'
+[[ ! -e "$tmp/casefold-workspace/work-items/redmine~abc/WORK_ITEM.md" ]] || fail 'casefold collision wrote partial output'
+
+# Partial artifact schema fails closed.
+mkdir -p "$tmp/partial-workspace"
+printf 'repositories:\n  - name: demo\n    path: demo\n' > "$tmp/partial-workspace/repos.yaml"
+python3 - "$tmp/partial.sqlite3" <<'PY'
+import json, sqlite3, sys
+conn = sqlite3.connect(sys.argv[1])
+doc = {"id": "redmine:partial", "title": "partial", "status": "active", "phase": "intake", "summary": "", "current_requirements": [], "repos": {}, "questions": [], "decisions": [], "changes": [], "blockers": [], "handoffs": [], "next_actions": [], "checkpoints": []}
+conn.execute("CREATE TABLE work_items (id TEXT PRIMARY KEY, revision INTEGER NOT NULL, status TEXT NOT NULL, document_json TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)")
+conn.execute("INSERT INTO work_items VALUES (?, ?, ?, ?, ?, ?)", ("redmine:partial", 1, "active", json.dumps(doc), "2026-01-01", "2026-01-01"))
+conn.execute("CREATE TABLE work_item_artifacts (work_item_id TEXT, artifact_id TEXT, type TEXT)")
+conn.commit(); conn.close()
+PY
+if python3 "$exporter" --workspace "$tmp/partial-workspace" --db "$tmp/partial.sqlite3" >/dev/null 2>&1; then
+  fail 'incomplete legacy artifact schema must fail closed'
 fi
 
-rg -q 'command = f"exec bash ' "$installer" || \
-  fail 'installer: wrappers must execute source launchers through bash'
-rg -q 'write_wrapper\(mcp_wrapper, "/scripts/work-item-mcp-server\.sh", False\)' "$installer" || \
-  fail 'installer: MCP wrapper must target work-item-mcp-server.sh'
-rg -q 'write_wrapper\(cli_wrapper, "/scripts/work-item-cli\.sh", True\)' "$installer" || \
-  fail 'installer: human CLI wrapper must target work-item-cli.sh and forward arguments'
-rg -q 'cli_wrapper=.*agent-work-item' "$installer" || \
-  fail 'installer: missing agent-work-item human CLI wrapper path'
-rg -q 'python .*cli\.py.*"\$@"' "$cli_launcher" || \
-  fail 'work-item-cli.sh: must forward all user arguments to cli.py'
-
-if ! PYTHONPATH="$project" uv run --project "$project" python -c \
-  'from mcp.server import MCPServer; import pydantic; from core import NotFoundError; from server import _not_found_result; r = _not_found_result("redmine:1", NotFoundError("missing")); assert r["found"] is False and r["error"]["code"] == "work_item_not_found"; print("work-item-mcp-runtime: PASS")' \
-  >/dev/null; then
-  fail 'Work Item MCP runtime/control-flow import failed; run uv sync --project mcp/work_item'
+# Missing selected DB must fail.
+mkdir -p "$tmp/missing-db-workspace"
+printf 'repositories:\n  - name: demo\n    path: demo\n' > "$tmp/missing-db-workspace/repos.yaml"
+if python3 "$exporter" --workspace "$tmp/missing-db-workspace" --db "$tmp/does-not-exist.sqlite3" >/dev/null 2>&1; then
+  fail 'missing selected legacy DB must not report success'
 fi
 
-if ((errors > 0)); then
-  printf 'work-item-template-check: FAIL (%d error(s))\n' "$errors" >&2
-  exit 1
+# Conflict in a later item must not allow earlier writes.
+mkdir -p "$tmp/preflight-workspace/work-items/redmine~2"
+printf 'repositories:\n  - name: demo\n    path: demo\n' > "$tmp/preflight-workspace/repos.yaml"
+printf 'occupied\n' > "$tmp/preflight-workspace/work-items/redmine~2/existing.txt"
+python3 - "$tmp/preflight.sqlite3" <<'PY'
+import json, sqlite3, sys
+conn = sqlite3.connect(sys.argv[1])
+conn.execute("CREATE TABLE work_items (id TEXT PRIMARY KEY, revision INTEGER NOT NULL, status TEXT NOT NULL, document_json TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)")
+for item_id in ("redmine:1", "redmine:2"):
+    doc = {"id": item_id, "title": item_id, "status": "active", "phase": "uat", "summary": "", "current_requirements": [], "repos": {}, "questions": [], "decisions": [], "changes": [], "blockers": [], "handoffs": [], "next_actions": [], "checkpoints": []}
+    conn.execute("INSERT INTO work_items VALUES (?, ?, ?, ?, ?, ?)", (item_id, 1, "active", json.dumps(doc), "2026-01-01", "2026-01-01"))
+conn.commit(); conn.close()
+PY
+if python3 "$exporter" --workspace "$tmp/preflight-workspace" --db "$tmp/preflight.sqlite3" >/dev/null 2>&1; then
+  fail 'later conflict must fail preflight'
 fi
-printf 'work-item-template-check: PASS\n'
+[[ ! -e "$tmp/preflight-workspace/work-items/redmine~1/WORK_ITEM.md" ]] || fail 'preflight wrote earlier item'
+
+# Installer adoption protects the complete skill tree.
+bad_codex="$tmp/install-bad-codex"
+bad_claude="$tmp/install-bad-claude"
+mkdir -p "$bad_codex/work-item" "$bad_claude/work-item"
+cp "$home/skills/work-item/SKILL.md" "$bad_codex/work-item/SKILL.md"
+cp "$home/skills/work-item/SKILL.md" "$bad_claude/work-item/SKILL.md"
+if bash "$home/scripts/install-user-skill.sh" --codex-root "$bad_codex" --claude-root "$bad_claude" >/dev/null 2>&1; then
+  fail 'installer adopted an incomplete unmanaged skill tree'
+fi
+
+good_codex="$tmp/install-good-codex"
+good_claude="$tmp/install-good-claude"
+mkdir -p "$good_codex/work-item" "$good_claude/work-item"
+cp -R "$home/skills/work-item/." "$good_codex/work-item/"
+cp -R "$home/skills/work-item/." "$good_claude/work-item/"
+bash "$home/scripts/install-user-skill.sh" --codex-root "$good_codex" --claude-root "$good_claude" >/dev/null
+[[ -f "$good_codex/work-item/.agent-knowledge-harness-managed" ]] || fail 'identical Codex skill tree was not adopted'
+[[ -f "$good_claude/work-item/.agent-knowledge-harness-managed" ]] || fail 'identical Claude skill tree was not adopted'
+
+# Legacy unregister helper removes only harness-owned registrations and verifies absence.
+fakebin="$tmp/fakebin"
+mkdir -p "$fakebin"
+for cli in codex claude; do
+  cat > "$fakebin/$cli" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+state="${TMPDIR:?}/${0##*/}.state"
+if [[ "$1 $2 $3" == "mcp get work_item" ]]; then
+  [[ -f "$state" ]] || exit 1
+  printf 'command: /tmp/agent-work-item-mcp\n'
+  exit 0
+fi
+if [[ "$1 $2 $3" == "mcp remove work_item" ]]; then
+  rm -f "$state"
+  exit 0
+fi
+exit 64
+SH
+  chmod +x "$fakebin/$cli"
+  : > "$tmp/$cli.state"
+done
+PATH="$fakebin:$PATH" TMPDIR="$tmp" bash "$home/scripts/remove-legacy-user-mcp.sh" >/dev/null
+[[ ! -e "$tmp/codex.state" && ! -e "$tmp/claude.state" ]] || fail 'legacy MCP registration removal was not verified'
+
+printf 'Work Item filesystem template: OK\n'

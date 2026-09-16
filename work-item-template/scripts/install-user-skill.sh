@@ -53,6 +53,37 @@ normalize_path() {
   python3 -c 'import os,sys; print(os.path.abspath(os.path.expanduser(sys.argv[1])))' "$1"
 }
 
+skill_tree_matches() {
+  python3 - "$source_skill" "$1" <<'PY'
+from pathlib import Path
+import sys
+
+source = Path(sys.argv[1])
+target = Path(sys.argv[2])
+marker = ".agent-knowledge-harness-managed"
+
+
+def snapshot(root: Path):
+    result = {}
+    for path in root.rglob("*"):
+        rel = path.relative_to(root).as_posix()
+        if rel == marker:
+            continue
+        if path.is_symlink():
+            return None
+        if path.is_dir():
+            result[rel] = ("dir", None)
+        elif path.is_file():
+            result[rel] = ("file", path.read_bytes())
+        else:
+            return None
+    return result
+
+
+raise SystemExit(0 if snapshot(source) == snapshot(target) else 1)
+PY
+}
+
 codex_root="$(normalize_path "$codex_root")"
 claude_root="$(normalize_path "$claude_root")"
 
@@ -71,12 +102,15 @@ install_skill() {
   fi
 
   if [[ -d "$target" && ! -f "$marker" ]]; then
-    if [[ -f "$target/SKILL.md" ]] && cmp -s "$source_skill/SKILL.md" "$target/SKILL.md"; then
-      printf 'Adopting existing identical %s skill: %s\n' "$client" "$target"
+    # The filesystem Work Item protocol depends on SKILL.md plus its templates.
+    # Adopt only an exact unmanaged tree; matching SKILL.md alone can hide missing
+    # or stale templates and would make a broken install look harness-managed.
+    if skill_tree_matches "$target"; then
+      printf 'Adopting existing identical %s skill tree: %s\n' "$client" "$target"
       : > "$marker"
       return 0
     fi
-    printf 'ERROR: %s skill `work-item` already exists and is not managed by this harness: %s\n' \
+    printf 'ERROR: %s skill `work-item` already exists and is not an identical managed tree: %s\n' \
       "$client" "$target" >&2
     printf 'Move/remove that skill explicitly, then rerun installer.\n' >&2
     return 78

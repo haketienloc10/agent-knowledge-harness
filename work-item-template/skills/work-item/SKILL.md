@@ -1,162 +1,129 @@
 ---
 name: work-item
 description: >
-  Operational protocol for Global Work Item MCP on the QiQi/orchestration side.
-  Apply when a canonical Work Item is selected/identified, when the user asks to
-  create/use one, or before any QiQi `work_item_*` call. Do not make Work Item a repository-child execution dependency.
+  Filesystem-native protocol for tracking a task from request through investigation,
+  implementation, verification and final report. Use for an identified tracked task,
+  when the user asks to track a task, or when continuing an existing workspace Work Item dossier.
 ---
 
-# Global Work Item Operational Protocol
+# Work Item lifecycle protocol
 
-Global Work Item MCP is canonical mutable product-task truth on the QiQi/orchestration side.
-Repository children receive immutable, semantically self-sufficient TaskPackets and do
-not need Work Item identity/revision.
+Work Item là shared **current-state task dossier** dưới `<workspace>/work-items/`. Không dùng MCP/SQLite và không biến Work Item thành execution history.
 
 ## Activation
 
-- Apply when a canonical Work Item is selected/identified, when the user explicitly
-  requests create/use, and before any QiQi `work_item_*` call.
-- Generic tickets/bugs/incidents do not automatically become Work Items.
-- Never put Work Item ID/revision into child-facing TaskPacket semantics.
-- If MCP is unavailable for an ongoing canonical task, do not reconstruct canonical
-  truth from conversation memory or local Markdown.
+Apply khi request có canonical/tracked task ID cần theo dõi xuyên turn, user yêu cầu tạo/dùng Work Item, conversation tiếp tục existing dossier, hoặc workflow yêu cầu final report từ task state/evidence. Không tự tạo Work Item cho mọi câu hỏi nhỏ/mechanical task.
 
-## Common low-churn path
+## Stable ID + directory key
 
-For a normal single-repo task with an exact canonical ID:
+Canonical Work Item ID MUST match:
 
 ```text
-work_item_get(id)
-→ if absent: work_item_create(...)
-→ delegate from that exact snapshot/revision
-→ reconcile exact native child response
-→ work_item_update(expected_revision=<delegated revision>, mutation=...)
-→ on revision conflict: reread → reconcile → retry
+^[a-z][a-z0-9_-]*:[A-Za-z0-9][A-Za-z0-9._-]*$
 ```
 
-Fast-path rules:
+Ví dụ: `redmine:116655`.
 
-- Exact ID known → do **not** call `work_item_list` before `work_item_get(id)`.
-- A successful `work_item_create` response is the authoritative current snapshot and
-  revision for an immediately dependent delegation; do not immediately reread it.
-- Preserve the exact revision that produced the delegated TaskPacket.
-- After child return, prefer optimistic CAS: build the candidate reconciliation from
-  immutable TaskPacket + exact native response and call `work_item_update` with that
-  delegated `expected_revision`.
-- Update success proves the canonical revision stayed unchanged through commit.
-- Revision conflict means stale risk: get latest state, evaluate materiality, reconcile,
-  then retry only if still valid.
-- Reread first only when the dependent decision is not guarded by that same revisioned
-  mutation, when no mutation will be attempted, or after conflict.
-- Read history only when exact provenance is material.
-
-This preserves stale-result containment without redundant reads.
-
-## Current state, history, update
-
-`work_item_get(id)` returns bounded current state + whole revision.
-`work_item_history_read(...)` is only for material exact provenance. History cursors
-bind ID + exact revision + collection + filters; revision change between pages means
-restart, never mix revisions.
-
-Every write uses one typed `WorkItemMutation` with optimistic concurrency.
-
-`mutation.state` current fields:
+Không dùng raw ID làm filesystem path. Sau khi validate, derive directory key bằng cách thay **colon separator đầu tiên** bằng separator `~`:
 
 ```text
-title / status / phase / summary / current_requirements / repos / next_actions
+redmine:116655 -> redmine~116655
 ```
 
-`mutation.operations` optional groups:
+`~` không hợp lệ trong canonical ID components nên separator mapping không tạo collision cú pháp. Tuy nhiên external-id có phân biệt hoa/thường trong khi filesystem macOS/Windows thường không. Vì vậy toàn workspace MUST enforce **casefold-unique directory keys**: trước create/read/write, reject nếu một sibling entry khác spelling nhưng có `name.casefold()` trùng directory key dự kiến. Nếu dossier đã tồn tại, `WORK_ITEM.md` MUST có front-matter `id` khớp **exact canonical ID** trước khi coi đó là task truth. Sau khi resolve path, MUST verify nó vẫn nằm dưới resolved `<workspace>/work-items`; reject separator/traversal/non-canonical IDs thay vì normalize âm thầm.
+
+## Storage contract
+
+Parent-side canonical path là `<workspace>/work-items`, không phụ thuộc vào env do MCP child process export. Resolve `<workspace>` từ active workspace context; khi cần filesystem discovery, walk upward tới nearest directory chứa cả `repos.yaml` và `identity.md`.
+
+Trong delegated runtime, qiqi_delegate mount cùng Work Items root bằng native `--add-dir`. `QIQI_WORK_ITEMS_DIR` chỉ là internal runtime alias của qiqi_delegate; child continuity MUST NOT depend on inheriting env này.
+
+Per task:
 
 ```text
-decision_upsert[]
-question_upsert[]
-change_upsert[]
-blocker_upsert[]
-handoff_upsert[]
-checkpoint_append[]
+<directory-key>/
+├── WORK_ITEM.md
+├── intake.md?
+├── investigation.md?
+├── plan.md?
+├── review.md?
+└── report.textile?
 ```
 
-At most 50 semantic records total may be sent per call. Groups form one final candidate
-and commit all-or-nothing under one exact revision. Server does not auto-rebase.
-Successful update returns a compact receipt; reread only if a later decision needs a
-fresh snapshot. Stable lifecycle IDs advance monotonically; checkpoints are append-only.
-Do not reconstruct/resend untouched history.
+Không tạo mặc định history/turn/execution/checkpoint files.
 
-## TaskPacket delegation boundary
+## Canonical writer
 
-QiQi distills the smallest sufficient repo-local problem contract.
+QiQi sở hữu canonical writes. Child MAY read Work Item/lifecycle documents khi tracked-task context được cấp, nhưng không trực tiếp mutate canonical dossier và không tự mark global completion. Child trả material evidence/conclusion/blocker trong native final response; QiQi reconcile rồi rewrite current state.
+
+## `WORK_ITEM.md`
+
+Phải giữ tối thiểu:
+
+```yaml
+---
+id: <canonical-id>
+revision: <integer >= 1>
+status: active | waiting | blocked | done | cancelled
+phase: intake | investigation | planning | implementation | verification | reporting
+---
+```
+
+Body current-state đề nghị: Objective, Current Requirements, Acceptance Criteria, Scope, Decisions, Open Questions, Blockers, Current State, Next Actions. `revision` tăng khi canonical task meaning hoặc completion-relevant state đổi material.
+
+Legacy-imported dossier có thể chứa `legacy_reconciliation_required: true`. Khi flag này còn true, QiQi MUST đọc protected migration archive được dossier trỏ tới và reconcile material legacy metadata/acceptance/provenance trước substantive implementation, completion assessment hoặc final report; sau reconciliation rewrite current state, tăng revision và bỏ flag. Không để archive trở thành runtime history source sau khi reconciliation hoàn tất.
+
+## Intake + requirement changes
+
+Khi nhận request đầu tiên:
+
+1. Validate canonical ID và derive safe directory key.
+2. Enforce casefold uniqueness trong `<workspace>/work-items`, resolve/create dossier và verify path containment.
+3. Nếu dossier tồn tại, verify exact front-matter `id` trước khi reuse.
+4. Materialize `WORK_ITEM.md` revision 1 từ effective requirement.
+5. Tạo `intake.md` khi original wording/source/material change context có giá trị cho task/report.
+
+Khi có change request: rewrite effective current requirement, tăng revision, giữ trong `intake.md` chỉ material change context còn cần, rồi reconcile investigation/plan/review với requirement mới. Original request không phải current truth.
+
+## Multi-turn rule
+
+Multi-turn continuity MUST be represented as **current semantic state**, not chronological turn history. Persist một datum chỉ khi bỏ nó có thể làm turn sau hiểu sai requirement, lặp investigation material, đi sai implementation, đánh giá sai acceptance hoặc report sai. Native session giữ short-term conversational continuity.
+
+## Investigation
+
+`investigation.md` là living state: Scope, Verified Findings, Relevant Evidence, Open Questions, Conclusion. Nhiều turn merge/rewrite cùng file; không append turn log.
+
+Requirement change không tự invalidate prior findings. Reconcile từng finding: fact còn đúng → keep; implication đổi → keep + reinterpret; phụ thuộc assumption superseded → revalidate/remove; contradicted by newer authoritative input → replace.
+
+## Plan
+
+`plan.md` giữ current approach, remaining steps, risks và verification strategy. Không lưu plan versions. Giữ rejected approach chỉ khi rationale vẫn material để tránh lặp lại.
+
+## Delegation
+
+TaskPacket vẫn phải đủ nghĩa cho repo-local assignment; Work Item không được dùng như excuse cho incomplete objective/scope/acceptance.
+
+Với tracked Work Item, QiQi SHOULD thêm locator/revision bằng absolute canonical dossier path:
 
 ```text
-objective                    required
-scope[]                      required
-acceptance_criteria[]        required
-out_of_scope[]?              optional
-context.trusted_facts[]?     {fact, source}
-context.claims_to_investigate[]? {claim, source}
-constraints[]?               optional
-known_unknowns[]?            optional
+fact: "work_item_path=<absolute-workspace-path>/work-items/<directory-key>; id=<canonical-id>; revision=<revision>"
+source: "workspace Work Item"
 ```
 
-It does **not** contain normal child-facing:
+Child đọc `work_item_path/WORK_ITEM.md` và relevant lifecycle docs. Không yêu cầu child reconstruct path từ `$QIQI_WORK_ITEMS_DIR` và không yêu cầu env alias survive Herdr server reuse.
 
-```text
-user_request
-work_item_id / work_item_revision
-verification command
-Work Item phase/status/global next_actions
-QiQi bookkeeping identifiers
-```
+Sau child return: nếu runtime state là `blocked`, giữ exact `session_id`, không invent native response, và chỉ RESUME khi exact interactive continuity còn material. Với settled/failed response, so delegated revision với current `WORK_ITEM.md`; nếu revision đổi, reconcile finding-by-finding trước khi promote. Persist chỉ material current-state conclusions/evidence/decisions, không lưu transcript/progress log.
 
-Material semantics must survive distillation. If child would need Work Item dereference
-to reconstruct objective/scope/product decisions/premises/constraints/acceptance, the
-TaskPacket is incomplete.
+## Review + completion
 
-## Immutable snapshot and native result
+Implementation child nói “done” không đủ để mark Work Item done. Trước completion, current requirements phải resolved/accepted, acceptance được assessed bằng actual evidence, không còn blocking question, required repo work đã reconciled, required verification/review hoàn tất và required final report đã generated.
 
-TaskPacket is an immutable semantic snapshot for one delegated turn; child does not
-chase mutable Work Item state after START.
+`review.md` là current acceptance assessment, không phải execution summary.
 
-Runtime state (`settled`, `failed`, `blocked`, session/turn lifecycle) is execution
-lifecycle truth only. It is **not semantic completion truth**. QiQi reads the complete
-native response; QiQi is the semantic interpreter/reconciliation layer.
+## Report
 
-A materially stale execution result **must not become current truth**. Prefer the
-delegated-revision CAS fast path in the uncontended case; conflict forces latest-state
-reconciliation before promotion. Do not add a second child-authored semantic status
-such as `completed | partial | blocked`.
-
-## Semantic records and artifacts
-
-Use questions/decisions/changes/blockers/handoffs/next_actions only for material
-meaning. Prefer one atomic grouped mutation when one answer changes related fields.
-
-Artifacts are optional detail from an exact Work Item revision, only when user/workflow
-requires detailed intake/investigation/plan/review/report material. Artifact revisions
-are independent and current Work Item state wins over stale artifacts. Artifact creation/finalization does not replace canonical Work Item reconciliation.
+Khi workflow yêu cầu report, render `report.textile` từ stored current state/evidence, không reconstruct bằng conversation memory. Dùng template tại `templates/report.textile`. Không fabricate branch, commit hash, DDL/DML status, test pass hoặc deployment target.
 
 ## Shared Knowledge boundary
 
-Work Item state is not Shared Knowledge. Only reusable verified conclusions (stable
-invariant, contract, ownership/diagnostic rule, recurring operational behavior) are
-durable candidates.
-
-Routine repo-specific completion, a one-off code fix, or ordinary test-pass evidence
-does **not** by itself require Shared Knowledge review. Do not read `$knowledge-distill`
-or call `knowledge_write(entries=[])` merely to record such a review. Use Knowledge
-policy only when a plausible reusable conclusion exists or a higher-level workflow
-explicitly requires durable review.
-
-## Before final QiQi response
-
-1. Reconcile exact native response against immutable TaskPacket.
-2. Persist required canonical state with the smallest grouped revisioned mutation.
-3. Prefer delegated-revision CAS; on revision conflict: reread → reconcile → retry.
-4. If no revisioned write guards a dependent completion decision, read latest bounded
-   state before claiming current completion.
-5. Read history only for material provenance.
-6. Treat compact receipt as commit confirmation, not refreshed snapshot.
-7. If persistence fails, report it; do not claim missing data is canonical.
-8. Apply separate Shared Knowledge rules only for reusable conclusions or explicitly
-   required durable review.
+Work Item là task-specific mutable/current state. Chỉ stable reusable verified conclusion mới là candidate cho Shared Knowledge. Không persist secret, credential, token, customer/private data hoặc raw sensitive evidence vào Work Item, final response hay Shared Knowledge; redact value và giữ tối thiểu locator/type/provenance cần cho investigation.

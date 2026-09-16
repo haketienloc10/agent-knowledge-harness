@@ -1,7 +1,6 @@
 [mcp_servers.qiqi_delegate]
 command = "bash"
 args = ["scripts/qiqi-mcp-server.sh"]
-env_vars = ["QIQI_CLAUDE_ADDITIONAL_DIR"]
 startup_timeout_sec = 30
 tool_timeout_sec = 7200
 required = true
