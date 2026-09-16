@@ -349,15 +349,18 @@ def normalize_hook_payload(
         if adapter == "claude":
             background_tasks = payload.get("background_tasks")
             if not isinstance(background_tasks, list):
-                raise ValueError(
+                state = "capture_error"
+                error = (
                     "Claude Stop hook is missing background_tasks; "
                     "upgrade Claude Code to a version that reports background task state"
                 )
-            background_task_count = len(background_tasks)
-            state = "pending_async" if background_tasks else "settled"
+            else:
+                background_task_count = len(background_tasks)
+                state = "pending_async" if background_tasks else "settled"
+                error = None
         else:
             state = "settled"
-        error = None
+            error = None
     else:
         state = "failed"
         error_value = payload.get("error")
@@ -427,7 +430,7 @@ def select_capture_event(
         if event.get("version") == 1
         and event.get("adapter") == adapter
         and event.get("session_id") == session_id
-        and event.get("state") in {"pending_async", "settled", "failed"}
+        and event.get("state") in {"pending_async", "settled", "failed", "capture_error"}
         and isinstance(event.get("agent_response"), str)
         and event.get("agent_response")
     ]
