@@ -60,7 +60,7 @@ Biết exact repository/module **không phải** điều kiện intake readiness
 
 ## Persistence
 
-Gate không được tạo orphan directory. Với Work Item mới, resolve/validate candidate path trước nhưng chỉ tạo dossier khi đồng thời materialize revision-1 `WORK_ITEM.md`.
+Gate không được tạo orphan directory. Với Work Item mới, resolve/validate candidate path trước nhưng chỉ tạo dossier khi đồng thời materialize revision-1 `00_WORK_ITEM.md`.
 
 QiQi MUST persist current semantic state trước khi pause/return từ intake:
 
@@ -71,4 +71,4 @@ QiQi MUST persist current semantic state trước khi pause/return từ intake:
 
 Với existing Work Item/material change, reconcile cùng mapping vào current canonical state và tăng revision khi completion-relevant state đổi material.
 
-QiQi reconcile chỉ material current truth vào `WORK_ITEM.md` và khi hữu ích `intake.md`. Không persist question/answer chronology, transcript, discarded wording hoặc routine reasoning.
+QiQi reconcile chỉ material current truth vào `00_WORK_ITEM.md` và khi hữu ích `10_intake.md`. Không persist question/answer chronology, transcript, discarded wording hoặc routine reasoning.
