@@ -23,7 +23,9 @@ for rel in "${required[@]}"; do
 done
 
 for legacy in WORK_ITEM.md intake.md investigation.md plan.md review.md report.textile; do
-  [[ ! -e "$home/skills/work-item/templates/$legacy" ]] || fail "legacy unprefixed Work Item template remains: $legacy"
+  legacy_path="$home/skills/work-item/templates/$legacy"
+  [[ ! -e "$legacy_path" && ! -L "$legacy_path" ]] || \
+    fail "legacy unprefixed Work Item template remains: $legacy"
 done
 
 [[ ! -e "$home/mcp" ]] || fail 'legacy Work Item MCP directory must not exist'
@@ -74,13 +76,13 @@ for pattern in \
   'mode=0o600' \
   'target.resolve().relative_to(root.resolve())' \
   'case-insensitive-equivalent' \
+  'source SQLite DB was not modified' \
   '"intake": "10_intake.md"' \
   '"investigation": "20_investigation.md"' \
   '"plan": "30_plan.md"' \
   '"review": "40_review.md"' \
   '"report": "90_report.textile"' \
-  'target / "00_WORK_ITEM.md"' \
-  'source SQLite DB was not modified'; do
+  'target / "00_WORK_ITEM.md"'; do
   grep -Fq -- "$pattern" "$exporter" || fail "legacy exporter missing contract: $pattern"
 done
 
@@ -160,6 +162,7 @@ python3 "$exporter" --workspace "$tmp/workspace" --db "$tmp/legacy.sqlite3"
 dossier="$tmp/workspace/work-items/redmine~116655"
 archive="$tmp/workspace/.qiqi/migration-backups/v0024/legacy-work-items/redmine~116655.json"
 [[ -f "$dossier/00_WORK_ITEM.md" ]] || fail 'legacy exporter did not create numbered dossier'
+[[ ! -e "$dossier/WORK_ITEM.md" ]] || fail 'legacy exporter recreated unprefixed canonical file'
 [[ -f "$archive" ]] || fail 'legacy exporter did not preserve archive'
 grep -Fxq 'legacy_reconciliation_required: true' "$dossier/00_WORK_ITEM.md" || fail 'legacy reconciliation gate missing'
 grep -Fq 'Active decision d1 has legacy extension/provenance fields (rationale, source)' "$dossier/00_WORK_ITEM.md" || fail 'decision provenance reconciliation was not surfaced'
