@@ -9,6 +9,8 @@
 ├── repos.yaml
 ├── SYSTEM_MAP.md
 ├── work-items/
+├── .agents/skills/work-item/    # Codex workspace-scoped parent skill
+├── .claude/skills/work-item/    # Claude workspace-scoped parent skill
 ├── instructions/
 ├── mcp/qiqi_delegate/
 └── scripts/
@@ -16,11 +18,13 @@
 
 `work-items/` là workspace-level current task resource. Runtime mới không cài Global Work Item MCP và không tạo SQLite Work Item DB.
 
+`$work-item` cũng là **workspace-scoped QiQi parent skill**. Repo child không nhận một copy riêng của skill; child dùng TaskPacket + mounted Work Item read-only context theo repo `AGENTS.md`.
+
 ## Runtime
 
 Parent QiQi/$work-item resolve canonical task resource trực tiếp tại `<workspace>/work-items`; parent không dựa vào environment variable được một MCP child process export.
 
-`scripts/qiqi-mcp-server.sh` resolve workspace root, `mkdir -p work-items`, export `QIQI_WORK_ITEMS_DIR=<workspace>/work-items` cho qiqi_delegate và start MCP. qiqi_delegate dùng alias này để inject native `--add-dir` cho Codex/Claude.
+`scripts/qiqi-mcp-server.sh` resolve workspace root, `mkdir -p work-items`, export `QIQI_WORK_ITEMS_DIR=<workspace>/work-items` cho qiqi_delegate và start MCP. qiqi_delegate dùng alias này để inject native additional-dir access cho Codex/Claude.
 
 Child **không phụ thuộc vào env inheritance từ Herdr server**. Với tracked task, TaskPacket truyền absolute dossier locator:
 
@@ -56,18 +60,32 @@ cd agent-knowledge-harness/work-item-template
 bash scripts/remove-legacy-user-mcp.sh
 ```
 
-Helper chỉ remove registration `work_item` khi current definition còn trỏ tới managed legacy `agent-work-item-mcp`/`work-item-mcp-server.sh`; nếu cùng tên nhưng là registration khác, script fail thay vì xóa. Với CLI không cài trên máy, script cảnh báo để user kiểm tra client đó riêng. Sau cleanup, mở fresh agent sessions để stale MCP discovery không còn tồn tại.
+Helper chỉ remove registration `work_item` khi current definition còn trỏ tới managed legacy `agent-work-item-mcp`/`work-item-mcp-server.sh`; nếu cùng tên nhưng là registration khác, script fail thay vì xóa. Với CLI không cài trên máy, script cảnh báo để user kiểm tra client đó riêng.
 
-## Work Item lifecycle
+## Work Item lifecycle skill
 
-Cài/update `$work-item` skill từ harness:
+Cài/update `$work-item` từ **harness checkout** vào workspace:
 
 ```bash
-cd work-item-template
-bash scripts/install-user-skill.sh
+cd /path/to/agent-knowledge-harness/work-item-template
+bash scripts/work-item-template-check.sh
+bash scripts/install-workspace-skill.sh /absolute/path/to/workspace
 ```
 
-Installer chỉ adopt một existing unmanaged `work-item` skill khi **toàn bộ skill tree** (SKILL.md + templates) giống source; matching `SKILL.md` đơn lẻ không đủ.
+Expected runtime paths:
+
+```text
+<workspace>/.agents/skills/work-item/SKILL.md
+<workspace>/.claude/skills/work-item/SKILL.md
+```
+
+Hai target dùng cùng một managed skill tree. Skill có internal `phases/intake.md`, `phases/investigation.md`, `phases/planning.md`, `phases/review.md`; đây không phải các top-level Agent Skills.
+
+Installer yêu cầu workspace có `repos.yaml` + `identity.md`, preflight cả hai workspace targets trước mutation và chỉ adopt unmanaged target nếu toàn tree giống source. Historical harness-managed user/global `work-item` copies được cleanup **sau** successful workspace install; same-name global entry không có managed marker bị fail closed và không bị xóa.
+
+Không chạy installer bên trong từng repo con và không copy `.agents/.claude` Work Item skill vào repo child. Repo agent chỉ đọc TaskPacket + mounted Work Item/lifecycle docs, không mutate canonical dossier.
+
+Sau install/update, mở fresh QiQi session **từ workspace root** để refresh workspace skill discovery.
 
 `WORK_ITEM.md` là current canonical state; lifecycle docs là living semantic state, không append-only history. Requirement change rewrite effective requirements, increment revision và reconcile prior investigation/plan/review theo materiality.
 
@@ -86,13 +104,13 @@ uv sync --project mcp/qiqi_delegate
 
 ## Repo delegation
 
-TaskPacket vẫn chứa objective/scope/acceptance đầy đủ. Child được đọc exact mounted dossier từ `work_item_path`, nhưng không mutate canonical dossier.
+TaskPacket vẫn chứa objective/scope/acceptance đầy đủ. Child được đọc exact mounted dossier từ `work_item_path`, nhưng không mutate canonical dossier và không chạy Work Item lifecycle thay QiQi.
 
 `instructions/model-routing.md` không phải mandatory startup material. Default delegation route là `claude-balanced`; khi một turn thực sự delegate, QiQi đọc route policy just-in-time ngay trước route decision.
 
 ## Verification
 
-Sau khi `repos.yaml` đã được materialize thành repository thực và Herdr integrations đã cài:
+Sau khi `repos.yaml` đã được materialize thành repository thực, workspace skill đã cài và Herdr integrations đã cài:
 
 ```bash
 bash scripts/workspace-check.sh

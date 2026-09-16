@@ -97,5 +97,6 @@ jobs:
       - name: Check managed shell syntax
         run: |
           bash -n workspace-template/scripts/qiqi-mcp-server.sh
+          bash -n work-item-template/scripts/install-workspace-skill.sh
           bash -n work-item-template/scripts/install-user-skill.sh
           bash -n work-item-template/scripts/remove-legacy-user-mcp.sh
