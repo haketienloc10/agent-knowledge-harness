@@ -3,8 +3,11 @@ set -euo pipefail
 
 home="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source_root="$home/skills"
-codex_root="${HOME}/.agents/skills"
+codex_home="${CODEX_HOME:-${HOME}/.codex}"
+codex_root="$codex_home/skills"
+legacy_codex_root="${HOME}/.agents/skills"
 claude_root="${HOME}/.claude/skills"
+manage_legacy_codex=1
 skills=(
   work-item
   work-item-intake
@@ -18,8 +21,12 @@ usage() {
 Usage: install-user-skill.sh [--codex-root PATH] [--claude-root PATH]
 
 Installs the managed Work Item Agent Skill bundle (`work-item` plus phase
-clarification skills) for user-scope discovery by Codex and Claude Code. Existing
-unrelated skills with the same names are not silently overwritten.
+clarification skills) for user-scope discovery by Codex and Claude Code.
+
+Codex defaults to $CODEX_HOME/skills (or ~/.codex/skills when CODEX_HOME is
+unset). The installer removes old harness-managed copies from ~/.agents/skills
+after the native Codex install succeeds. Existing unrelated same-name skills are
+never silently overwritten or removed.
 EOF
 }
 
@@ -28,6 +35,7 @@ while (($#)); do
     --codex-root)
       [[ $# -ge 2 ]] || { usage >&2; exit 64; }
       codex_root="$2"
+      manage_legacy_codex=0
       shift 2
       ;;
     --claude-root)
@@ -95,6 +103,7 @@ PY
 }
 
 codex_root="$(normalize_path "$codex_root")"
+legacy_codex_root="$(normalize_path "$legacy_codex_root")"
 claude_root="$(normalize_path "$claude_root")"
 
 preflight_skill() {
@@ -118,6 +127,25 @@ preflight_skill() {
   fi
 }
 
+preflight_legacy_codex_skill() {
+  local skill="$1"
+  local target="$legacy_codex_root/$skill"
+  local marker="$target/.agent-knowledge-harness-managed"
+
+  [[ "$legacy_codex_root" != "$codex_root" ]] || return 0
+
+  if [[ -e "$target" && ! -d "$target" ]]; then
+    printf 'ERROR: legacy Codex skill target exists and is not a directory: %s\n' "$target" >&2
+    return 78
+  fi
+  if [[ -d "$target" && ! -f "$marker" ]]; then
+    printf 'ERROR: legacy Codex discovery root contains unmanaged same-name skill `%s`: %s\n' \
+      "$skill" "$target" >&2
+    printf 'Move/remove that skill explicitly to avoid duplicate Codex skill discovery, then rerun installer.\n' >&2
+    return 78
+  fi
+}
+
 # Preflight the complete bundle for both clients before the first mutation. A conflict
 # in one phase skill must not leave a partially updated Work Item skill set behind.
 for client in Codex Claude; do
@@ -130,6 +158,15 @@ for client in Codex Claude; do
     preflight_skill "$client" "$root" "$skill"
   done
 done
+
+# Older harness releases installed Codex skills under ~/.agents/skills. Codex's native
+# user skill root is $CODEX_HOME/skills. Before mutating anything, make sure any old
+# same-name entries are harness-managed so cleanup cannot delete unrelated user skills.
+if [[ "$manage_legacy_codex" == 1 ]]; then
+  for skill in "${skills[@]}"; do
+    preflight_legacy_codex_skill "$skill"
+  done
+fi
 
 install_skill() {
   local client="$1"
@@ -174,5 +211,18 @@ for client in Codex Claude; do
     install_skill "$client" "$root" "$skill"
   done
 done
+
+# Cleanup happens only after the native Codex bundle and Claude bundle both install
+# successfully. Remove only directories carrying the harness-managed marker.
+if [[ "$manage_legacy_codex" == 1 && "$legacy_codex_root" != "$codex_root" ]]; then
+  for skill in "${skills[@]}"; do
+    target="$legacy_codex_root/$skill"
+    marker="$target/.agent-knowledge-harness-managed"
+    if [[ -d "$target" && -f "$marker" ]]; then
+      rm -rf "$target"
+      printf 'Removed legacy harness-managed Codex skill: %s\n' "$target"
+    fi
+  done
+fi
 
 printf 'Open a fresh agent session if the skills are not already visible in the skills list.\n'
