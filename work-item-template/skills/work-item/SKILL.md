@@ -41,7 +41,7 @@ Không dùng raw ID làm filesystem path. Sau khi validate, derive directory key
 redmine:116655 -> redmine~116655
 ```
 
-`~` không hợp lệ trong canonical ID components nên separator mapping không tạo collision cú pháp. External-id có phân biệt hoa/thường trong khi filesystem macOS/Windows thường không, vì vậy toàn workspace MUST enforce **casefold-unique directory keys**: trước create/read/write, reject sibling entry khác spelling nhưng có `name.casefold()` trùng directory key dự kiến. Nếu dossier đã tồn tại, `WORK_ITEM.md` MUST có front-matter `id` khớp **exact canonical ID** trước khi coi đó là task truth. Sau khi resolve path, MUST verify nó vẫn nằm dưới resolved `<workspace>/work-items`; reject separator/traversal/non-canonical IDs thay vì normalize âm thầm.
+`~` không hợp lệ trong canonical ID components nên separator mapping không tạo collision cú pháp. External-id có phân biệt hoa/thường trong khi filesystem macOS/Windows thường không, vì vậy toàn workspace MUST enforce **casefold-unique directory keys**: trước create/read/write, reject sibling entry khác spelling nhưng có `name.casefold()` trùng directory key dự kiến. Nếu dossier đã tồn tại, `00_WORK_ITEM.md` MUST có front-matter `id` khớp **exact canonical ID** trước khi coi đó là task truth. Sau khi resolve path, MUST verify nó vẫn nằm dưới resolved `<workspace>/work-items`; reject separator/traversal/non-canonical IDs thay vì normalize âm thầm.
 
 ## Storage contract
 
@@ -53,14 +53,18 @@ Per task:
 
 ```text
 <directory-key>/
-├── WORK_ITEM.md
-├── intake.md?
-├── investigation.md?
-├── plan.md?
-├── review.md?
+├── 00_WORK_ITEM.md
+├── 10_intake.md?
+├── 20_investigation.md?
+├── 30_plan.md?
+├── 40_review.md?
 ├── references/?
-└── report.textile?
+└── 90_report.textile?
 ```
+
+Numeric prefixes are part of the canonical filename contract. They make lifecycle order deterministic in file explorers/transcripts and intentionally leave gaps for future material phases. `references/` không đánh số vì nó không phải lifecycle phase.
+
+Legacy unprefixed names (`WORK_ITEM.md`, `intake.md`, `investigation.md`, `plan.md`, `review.md`, `report.textile`) MUST NOT coexist with their numbered canonical targets. Nếu encounter legacy names, migrate the dossier before continuing; do not create a parallel numbered file beside an old one.
 
 `references/` MAY chứa material tra cứu task-specific khi cần. Không tạo mặc định history/turn/execution/checkpoint files.
 
@@ -68,7 +72,7 @@ Per task:
 
 QiQi sở hữu canonical writes. Child MAY read Work Item/lifecycle documents khi tracked-task context được cấp, nhưng không trực tiếp mutate canonical dossier và không tự mark global completion. Child trả material evidence/conclusion/blocker trong native final response; QiQi reconcile rồi rewrite current state.
 
-## `WORK_ITEM.md`
+## `00_WORK_ITEM.md`
 
 Phải giữ tối thiểu:
 
@@ -118,17 +122,17 @@ Khi nhận request đầu tiên:
 
 1. Validate canonical ID và derive safe directory key.
 2. Enforce casefold uniqueness trong `<workspace>/work-items`, resolve candidate dossier path và verify path containment, nhưng **không tạo dossier directory mới trước intake gate**.
-3. Nếu dossier đã tồn tại, verify exact front-matter `id` trước khi reuse.
+3. Nếu dossier đã tồn tại, verify exact front-matter `id` trong `00_WORK_ITEM.md` trước khi reuse. Nếu chỉ có legacy unprefixed filenames, migrate trước khi tiếp tục.
 4. Read `phases/intake.md` và chạy mandatory intake gate.
-5. Với Work Item mới, sau gate MUST materialize một revision-1 `WORK_ITEM.md` hợp lệ **trước khi return khỏi turn**, kể cả khi chưa thể tiến hành:
+5. Với Work Item mới, sau gate MUST materialize một revision-1 `00_WORK_ITEM.md` hợp lệ **trước khi return khỏi turn**, kể cả khi chưa thể tiến hành:
    - `ready` → `status: active`, `phase: intake`; ghi effective requirement/acceptance và có thể tiếp tục investigation sau canonical write.
    - `needs_discovery` → `status: active`, `phase: intake`; ghi current understanding, factual unknowns và exact next discovery action.
    - `needs_user_clarification` → `status: waiting`, `phase: intake`; ghi current understanding, material open question(s) và acceptance/scope đã biết.
    - `blocked` → `status: blocked`, `phase: intake`; ghi blocker/source unavailable và điều kiện unblock.
-   Việc materialize tạo dossier directory cùng `WORK_ITEM.md`; không để lại empty/orphan dossier.
-6. Tạo `intake.md` khi original wording/source/material change context có giá trị cho task/report.
+   Việc materialize tạo dossier directory cùng `00_WORK_ITEM.md`; không để lại empty/orphan dossier.
+6. Tạo `10_intake.md` khi original wording/source/material change context có giá trị cho task/report.
 
-Khi có material change request: rerun intake gate, rewrite effective current requirement/current understanding, tăng revision khi state đổi material, và persist gate outcome trước khi pause/continue (`waiting` cho user clarification, `blocked` cho blocker, `active` cho discovery/ready). Giữ trong `intake.md` chỉ material change context còn cần, rồi reconcile investigation/plan/review với requirement mới. Original request không phải current truth.
+Khi có material change request: rerun intake gate, rewrite effective current requirement/current understanding, tăng revision khi state đổi material, và persist gate outcome trước khi pause/continue (`waiting` cho user clarification, `blocked` cho blocker, `active` cho discovery/ready). Giữ trong `10_intake.md` chỉ material change context còn cần, rồi reconcile investigation/plan/review với requirement mới. Original request không phải current truth.
 
 ## Multi-turn rule
 
@@ -136,7 +140,7 @@ Multi-turn continuity MUST be represented as **current semantic state**, not chr
 
 ## Investigation
 
-`investigation.md` là living state: Scope, Verified Findings, Relevant Evidence, Open Questions, Conclusion. Nhiều turn merge/rewrite cùng file; không append turn log.
+`20_investigation.md` là living state: Scope, Verified Findings, Relevant Evidence, Open Questions, Conclusion. Nhiều turn merge/rewrite cùng file; không append turn log.
 
 Nếu target/boundary/ownership/authoritative source đã rõ thì điều tra trực tiếp. Chỉ đọc `phases/investigation.md` khi clarification/discovery boundary thực sự cần.
 
@@ -144,7 +148,7 @@ Requirement change không tự invalidate prior findings. Reconcile từng findi
 
 ## Plan
 
-`plan.md` giữ current approach, remaining steps, risks và verification strategy. Không lưu plan versions. Giữ rejected approach chỉ khi rationale vẫn material để tránh lặp lại.
+`30_plan.md` giữ current approach, remaining steps, risks và verification strategy. Không lưu plan versions. Giữ rejected approach chỉ khi rationale vẫn material để tránh lặp lại.
 
 Nếu approach straightforward, reversible, theo convention và evidence đủ thì không cần planning ceremony. Đọc `phases/planning.md` chỉ khi decision/trade-off materially non-obvious.
 
@@ -159,9 +163,9 @@ fact: "work_item_path=<absolute-workspace-path>/work-items/<directory-key>; id=<
 source: "workspace Work Item"
 ```
 
-Child đọc `work_item_path/WORK_ITEM.md` và relevant lifecycle docs. Không yêu cầu child reconstruct path từ `$QIQI_WORK_ITEMS_DIR` và không yêu cầu env alias survive Herdr server reuse.
+Child đọc `work_item_path/00_WORK_ITEM.md` và relevant numbered lifecycle docs. Không yêu cầu child reconstruct path từ `$QIQI_WORK_ITEMS_DIR` và không yêu cầu env alias survive Herdr server reuse.
 
-Sau child return: nếu runtime state là `blocked`, giữ exact `session_id`, không invent native response, và chỉ RESUME khi exact interactive continuity còn material. Với settled/failed response, so delegated revision với current `WORK_ITEM.md`; nếu revision đổi, reconcile finding-by-finding trước khi promote. Persist chỉ material current-state conclusions/evidence/decisions, không lưu transcript/progress log.
+Sau child return: nếu runtime state là `blocked`, giữ exact `session_id`, không invent native response, và chỉ RESUME khi exact interactive continuity còn material. Với settled/failed response, so delegated revision với current `00_WORK_ITEM.md`; nếu revision đổi, reconcile finding-by-finding trước khi promote. Persist chỉ material current-state conclusions/evidence/decisions, không lưu transcript/progress log.
 
 ## Review + completion
 
@@ -169,11 +173,11 @@ Trước khi mark done hoặc final reporting, MUST đọc `phases/review.md` v�
 
 Current requirements phải resolved/accepted, acceptance được assessed bằng actual evidence, không còn blocking question, required repo work đã reconciled, required verification/review hoàn tất và required final report đã generated.
 
-`review.md` là current acceptance assessment, không phải execution summary.
+`40_review.md` là current acceptance assessment, không phải execution summary.
 
 ## Report
 
-Khi workflow yêu cầu report, render `report.textile` từ stored current state/evidence, không reconstruct bằng conversation memory. Dùng template tại `templates/report.textile`. Không fabricate branch, commit hash, DDL/DML status, test pass hoặc deployment target.
+Khi workflow yêu cầu report, render `90_report.textile` từ stored current state/evidence, không reconstruct bằng conversation memory. Dùng template tại `templates/90_report.textile`. Không fabricate branch, commit hash, DDL/DML status, test pass hoặc deployment target.
 
 ## Shared Knowledge boundary
 
