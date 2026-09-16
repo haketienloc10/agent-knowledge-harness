@@ -36,7 +36,11 @@ for pattern in \
   'needs_discovery' \
   'blocked' \
   'clarify meaning, not mechanics' \
-  'Không load cả bốn phase references như startup ceremony'; do
+  'Không load cả bốn phase references như startup ceremony' \
+  'không tạo dossier directory mới trước intake gate' \
+  'needs_user_clarification` → `status: waiting`' \
+  'blocked` → `status: blocked`' \
+  'không để lại empty/orphan dossier'; do
   grep -Fiq -- "$pattern" "$parent" || fail "work-item skill missing phase/role contract: $pattern"
 done
 
@@ -45,7 +49,10 @@ for pattern in \
   'Domain/terminology unknown' \
   'Implementation unknown' \
   'Safe reversible assumption' \
-  'exact repository/module **không phải** điều kiện'; do
+  'exact repository/module **không phải** điều kiện' \
+  'Gate không được tạo orphan directory' \
+  'needs_user_clarification` → `status: waiting`' \
+  'blocked` → `status: blocked`'; do
   grep -Fq -- "$pattern" "$skill/phases/intake.md" || fail "intake phase missing contract: $pattern"
 done
 
@@ -85,11 +92,14 @@ for pattern in \
   'identity.md' \
   'Repository children do not' \
   'Preflight all workspace and legacy-global surfaces before the first mutation' \
+  '[[ -L "$target" ]]' \
   'Removed legacy global harness-managed Work Item skill'; do
   grep -Fq -- "$pattern" "$installer" || fail "workspace installer missing contract: $pattern"
 done
 
 grep -Fq 'install-workspace-skill.sh' "$compat" || fail 'compat installer does not redirect to workspace installer'
+grep -Fq '[[ -L "$target" || ( -e "$target" && ! -d "$target" ) ]]' "$compat" || \
+  fail 'compat installer must reject dangling/symlink targets during preflight'
 bash -n "$installer"
 bash -n "$compat"
 
@@ -147,6 +157,23 @@ PY
 done
 [[ ! -e "$workspace/repo-a/.agents/skills/work-item" ]] || fail 'installer copied Work Item skill into repo child'
 [[ ! -e "$workspace/repo-a/.claude/skills/work-item" ]] || fail 'installer copied Work Item skill into repo child'
+
+# A dangling workspace skill symlink must fail in preflight before the other client
+# is mutated. Bash -e/-d alone do not treat a dangling symlink as an existing target.
+workspace_symlink="$tmp/workspace-symlink"
+home_symlink="$tmp/home-symlink"
+make_workspace "$workspace_symlink"
+mkdir -p "$home_symlink" "$workspace_symlink/.agents/skills"
+ln -s "$tmp/missing-work-item-target" "$workspace_symlink/.agents/skills/work-item"
+if (
+  export HOME="$home_symlink"
+  unset CODEX_HOME
+  bash "$installer" "$workspace_symlink" >/dev/null 2>&1
+); then
+  fail 'installer must reject dangling workspace skill symlink'
+fi
+[[ -L "$workspace_symlink/.agents/skills/work-item" ]] || fail 'installer mutated dangling workspace skill symlink'
+[[ ! -e "$workspace_symlink/.claude/skills/work-item" ]] || fail 'dangling Codex symlink caused partial Claude workspace install'
 
 # Historical harness-managed global copies are cleanup candidates only and are
 # removed after successful workspace installation.
