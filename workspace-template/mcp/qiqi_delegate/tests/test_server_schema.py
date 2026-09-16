@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -51,6 +52,53 @@ def _non_null_schema(schema: dict, node: dict) -> dict:
     return non_null[0]
 
 
+def _harness_source_root(workspace: Path) -> Path | None:
+    candidate = workspace.parent
+    workspace_template = candidate / "workspace-template"
+    markers = (
+        candidate / "scripts" / "migrate-workspace.sh",
+        candidate / "migrations" / "0024-filesystem-work-item.json",
+    )
+    if (
+        workspace_template.is_dir()
+        and workspace_template.resolve() == workspace.resolve()
+        and all(path.is_file() for path in markers)
+    ):
+        return candidate
+    return None
+
+
+def _read_locator_contract_sources(workspace: Path) -> dict[str, str]:
+    sources = {
+        "server": (workspace / "mcp" / "qiqi_delegate" / "server.py").read_text(
+            encoding="utf-8"
+        ),
+        "workspace": (workspace / "AGENTS.md").read_text(encoding="utf-8"),
+    }
+
+    harness_root = _harness_source_root(workspace)
+    if harness_root is not None:
+        template_paths = {
+            "repo": harness_root / "repo-template" / "AGENTS.md",
+            "skill": (
+                harness_root
+                / "work-item-template"
+                / "skills"
+                / "work-item"
+                / "SKILL.md"
+            ),
+        }
+        missing = [name for name, path in template_paths.items() if not path.is_file()]
+        if missing:
+            raise AssertionError(
+                "incomplete harness source tree; missing locator contract source(s): "
+                + ", ".join(sorted(missing))
+            )
+        for name, path in template_paths.items():
+            sources[name] = path.read_text(encoding="utf-8")
+    return sources
+
+
 class PublicTaskSchemaTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
@@ -61,7 +109,6 @@ class PublicTaskSchemaTests(unittest.TestCase):
         cls.tool = matching[0]
         cls.schema = cls.tool.input_schema
         cls.workspace = Path(__file__).resolve().parents[3]
-        cls.repo_root = cls.workspace.parent
 
     def test_required_and_forbidden_top_level_fields(self) -> None:
         properties = self.schema["properties"]
@@ -107,22 +154,7 @@ class PublicTaskSchemaTests(unittest.TestCase):
         self.assertIn("objective/scope/acceptance", description)
 
     def test_tracked_locator_contract_does_not_drift_across_boundaries(self) -> None:
-        sources = {
-            "server": (self.workspace / "mcp" / "qiqi_delegate" / "server.py").read_text(
-                encoding="utf-8"
-            ),
-            "workspace": (self.workspace / "AGENTS.md").read_text(encoding="utf-8"),
-            "repo": (self.repo_root / "repo-template" / "AGENTS.md").read_text(
-                encoding="utf-8"
-            ),
-            "skill": (
-                self.repo_root
-                / "work-item-template"
-                / "skills"
-                / "work-item"
-                / "SKILL.md"
-            ).read_text(encoding="utf-8"),
-        }
+        sources = _read_locator_contract_sources(self.workspace)
         for name, text in sources.items():
             with self.subTest(source=name):
                 self.assertIn("work_item_path=", text)
@@ -130,6 +162,67 @@ class PublicTaskSchemaTests(unittest.TestCase):
                 self.assertIn("revision=<", text)
                 self.assertNotIn("work_item=<id>; revision=<revision>", text)
         self.assertGreaterEqual(sources["server"].count(TRACKED_LOCATOR_EXAMPLE), 2)
+
+    def test_materialized_workspace_does_not_require_harness_sibling_templates(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            parent = Path(directory)
+            workspace = parent / "multi-repo"
+            server = workspace / "mcp" / "qiqi_delegate" / "server.py"
+            server.parent.mkdir(parents=True)
+            server.write_text(TRACKED_LOCATOR_EXAMPLE, encoding="utf-8")
+            (workspace / "AGENTS.md").write_text(TRACKED_LOCATOR_EXAMPLE, encoding="utf-8")
+
+            with self.subTest("no sibling templates"):
+                self.assertEqual(
+                    set(_read_locator_contract_sources(workspace)),
+                    {"server", "workspace"},
+                )
+
+            unrelated_repo_template = parent / "repo-template" / "AGENTS.md"
+            unrelated_repo_template.parent.mkdir(parents=True)
+            unrelated_repo_template.write_text("unrelated", encoding="utf-8")
+            with self.subTest("unrelated repo-template sibling"):
+                self.assertEqual(
+                    set(_read_locator_contract_sources(workspace)),
+                    {"server", "workspace"},
+                )
+
+            unrelated_repo_template.parent.rename(parent / "not-repo-template")
+            unrelated_skill = (
+                parent
+                / "work-item-template"
+                / "skills"
+                / "work-item"
+                / "SKILL.md"
+            )
+            unrelated_skill.parent.mkdir(parents=True)
+            unrelated_skill.write_text("unrelated", encoding="utf-8")
+            with self.subTest("unrelated work-item-template sibling"):
+                self.assertEqual(
+                    set(_read_locator_contract_sources(workspace)),
+                    {"server", "workspace"},
+                )
+
+    def test_harness_marker_keeps_source_tree_completeness_fail_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            harness = Path(directory)
+            workspace = harness / "workspace-template"
+            server = workspace / "mcp" / "qiqi_delegate" / "server.py"
+            server.parent.mkdir(parents=True)
+            server.write_text(TRACKED_LOCATOR_EXAMPLE, encoding="utf-8")
+            (workspace / "AGENTS.md").write_text(TRACKED_LOCATOR_EXAMPLE, encoding="utf-8")
+            (harness / "scripts").mkdir()
+            (harness / "scripts" / "migrate-workspace.sh").write_text("", encoding="utf-8")
+            (harness / "migrations").mkdir()
+            (harness / "migrations" / "0024-filesystem-work-item.json").write_text(
+                "{}", encoding="utf-8"
+            )
+            repo_agents = harness / "repo-template" / "AGENTS.md"
+            repo_agents.parent.mkdir()
+            repo_agents.write_text(TRACKED_LOCATOR_EXAMPLE, encoding="utf-8")
+
+            with self.assertRaisesRegex(AssertionError, "missing locator contract source"):
+                _read_locator_contract_sources(workspace)
 
     def test_input_models_forbid_extra_fields(self) -> None:
         with self.assertRaises(ValidationError):

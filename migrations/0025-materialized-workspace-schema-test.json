@@ -1,0 +1,20 @@
+{
+  "version": 25,
+  "from_ref": "27e05f340744a39bcf0c761558100af1528b2933",
+  "to_ref": "3e8123b6dd04f3c7434409603d20169b7f2b9060",
+  "description": "make qiqi_delegate schema contract tests runnable from a materialized workspace without requiring harness-only sibling repo-template/work-item-template directories, while preserving full cross-boundary locator checks when executed inside the harness source tree",
+  "workspace": {
+    "merge": [],
+    "replace": [
+      "workspace-template/mcp/qiqi_delegate/tests/test_server_schema.py"
+    ],
+    "delete": [],
+    "manual_review": []
+  },
+  "repo": {
+    "merge": [],
+    "replace": [],
+    "delete": [],
+    "manual_review": []
+  }
+}
