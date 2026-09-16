@@ -96,7 +96,9 @@ work-item-plan
 work-item-review
 ```
 
-Nó preflight toàn bộ bundle trước mutation. Existing unmanaged same-name skill chỉ được adopt khi toàn bộ tree giống source; unrelated skill không bị overwrite.
+Codex được cài vào native user skill root `$CODEX_HOME/skills`; khi `CODEX_HOME` không set thì path mặc định là `~/.codex/skills`. Claude dùng `~/.claude/skills`. Harness release cũ từng cài Codex skill dưới `~/.agents/skills`; installer mới chỉ xóa các copy cũ có `.agent-knowledge-harness-managed` sau khi native install thành công. Same-name entry không có managed marker sẽ fail closed để tránh xóa hoặc để lại duplicate skill discovery ngoài ý muốn.
+
+Installer preflight toàn bộ bundle trước mutation. Existing unmanaged same-name skill chỉ được adopt khi toàn bộ tree giống source; unrelated skill không bị overwrite.
 
 ## Phase clarification skills
 
