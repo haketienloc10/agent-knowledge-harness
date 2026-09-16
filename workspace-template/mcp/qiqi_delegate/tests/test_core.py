@@ -90,6 +90,7 @@ class TaskPacketTests(unittest.TestCase):
         }
         with self.assertRaisesRegex(ValueError, "unsupported certainty"):
             build_task_packet(**kwargs)
+        kwargs = self.packet().as_dict()
         kwargs["context"] = {"trusted_facts": [{"fact": "x"}]}
         with self.assertRaisesRegex(ValueError, "missing source"):
             build_task_packet(**kwargs)
@@ -210,19 +211,20 @@ class HookPayloadTests(unittest.TestCase):
         self.assertEqual(event["state"], "pending_async")
         self.assertEqual(event["background_task_count"], 1)
 
-    def test_claude_stop_requires_background_task_state(self):
-        with self.assertRaisesRegex(ValueError, "missing background_tasks"):
-            normalize_hook_payload(
-                adapter="claude",
-                nonce="n",
-                payload={
-                    "hook_event_name": "Stop",
-                    "session_id": "session-1",
-                    "cwd": "/repo",
-                    "last_assistant_message": "done",
-                },
-                captured_at_ns=3,
-            )
+    def test_claude_stop_without_background_task_state_is_capture_error(self):
+        event = normalize_hook_payload(
+            adapter="claude",
+            nonce="n",
+            payload={
+                "hook_event_name": "Stop",
+                "session_id": "session-1",
+                "cwd": "/repo",
+                "last_assistant_message": "done",
+            },
+            captured_at_ns=3,
+        )
+        self.assertEqual(event["state"], "capture_error")
+        self.assertIn("upgrade Claude Code", event["error"])
 
     def test_codex_stop_keeps_native_turn_id(self):
         event = normalize_hook_payload(
@@ -285,6 +287,24 @@ class HookPayloadTests(unittest.TestCase):
             session_id="root",
         )
         self.assertEqual(chosen["state"], "pending_async")
+
+    def test_capture_error_is_selectable_for_actionable_failure(self):
+        chosen = select_capture_event(
+            [
+                {
+                    "version": 1,
+                    "adapter": "claude",
+                    "session_id": "root",
+                    "state": "capture_error",
+                    "agent_response": "done",
+                    "error": "upgrade Claude Code",
+                    "captured_at_ns": 10,
+                }
+            ],
+            adapter="claude",
+            session_id="root",
+        )
+        self.assertEqual(chosen["state"], "capture_error")
 
 
 class SessionStoreTests(unittest.TestCase):
