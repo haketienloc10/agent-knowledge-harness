@@ -27,7 +27,7 @@ TaskPacket vẫn phải semantically sufficient. Work Item cung cấp durable co
 
 ## Work Item boundary
 
-Child MAY read mounted `00_WORK_ITEM.md` và relevant numbered lifecycle docs. Child MUST NOT:
+Child MAY read mounted Work Item qua `00_WORK_ITEM.md` và relevant numbered lifecycle docs. Child MUST NOT:
 
 - trực tiếp rewrite canonical Work Item;
 - tạo turn/history/progress files trong Work Item;
