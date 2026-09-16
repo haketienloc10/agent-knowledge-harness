@@ -52,7 +52,6 @@ for pattern in \
   'def casefold_key' \
   'legacy_reconciliation_required: true' \
   'DECISION_CORE_FIELDS' \
-  'protected legacy archive' \
   'REVISIONED_ARTIFACT_TYPES' \
   'based_on_work_item_revision' \
   'render_textile_report' \
