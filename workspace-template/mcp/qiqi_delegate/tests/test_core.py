@@ -178,11 +178,51 @@ class HookPayloadTests(unittest.TestCase):
                 "session_id": "session-1",
                 "cwd": "/repo",
                 "last_assistant_message": response,
+                "background_tasks": [],
             },
             captured_at_ns=1,
         )
         self.assertEqual(event["agent_response"], response)
         self.assertTrue(event["agent_response"].endswith("END"))
+        self.assertEqual(event["state"], "settled")
+        self.assertEqual(event["background_task_count"], 0)
+
+    def test_claude_stop_with_background_work_is_pending_async(self):
+        event = normalize_hook_payload(
+            adapter="claude",
+            nonce="n",
+            payload={
+                "hook_event_name": "Stop",
+                "session_id": "session-1",
+                "cwd": "/repo",
+                "last_assistant_message": "Tôi sẽ chờ subagent hoàn tất.",
+                "background_tasks": [
+                    {
+                        "id": "agent-1",
+                        "type": "subagent",
+                        "status": "running",
+                        "description": "investigate",
+                    }
+                ],
+            },
+            captured_at_ns=2,
+        )
+        self.assertEqual(event["state"], "pending_async")
+        self.assertEqual(event["background_task_count"], 1)
+
+    def test_claude_stop_requires_background_task_state(self):
+        with self.assertRaisesRegex(ValueError, "missing background_tasks"):
+            normalize_hook_payload(
+                adapter="claude",
+                nonce="n",
+                payload={
+                    "hook_event_name": "Stop",
+                    "session_id": "session-1",
+                    "cwd": "/repo",
+                    "last_assistant_message": "done",
+                },
+                captured_at_ns=3,
+            )
 
     def test_codex_stop_keeps_native_turn_id(self):
         event = normalize_hook_payload(
@@ -195,7 +235,7 @@ class HookPayloadTests(unittest.TestCase):
                 "cwd": "/repo",
                 "last_assistant_message": "done",
             },
-            captured_at_ns=2,
+            captured_at_ns=4,
         )
         self.assertEqual(event["native_turn_id"], "turn-native")
 
@@ -213,7 +253,7 @@ class HookPayloadTests(unittest.TestCase):
                 "version": 1,
                 "adapter": "claude",
                 "session_id": "root",
-                "state": "settled",
+                "state": "pending_async",
                 "agent_response": "intermediate",
                 "captured_at_ns": 10,
             },
@@ -228,6 +268,23 @@ class HookPayloadTests(unittest.TestCase):
         ]
         chosen = select_capture_event(events, adapter="claude", session_id="root")
         self.assertEqual(chosen["agent_response"], "final")
+
+    def test_pending_root_event_is_selectable_before_final_stop(self):
+        chosen = select_capture_event(
+            [
+                {
+                    "version": 1,
+                    "adapter": "claude",
+                    "session_id": "root",
+                    "state": "pending_async",
+                    "agent_response": "waiting",
+                    "captured_at_ns": 10,
+                }
+            ],
+            adapter="claude",
+            session_id="root",
+        )
+        self.assertEqual(chosen["state"], "pending_async")
 
 
 class SessionStoreTests(unittest.TestCase):
