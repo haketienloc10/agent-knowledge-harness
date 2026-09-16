@@ -117,13 +117,18 @@ Không load cả bốn phase references như startup ceremony. Read just-in-time
 Khi nhận request đầu tiên:
 
 1. Validate canonical ID và derive safe directory key.
-2. Enforce casefold uniqueness trong `<workspace>/work-items`, resolve/create dossier và verify path containment.
-3. Nếu dossier tồn tại, verify exact front-matter `id` trước khi reuse.
+2. Enforce casefold uniqueness trong `<workspace>/work-items`, resolve candidate dossier path và verify path containment, nhưng **không tạo dossier directory mới trước intake gate**.
+3. Nếu dossier đã tồn tại, verify exact front-matter `id` trước khi reuse.
 4. Read `phases/intake.md` và chạy mandatory intake gate.
-5. Nếu gate cho phép tiến hành, materialize/rewrite `WORK_ITEM.md` từ effective requirement.
+5. Với Work Item mới, sau gate MUST materialize một revision-1 `WORK_ITEM.md` hợp lệ **trước khi return khỏi turn**, kể cả khi chưa thể tiến hành:
+   - `ready` → `status: active`, `phase: intake`; ghi effective requirement/acceptance và có thể tiếp tục investigation sau canonical write.
+   - `needs_discovery` → `status: active`, `phase: intake`; ghi current understanding, factual unknowns và exact next discovery action.
+   - `needs_user_clarification` → `status: waiting`, `phase: intake`; ghi current understanding, material open question(s) và acceptance/scope đã biết.
+   - `blocked` → `status: blocked`, `phase: intake`; ghi blocker/source unavailable và điều kiện unblock.
+   Việc materialize tạo dossier directory cùng `WORK_ITEM.md`; không để lại empty/orphan dossier.
 6. Tạo `intake.md` khi original wording/source/material change context có giá trị cho task/report.
 
-Khi có material change request: rerun intake gate, rewrite effective current requirement, tăng revision, giữ trong `intake.md` chỉ material change context còn cần, rồi reconcile investigation/plan/review với requirement mới. Original request không phải current truth.
+Khi có material change request: rerun intake gate, rewrite effective current requirement/current understanding, tăng revision khi state đổi material, và persist gate outcome trước khi pause/continue (`waiting` cho user clarification, `blocked` cho blocker, `active` cho discovery/ready). Giữ trong `intake.md` chỉ material change context còn cần, rồi reconcile investigation/plan/review với requirement mới. Original request không phải current truth.
 
 ## Multi-turn rule
 
