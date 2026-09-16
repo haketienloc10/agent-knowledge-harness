@@ -1,7 +1,7 @@
 {
   "version": 27,
   "from_ref": "0e77ddfae8b99e39c0f5d41febe75d54949aa444",
-  "to_ref": "455190d37519e75ef0c8be070f26411813d3a72b",
+  "to_ref": "6c4f27ddaeae88e5ac1f4186ead7dab862f4bae5",
   "description": "adopt ordered Work Item dossier filenames (00/10/20/30/40/90), install a fail-closed rename helper for existing dossiers, and update workspace/repository policy plus verification to require the numbered canonical contract",
   "workspace": {
     "merge": [
