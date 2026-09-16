@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -51,6 +52,37 @@ def _non_null_schema(schema: dict, node: dict) -> dict:
     return non_null[0]
 
 
+def _read_locator_contract_sources(workspace: Path) -> dict[str, str]:
+    sources = {
+        "server": (workspace / "mcp" / "qiqi_delegate" / "server.py").read_text(
+            encoding="utf-8"
+        ),
+        "workspace": (workspace / "AGENTS.md").read_text(encoding="utf-8"),
+    }
+
+    harness_root = workspace.parent
+    template_paths = {
+        "repo": harness_root / "repo-template" / "AGENTS.md",
+        "skill": (
+            harness_root
+            / "work-item-template"
+            / "skills"
+            / "work-item"
+            / "SKILL.md"
+        ),
+    }
+    present = {name: path.is_file() for name, path in template_paths.items()}
+    if len(set(present.values())) != 1:
+        raise AssertionError(
+            "partial harness template source tree: repo-template and work-item-template "
+            "must either both exist or both be absent"
+        )
+    if all(present.values()):
+        for name, path in template_paths.items():
+            sources[name] = path.read_text(encoding="utf-8")
+    return sources
+
+
 class PublicTaskSchemaTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
@@ -61,7 +93,6 @@ class PublicTaskSchemaTests(unittest.TestCase):
         cls.tool = matching[0]
         cls.schema = cls.tool.input_schema
         cls.workspace = Path(__file__).resolve().parents[3]
-        cls.repo_root = cls.workspace.parent
 
     def test_required_and_forbidden_top_level_fields(self) -> None:
         properties = self.schema["properties"]
@@ -107,22 +138,7 @@ class PublicTaskSchemaTests(unittest.TestCase):
         self.assertIn("objective/scope/acceptance", description)
 
     def test_tracked_locator_contract_does_not_drift_across_boundaries(self) -> None:
-        sources = {
-            "server": (self.workspace / "mcp" / "qiqi_delegate" / "server.py").read_text(
-                encoding="utf-8"
-            ),
-            "workspace": (self.workspace / "AGENTS.md").read_text(encoding="utf-8"),
-            "repo": (self.repo_root / "repo-template" / "AGENTS.md").read_text(
-                encoding="utf-8"
-            ),
-            "skill": (
-                self.repo_root
-                / "work-item-template"
-                / "skills"
-                / "work-item"
-                / "SKILL.md"
-            ).read_text(encoding="utf-8"),
-        }
+        sources = _read_locator_contract_sources(self.workspace)
         for name, text in sources.items():
             with self.subTest(source=name):
                 self.assertIn("work_item_path=", text)
@@ -130,6 +146,18 @@ class PublicTaskSchemaTests(unittest.TestCase):
                 self.assertIn("revision=<", text)
                 self.assertNotIn("work_item=<id>; revision=<revision>", text)
         self.assertGreaterEqual(sources["server"].count(TRACKED_LOCATOR_EXAMPLE), 2)
+
+    def test_materialized_workspace_does_not_require_harness_sibling_templates(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory) / "multi-repo"
+            server = workspace / "mcp" / "qiqi_delegate" / "server.py"
+            server.parent.mkdir(parents=True)
+            server.write_text(TRACKED_LOCATOR_EXAMPLE, encoding="utf-8")
+            (workspace / "AGENTS.md").write_text(TRACKED_LOCATOR_EXAMPLE, encoding="utf-8")
+
+            sources = _read_locator_contract_sources(workspace)
+
+        self.assertEqual(set(sources), {"server", "workspace"})
 
     def test_input_models_forbid_extra_fields(self) -> None:
         with self.assertRaises(ValidationError):
