@@ -43,8 +43,10 @@ Canonical ID/path mechanics thuộc `$work-item`: validate canonical ID, derive 
 
 - Không dùng Work Item MCP/SQLite cho runtime mới.
 - Không persist turn history, command chronology, intermediate attempts hoặc routine progress.
-- `WORK_ITEM.md` giữ effective current requirements/acceptance/scope/decisions/questions/blockers/state/next actions.
-- `intake.md`, `investigation.md`, `plan.md`, `review.md`, `report.textile` là living lifecycle docs, materialize khi cần.
+- `00_WORK_ITEM.md` giữ effective current requirements/acceptance/scope/decisions/questions/blockers/state/next actions.
+- `10_intake.md`, `20_investigation.md`, `30_plan.md`, `40_review.md`, `90_report.textile` là living lifecycle docs, materialize khi cần.
+- Numeric prefixes là canonical filename contract để dossier sort theo lifecycle; `references/` không đánh số vì không phải lifecycle phase.
+- Legacy unprefixed lifecycle filenames phải migrate trước khi tiếp tục; không tạo parallel numbered/unprefixed copies.
 - Requirement change rewrite current requirement và tăng `revision`; prior findings phải reconcile materiality thay vì auto discard.
 - Multi-turn continuity merge/rewrite current semantic state; native session giữ short-term conversation continuity.
 
@@ -75,14 +77,14 @@ Với tracked Work Item, thêm trusted fact theo `$work-item`:
 work_item_path=<absolute dossier path>; id=<canonical id>; revision=<n>
 ```
 
-Absolute locator cho child đọc mounted dossier trực tiếp; packet vẫn phải đủ nghĩa và Work Item không phải fallback cho missing objective/scope/acceptance. Child không trực tiếp mutate canonical dossier và không tự mark global task done.
+Absolute locator cho child đọc mounted dossier trực tiếp; child bắt đầu từ `work_item_path/00_WORK_ITEM.md` rồi chỉ đọc numbered lifecycle docs relevant. Packet vẫn phải đủ nghĩa và Work Item không phải fallback cho missing objective/scope/acceptance. Child không trực tiếp mutate canonical dossier và không tự mark global task done.
 
 ## Sau delegation
 
 1. Inspect runtime `state` trước khi đọc semantic handoff.
 2. Nếu `state="blocked"`, `agent_response` có thể là `null`: giữ exact returned `session_id`, không invent blocker/content, và chỉ RESUME exact session khi interactive continuity còn material; START/redelegate/hỏi user vẫn hợp lệ nếu không cần exact continuity.
 3. Nếu turn có native `agent_response`, đọc exact response; runtime settled/failed không tự đồng nghĩa semantic completion.
-4. Với tracked task, so delegated Work Item revision với current revision; nếu đổi revision, reconcile finding-by-finding với effective requirement mới trước khi promote.
+4. Với tracked task, so delegated Work Item revision với current revision trong `00_WORK_ITEM.md`; nếu đổi revision, reconcile finding-by-finding với effective requirement mới trước khi promote.
 5. Persist chỉ material current-state facts/decisions/evidence/acceptance; không lưu execution transcript.
 6. Tiếp tục wave/RESUME/redelegate/hỏi user hoặc complete theo current truth.
 
