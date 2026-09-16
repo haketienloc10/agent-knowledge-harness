@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from mcp import Client  # noqa: E402
-from server import mcp  # noqa: E402
+from server import _delegation_tool_error, mcp  # noqa: E402
 
 
 def error_text(result) -> str:
@@ -42,6 +42,17 @@ def valid_args() -> dict:
 class QiQiDelegateMcpErrorTransportTest(unittest.IsolatedAsyncioTestCase):
     def test_sdk_version_is_reviewed(self) -> None:
         self.assertEqual(importlib.metadata.version("mcp"), "2.1.1")
+
+    def test_missing_claude_background_state_names_upgrade_recovery(self) -> None:
+        error = _delegation_tool_error(
+            RuntimeError(
+                "Claude Stop hook is missing background_tasks; upgrade Claude Code to a version that reports background task state"
+            )
+        )
+        text = str(error)
+        self.assertIn("code=claude_background_state_unavailable", text)
+        self.assertIn("upgrade Claude Code", text)
+        self.assertIn("RESUME", text)
 
     async def test_unknown_repository_is_model_visible(self) -> None:
         with patch(

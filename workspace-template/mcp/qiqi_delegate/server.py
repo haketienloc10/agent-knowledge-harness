@@ -51,6 +51,7 @@ HERDR_AGENT_START_TIMEOUT_MS = 60_000
 HERDR_SHELL_READY_TIMEOUT_SECONDS = 10.0
 NATIVE_SESSION_WAIT_SECONDS = 15.0
 NATIVE_RESULT_WAIT_SECONDS = 5.0
+NATIVE_PENDING_RESULT_WAIT_SECONDS = 3600.0
 CLAUDE_PROMPT_RETRY_EFFECT_SECONDS = 5.0
 SUPPORTED_ADAPTERS = {"codex", "claude"}
 ADD_DIR_ADAPTERS = {"codex", "claude"}
@@ -123,10 +124,13 @@ mcp = MCPServer(
         "policy. The MCP launches/resumes the native Codex or Claude session through Herdr "
         "and captures the native final assistant message through a static result-hook command "
         "routed to MCP-owned active-capture state; it never scrapes terminal scrollback or "
-        "parses agent transcripts. Codex trusts only the exact QiQi session hook by matching "
-        "its computed trusted_hash; global hook-trust bypass is forbidden. Settled/failed/"
-        "blocked are runtime lifecycle states, not semantic completion. Runtime session "
-        "ownership is persisted in MCP-owned SQLite state, not in a Markdown result artifact."
+        "parses agent transcripts. Claude Stop captures with in-flight background work stay "
+        "internal and pending until a later Stop reports no background tasks; pending capture "
+        "waits are bounded so a lost final hook cannot hold the workspace indefinitely. Codex "
+        "trusts only the exact QiQi session hook by matching its computed trusted_hash; global "
+        "hook-trust bypass is forbidden. Settled/failed/blocked are runtime lifecycle states, "
+        "not semantic completion. Runtime session ownership is persisted in MCP-owned SQLite "
+        "state, not in a Markdown result artifact."
     ),
 )
 
@@ -193,6 +197,12 @@ def _delegation_tool_error(exc: ValueError | RuntimeError) -> ToolError:
     elif "missing herdr cli" in lowered or "failed to start herdr named session" in lowered:
         code = "herdr_unavailable"
         action = "install or repair Herdr and verify the configured named session can start"
+    elif "claude stop hook is missing background_tasks" in lowered:
+        code = "claude_background_state_unavailable"
+        action = (
+            "upgrade Claude Code to a version whose Stop hook reports background_tasks, "
+            "then RESUME the preserved native session"
+        )
     elif "native final response was not captured" in lowered:
         code = "native_result_capture_failed"
         action = "use the preserved session_id in this error to RESUME the exact native session after repairing result capture"
@@ -1003,17 +1013,49 @@ async def _prompt_and_wait(
 async def _wait_for_result_capture(
     sink: Path, nonce: str, adapter: str, native_session_id: str
 ) -> dict[str, Any]:
-    deadline = time.monotonic() + NATIVE_RESULT_WAIT_SECONDS
+    initial_deadline = time.monotonic() + NATIVE_RESULT_WAIT_SECONDS
+    pending_deadline: float | None = None
+    latest_pending_capture_ns: int | None = None
     last_error: Exception | None = None
     while True:
         events = load_capture_events(sink, nonce)
         try:
-            return select_capture_event(
+            event = select_capture_event(
                 events, adapter=adapter, session_id=native_session_id
             )
         except RuntimeError as exc:
             last_error = exc
-        if time.monotonic() >= deadline:
+        else:
+            state = event.get("state")
+            if state in {"settled", "failed"}:
+                return event
+            if state == "capture_error":
+                detail = event.get("error")
+                raise RuntimeError(
+                    detail
+                    if isinstance(detail, str) and detail
+                    else "native result hook reported an unspecified capture error"
+                )
+            if state == "pending_async":
+                captured_at_ns = int(event.get("captured_at_ns") or 0)
+                if captured_at_ns != latest_pending_capture_ns:
+                    latest_pending_capture_ns = captured_at_ns
+                    pending_deadline = (
+                        time.monotonic() + NATIVE_PENDING_RESULT_WAIT_SECONDS
+                    )
+            else:
+                raise RuntimeError(f"native result hook produced unexpected state: {state!r}")
+
+        now = time.monotonic()
+        if pending_deadline is not None:
+            if now >= pending_deadline:
+                raise RuntimeError(
+                    "native final response was not captured within "
+                    f"{NATIVE_PENDING_RESULT_WAIT_SECONDS:g}s after Claude reported "
+                    "pending background work; refusing to hold the Herdr workspace and "
+                    "repository lock indefinitely"
+                ) from last_error
+        elif now >= initial_deadline:
             raise RuntimeError(
                 "native final response was not captured after the agent settled; "
                 "refusing to fall back to terminal screen or transcript parsing"

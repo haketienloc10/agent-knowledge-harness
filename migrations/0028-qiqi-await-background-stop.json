@@ -1,0 +1,25 @@
+{
+  "version": 28,
+  "from_ref": "1f06452d28c4e435bd63a3d2107c27a7f34c8b8a",
+  "to_ref": "74f1843d25c6e55920be03cfdee9a8b9f2498bbb",
+  "description": "make qiqi_delegate distinguish Claude Stops with in-flight background work from terminal Stops, persist unsupported hook capability as an actionable capture error, and bound pending background-result waits so lost final hooks cannot hold workspace resources indefinitely",
+  "workspace": {
+    "merge": [],
+    "replace": [
+      "workspace-template/mcp/qiqi_delegate/core.py",
+      "workspace-template/mcp/qiqi_delegate/server.py",
+      "workspace-template/mcp/qiqi_delegate/tests/test_core.py",
+      "workspace-template/mcp/qiqi_delegate/tests/test_mcp_error_transport.py",
+      "workspace-template/mcp/qiqi_delegate/tests/test_result_capture_wait.py",
+      "workspace-template/mcp/qiqi_delegate/tests/test_result_hook.py"
+    ],
+    "delete": [],
+    "manual_review": []
+  },
+  "repo": {
+    "merge": [],
+    "replace": [],
+    "delete": [],
+    "manual_review": []
+  }
+}
