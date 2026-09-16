@@ -8,6 +8,8 @@ on:
       - 'repo-template/**'
       - 'work-item-template/**'
       - 'migrations/**'
+      - 'scripts/migrate_workspace.py'
+      - 'scripts/tests/**'
   workflow_dispatch:
 
 permissions:
@@ -79,8 +81,19 @@ jobs:
                       raise SystemExit(
                           f"{path}: {name} uses {strategy} but git status is {status}"
                       )
+
+          hook = migration.get("workspace_hook")
+          if hook is not None:
+              hook_source = f"workspace-template/{hook}"
+              materialized = set(migration["workspace"]["merge"]) | set(migration["workspace"]["replace"])
+              if hook_source not in materialized:
+                  raise SystemExit(
+                      f"{path}: workspace_hook is not materialized by workspace merge/replace: {hook_source}"
+                  )
           print(f"migration manifest coverage: OK ({path.name})")
           PY
+      - name: Run harness migration tests
+        run: python3 -m unittest discover -s scripts/tests -v
       - name: Sync qiqi_delegate MCP environment
         run: uv sync --project workspace-template/mcp/qiqi_delegate
       - name: Run qiqi_delegate tests
