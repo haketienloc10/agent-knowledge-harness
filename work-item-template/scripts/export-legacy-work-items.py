@@ -46,6 +46,7 @@ LEGACY_PHASE_ALIASES = {
     "done": "reporting",
 }
 DEFAULT_DB = Path("~/.local/share/agent-work-items/work-items.sqlite3").expanduser()
+DECISION_CORE_FIELDS = {"id", "status", "summary", "superseded_by"}
 
 
 def die(message: str) -> "None":
@@ -66,9 +67,11 @@ def safe_key(item_id: str) -> str:
     if not WORK_ITEM_ID_RE.fullmatch(item_id):
         die(f"legacy Work Item id is not canonical/path-safe: {item_id!r}")
     source, external_id = item_id.split(":", 1)
-    # `~` is outside the canonical ID component grammar, so this separator is
-    # injective: distinct canonical IDs cannot collapse onto one directory key.
     return f"{source}~{external_id}"
+
+
+def casefold_key(value: str) -> str:
+    return value.casefold()
 
 
 def ensure_beneath(root: Path, target: Path) -> None:
@@ -89,8 +92,6 @@ def normalize_phase(value: Any) -> tuple[str, str | None]:
         return lowered, raw if raw and raw != lowered else None
     if lowered in LEGACY_PHASE_ALIASES:
         return LEGACY_PHASE_ALIASES[lowered], raw
-    # Legacy phase was intentionally free-form. Unknown values must not leak into
-    # the new enum contract; route the imported item through reconciliation instead.
     return "investigation", raw or None
 
 
@@ -113,8 +114,7 @@ def active_records(
     for item in values:
         if not isinstance(item, dict):
             continue
-        item_status = item.get("status", legacy_default_status)
-        if item_status == status:
+        if item.get("status", legacy_default_status) == status:
             result.append(item)
     return result
 
@@ -151,9 +151,9 @@ def _repo_state_lines(document: dict[str, Any]) -> tuple[list[str], list[str]]:
         verification = value.get("verification", [])
         if isinstance(verification, list):
             for evidence in verification:
-                evidence_text = str(evidence).strip()
-                if evidence_text:
-                    verification_lines.append(f"{name}: {evidence_text}")
+                text = str(evidence).strip()
+                if text:
+                    verification_lines.append(f"{name}: {text}")
     return state_lines, verification_lines
 
 
@@ -171,28 +171,54 @@ def _handoff_lines(document: dict[str, Any]) -> list[str]:
     return result
 
 
-def render_work_item(document: dict[str, Any], revision: int, fallback_status: str) -> str:
+def _decision_projection(
+    document: dict[str, Any],
+) -> tuple[list[str], list[str]]:
+    lines: list[str] = []
+    reconciliation: list[str] = []
+    for item in active_records(
+        document, "decisions", "active", legacy_default_status="active"
+    ):
+        decision_id = str(item.get("id") or "<unknown>").strip()
+        summary = str(item.get("summary") or "").strip()
+        if summary:
+            lines.append(summary)
+        extension_fields = sorted(set(item) - DECISION_CORE_FIELDS)
+        if extension_fields:
+            reconciliation.append(
+                f"Active decision {decision_id} has legacy extension/provenance fields "
+                f"({', '.join(extension_fields)}). Their exact values remain in the protected "
+                "legacy archive and MUST be reconciled before relying on this decision for "
+                "implementation or report generation."
+            )
+    return lines, reconciliation
+
+
+def render_work_item(
+    document: dict[str, Any],
+    revision: int,
+    fallback_status: str,
+    *,
+    directory_key: str,
+) -> str:
     item_id = str(document.get("id", "")).strip()
     title = str(document.get("title", "")).strip()
     status = str(document.get("status") or fallback_status or "active").strip()
     if status not in VALID_STATUSES:
-        die(f"legacy Work Item {item_id!r} has invalid status for filesystem protocol: {status!r}")
+        die(
+            f"legacy Work Item {item_id!r} has invalid status for filesystem protocol: "
+            f"{status!r}"
+        )
     if not isinstance(revision, int) or isinstance(revision, bool) or revision < 1:
         die(f"legacy Work Item {item_id!r} has invalid revision: {revision!r}")
+
     phase, legacy_phase = normalize_phase(document.get("phase"))
     summary = str(document.get("summary") or "").strip()
     requirements = document.get("current_requirements", [])
     if not isinstance(requirements, list):
         requirements = []
 
-    # Pre-v1 canonical documents could omit lifecycle status fields. Mirror the
-    # legacy migration defaults so unresolved/current semantic records are not lost.
-    decisions = [
-        str(item.get("summary", "")).strip()
-        for item in active_records(
-            document, "decisions", "active", legacy_default_status="active"
-        )
-    ]
+    decisions, decision_reconciliation = _decision_projection(document)
     questions = [
         str(item.get("question", "")).strip()
         for item in active_records(
@@ -215,13 +241,22 @@ def render_work_item(document: dict[str, Any], revision: int, fallback_status: s
                     next_actions.append(line)
 
     repo_lines, repo_verification_lines = _repo_state_lines(document)
+    archive_rel = (
+        f".qiqi/migration-backups/v0024/legacy-work-items/{directory_key}.json"
+    )
+    reconciliation_items = [
+        "Legacy Work Items did not model the new Acceptance Criteria section separately; "
+        "reconcile effective acceptance criteria before substantive continuation.",
+        *decision_reconciliation,
+    ]
+    if legacy_phase is not None:
+        reconciliation_items.append(
+            f"Legacy phase {legacy_phase!r} was normalized to {phase!r}; confirm the "
+            "current phase before substantive continuation."
+        )
 
     legacy_phase_line = (
-        f"legacy_phase: {yaml_scalar(legacy_phase)}\n" if legacy_phase is not None else ""
-    )
-    reconciliation_note = (
-        f"\nLegacy phase `{legacy_phase}` was normalized to `{phase}` for the filesystem protocol; "
-        "reconcile the current phase before substantive continuation."
+        f"legacy_phase: {yaml_scalar(legacy_phase)}\n"
         if legacy_phase is not None
         else ""
     )
@@ -232,6 +267,7 @@ revision: {revision}
 status: {status}
 phase: {phase}
 {legacy_phase_line}legacy_imported: true
+legacy_reconciliation_required: true
 ---
 
 # Objective
@@ -244,7 +280,7 @@ phase: {phase}
 
 # Acceptance Criteria
 
-- Not separately represented in the legacy canonical Work Item; reconcile from imported lifecycle material if needed.
+- Pending legacy-import reconciliation.
 
 # Scope
 
@@ -274,18 +310,27 @@ phase: {phase}
 
 # Current State
 
-{summary or 'Imported from the legacy Work Item store. Reconcile before substantive continuation.'}{reconciliation_note}
+{summary or 'Imported from the legacy Work Item store.'}
 
 # Next Actions
 
 {bullets(next_actions)}
+
+# Import Reconciliation
+
+Protected legacy archive: `{archive_rel}`.
+
+{bullets(reconciliation_items)}
 """
 
 
 def table_exists(conn: sqlite3.Connection, name: str) -> bool:
-    return conn.execute(
-        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)
-    ).fetchone() is not None
+    return (
+        conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)
+        ).fetchone()
+        is not None
+    )
 
 
 def validate_artifact_schema(conn: sqlite3.Connection) -> bool:
@@ -295,8 +340,7 @@ def validate_artifact_schema(conn: sqlite3.Connection) -> bool:
     missing = ARTIFACT_TABLES - present
     if missing:
         die(
-            "legacy artifact schema is incomplete; present="
-            + ", ".join(sorted(present))
+            "legacy artifact schema is incomplete; present="n            + ", ".join(sorted(present))
             + "; missing="
             + ", ".join(sorted(missing))
         )
@@ -348,7 +392,8 @@ def render_markdown_artifact(artifact_type: str, artifact: dict[str, Any]) -> st
         based_on = artifact.get("based_on_work_item_revision")
         if not isinstance(based_on, int) or isinstance(based_on, bool) or based_on < 1:
             die(
-                f"legacy {artifact_type} artifact has invalid based_on_work_item_revision: "
+                f"legacy {artifact_type} artifact has invalid "
+                "based_on_work_item_revision: "
                 f"{artifact.get('artifact_id')!r}"
             )
         parts.extend(["---", f"based_on_work_item_revision: {based_on}", "---", ""])
@@ -356,7 +401,9 @@ def render_markdown_artifact(artifact_type: str, artifact: dict[str, Any]) -> st
     if summary:
         parts.extend(["", summary])
     for section in artifact.get("sections", []):
-        section_title = str(section.get("title") or section.get("section_id") or "Section")
+        section_title = str(
+            section.get("title") or section.get("section_id") or "Section"
+        )
         content = str(section.get("content") or "")
         parts.extend(["", f"## {section_title}", "", content.rstrip()])
     return "\n".join(parts).rstrip() + "\n"
@@ -370,12 +417,11 @@ def textile_heading(title: str) -> str:
 
 
 def render_textile_report(artifact: dict[str, Any]) -> str:
-    # The canonical report file is the external Redmine deliverable. Keep artifact
-    # metadata in the JSON archive rather than injecting an extra h1/title/summary
-    # that is absent from the canonical eight-section report template.
     parts: list[str] = []
     for section in artifact.get("sections", []):
-        section_title = str(section.get("title") or section.get("section_id") or "Section")
+        section_title = str(
+            section.get("title") or section.get("section_id") or "Section"
+        )
         content = str(section.get("content") or "")
         parts.extend([textile_heading(section_title), "", content.rstrip(), ""])
     return "\n".join(parts).rstrip() + "\n"
@@ -387,13 +433,25 @@ def render_artifact(artifact_type: str, artifact: dict[str, Any]) -> str:
     return render_markdown_artifact(artifact_type, artifact)
 
 
-def reserve_output(path: Path, reserved: set[Path]) -> None:
-    resolved = path.resolve()
-    if resolved in reserved:
-        die(f"multiple legacy records map to the same export path: {path}")
+def reserve_output(path: Path, reserved: set[str]) -> None:
+    folded = casefold_key(str(path.resolve()))
+    if folded in reserved:
+        die(f"multiple legacy records map to filesystem-equivalent export paths: {path}")
     if path.exists():
         die(f"refusing to overwrite existing filesystem Work Item file: {path}")
-    reserved.add(resolved)
+    reserved.add(folded)
+
+
+def _assert_casefold_name_available(parent: Path, name: str, *, label: str) -> None:
+    if not parent.is_dir():
+        return
+    folded = casefold_key(name)
+    for entry in parent.iterdir():
+        if casefold_key(entry.name) == folded and entry.name != name:
+            die(
+                f"{label} {name!r} aliases existing filesystem entry "
+                f"{entry.name!r} under case-insensitive name matching"
+            )
 
 
 def build_export_plan(
@@ -406,11 +464,27 @@ def build_export_plan(
     artifact_schema_present: bool,
 ) -> list[dict[str, Any]]:
     plan: list[dict[str, Any]] = []
-    reserved: set[Path] = set()
+    reserved: set[str] = set()
+    reserved_keys: set[str] = set()
 
     for row in rows:
         item_id = str(row["id"])
         key = safe_key(item_id)
+        folded_key = casefold_key(key)
+        if folded_key in reserved_keys:
+            die(
+                f"multiple canonical Work Item ids map to case-insensitive-equivalent "
+                f"directory keys: {key!r}"
+            )
+        reserved_keys.add(folded_key)
+
+        _assert_casefold_name_available(
+            work_items_root, key, label="Work Item directory key"
+        )
+        _assert_casefold_name_available(
+            backup_root, f"{key}.json", label="legacy archive name"
+        )
+
         target = work_items_root / key
         ensure_beneath(work_items_root, target)
         if target.exists():
@@ -435,13 +509,15 @@ def build_export_plan(
         files: list[tuple[Path, str]] = [
             (
                 target / "WORK_ITEM.md",
-                render_work_item(document, revision, str(row["status"])),
+                render_work_item(
+                    document,
+                    revision,
+                    str(row["status"]),
+                    directory_key=key,
+                ),
             )
         ]
 
-        # read_artifacts uses the legacy public ordering: newest update first,
-        # artifact_id ascending as deterministic tie-break. Keep the first artifact
-        # per type so materialization matches that read contract.
         latest_by_type: dict[str, dict[str, Any]] = {}
         for artifact in artifacts:
             artifact_type = str(artifact.get("type") or "")
@@ -503,6 +579,7 @@ def main() -> int:
     workspace = Path(args.workspace).expanduser().resolve()
     if not (workspace / "repos.yaml").is_file():
         die(f"workspace is missing repos.yaml: {workspace}")
+
     db = Path(args.db).expanduser().resolve()
     if not db.is_file():
         die(
@@ -511,13 +588,17 @@ def main() -> int:
         )
 
     work_items_root = (workspace / "work-items").resolve()
-    backup_root = workspace / ".qiqi" / "migration-backups" / "v0024" / "legacy-work-items"
+    backup_root = (
+        workspace
+        / ".qiqi"
+        / "migration-backups"
+        / "v0024"
+        / "legacy-work-items"
+    )
 
     conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True, isolation_level=None)
     conn.row_factory = sqlite3.Row
     try:
-        # Keep the Work Item rows, artifact rows, sections and chunks in one SQLite
-        # read snapshot while the legacy service may still exist during cutover.
         conn.execute("BEGIN")
         if not table_exists(conn, "work_items"):
             die(f"legacy DB has no work_items table: {db}")
@@ -538,8 +619,6 @@ def main() -> int:
             conn.execute("ROLLBACK")
         conn.close()
 
-    # No filesystem mutation occurs until every record, output path, archive path,
-    # legacy document, artifact schema and phase normalization has passed preflight.
     if not args.dry_run:
         work_items_root.mkdir(parents=True, exist_ok=True)
         backup_root.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -550,7 +629,10 @@ def main() -> int:
         for path, content in entry["files"]:
             write_text(path, content, args.dry_run)
         write_text(
-            entry["archive_path"], entry["archive_content"], args.dry_run, mode=0o600
+            entry["archive_path"],
+            entry["archive_content"],
+            args.dry_run,
+            mode=0o600,
         )
 
     print("legacy Work Item export complete; source SQLite DB was not modified")
