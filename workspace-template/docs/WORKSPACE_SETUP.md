@@ -36,7 +36,21 @@ work_item_path=<absolute-workspace-path>/work-items/<directory-key>; id=<canonic
 
 Canonical ID match `^[a-z][a-z0-9_-]*:[A-Za-z0-9][A-Za-z0-9._-]*$`. Filesystem key replace colon separator đầu tiên bằng `~`, ví dụ `redmine:116655 -> redmine~116655`.
 
-`~` loại bỏ collision do separator, nhưng canonical external-id phân biệt hoa/thường trong khi filesystem macOS/Windows thường không. Vì vậy Work Items root dùng contract **casefold-unique**: không được có hai directory key khác spelling nhưng cùng `casefold()`. Trước create/read/write `$work-item` phải reject sibling casefold-equivalent; nếu dossier đã tồn tại thì front-matter `WORK_ITEM.md.id` phải khớp exact canonical ID. Đồng thời reject invalid/traversal ID và verify resolved dossier vẫn nằm dưới Work Items root.
+`~` loại bỏ collision do separator, nhưng canonical external-id phân biệt hoa/thường trong khi filesystem macOS/Windows thường không. Vì vậy Work Items root dùng contract **casefold-unique**: không được có hai directory key khác spelling nhưng cùng `casefold()`. Trước create/read/write `$work-item` phải reject sibling casefold-equivalent; nếu dossier đã tồn tại thì front-matter `00_WORK_ITEM.md.id` phải khớp exact canonical ID. Đồng thời reject invalid/traversal ID và verify resolved dossier vẫn nằm dưới Work Items root.
+
+Canonical dossier filenames:
+
+```text
+00_WORK_ITEM.md
+10_intake.md?
+20_investigation.md?
+30_plan.md?
+40_review.md?
+references/?
+90_report.textile?
+```
+
+Numeric prefixes là part of filename contract. Dùng gaps `10/20/30/40/.../90` để có thể chèn future material phases mà không rename toàn bộ dossier. Legacy unprefixed names không được coexist với numbered targets.
 
 ## Legacy SQLite cutover
 
@@ -51,7 +65,7 @@ Default source là `~/.local/share/agent-work-items/work-items.sqlite3` hoặc `
 
 Exporter đọc toàn bộ Work Item + artifact/section/chunk trong một SQLite read snapshot và preflight toàn bộ output trước filesystem write. Current dossier giữ current-state semantics như pending handoff và repository verification; lifecycle docs giữ revision provenance/Textile shape; full raw backup giữ chunk metadata tại `<workspace>/.qiqi/migration-backups/v0024/legacy-work-items/` với permission hạn chế. Source SQLite không bị sửa/xóa và partial artifact schema fail closed. Export cũng reject canonical IDs có directory keys casefold-equivalent để kết quả portable qua case-sensitive lẫn case-insensitive filesystems.
 
-Legacy model cho phép một số decision provenance/evidence extension fields và không có Acceptance Criteria section tương đương protocol mới. Vì vậy imported `WORK_ITEM.md` có `legacy_reconciliation_required: true` và trỏ tới protected archive. Trước substantive continuation/completion/report, QiQi phải reconcile material legacy acceptance/provenance từ archive vào living state, increment revision rồi bỏ flag; archive không trở thành runtime history source sau reconciliation.
+Legacy model cho phép một số decision provenance/evidence extension fields và không có Acceptance Criteria section tương đương protocol mới. Vì vậy imported `00_WORK_ITEM.md` có `legacy_reconciliation_required: true` và trỏ tới protected archive. Trước substantive continuation/completion/report, QiQi phải reconcile material legacy acceptance/provenance từ archive vào living state, increment revision rồi bỏ flag; archive không trở thành runtime history source sau reconciliation.
 
 Không chạy thêm legacy Work Item mutation trong lúc export. Nếu exporter báo conflict/schema error, reconcile trước. Sau export thành công, kiểm tra dossiers cần thiết rồi **gỡ registration cũ một cách verified**:
 
@@ -87,7 +101,29 @@ Không chạy installer bên trong từng repo con và không copy `.agents/.cla
 
 Sau install/update, mở fresh QiQi session **từ workspace root** để refresh workspace skill discovery.
 
-`WORK_ITEM.md` là current canonical state; lifecycle docs là living semantic state, không append-only history. Requirement change rewrite effective requirements, increment revision và reconcile prior investigation/plan/review theo materiality.
+`00_WORK_ITEM.md` là current canonical state; numbered lifecycle docs là living semantic state, không append-only history. Requirement change rewrite effective requirements, increment revision và reconcile prior investigation/plan/review theo materiality.
+
+## v27 filename migration
+
+Workspace đã có dossier theo contract cũ cần rename một lần sau khi apply migration v27:
+
+```bash
+python3 scripts/migrate-work-item-filenames-v27.py --dry-run
+python3 scripts/migrate-work-item-filenames-v27.py
+```
+
+Mapping:
+
+```text
+WORK_ITEM.md        -> 00_WORK_ITEM.md
+intake.md           -> 10_intake.md
+investigation.md    -> 20_investigation.md
+plan.md             -> 30_plan.md
+review.md           -> 40_review.md
+report.textile      -> 90_report.textile
+```
+
+Helper preflight toàn bộ dossiers trước mutation, reject symlink/non-regular file và reject bất kỳ old/new collision nào. Nếu rename runtime fail, nó rollback các rename đã thực hiện trong run đó. `references/` không đổi.
 
 ## Herdr + qiqi_delegate readiness
 
@@ -104,13 +140,13 @@ uv sync --project mcp/qiqi_delegate
 
 ## Repo delegation
 
-TaskPacket vẫn chứa objective/scope/acceptance đầy đủ. Child được đọc exact mounted dossier từ `work_item_path`, nhưng không mutate canonical dossier và không chạy Work Item lifecycle thay QiQi.
+TaskPacket vẫn chứa objective/scope/acceptance đầy đủ. Child được đọc exact mounted dossier từ `work_item_path`, bắt đầu ở `00_WORK_ITEM.md`, nhưng không mutate canonical dossier và không chạy Work Item lifecycle thay QiQi.
 
 `instructions/model-routing.md` không phải mandatory startup material. Default delegation route là `claude-balanced`; khi một turn thực sự delegate, QiQi đọc route policy just-in-time ngay trước route decision.
 
 ## Verification
 
-Sau khi `repos.yaml` đã được materialize thành repository thực, workspace skill đã cài và Herdr integrations đã cài:
+Sau khi `repos.yaml` đã được materialize thành repository thực, workspace skill đã cài, Work Item filenames đã ở canonical numbered form và Herdr integrations đã cài:
 
 ```bash
 bash scripts/workspace-check.sh
