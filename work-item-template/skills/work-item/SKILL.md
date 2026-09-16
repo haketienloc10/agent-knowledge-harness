@@ -30,7 +30,7 @@ Không dùng raw ID làm filesystem path. Sau khi validate, derive directory key
 redmine:116655 -> redmine~116655
 ```
 
-`~` không hợp lệ trong bất kỳ canonical ID component nào theo grammar trên, nên mapping này MUST collision-free giữa các canonical IDs hợp lệ. Canonical dossier là `<workspace>/work-items/<directory-key>/`. Sau khi resolve path, MUST verify nó vẫn nằm dưới resolved `<workspace>/work-items`; reject separator/traversal/non-canonical IDs thay vì normalize âm thầm.
+`~` không hợp lệ trong canonical ID components nên separator mapping không tạo collision cú pháp. Tuy nhiên external-id có phân biệt hoa/thường trong khi filesystem macOS/Windows thường không. Vì vậy toàn workspace MUST enforce **casefold-unique directory keys**: trước create/read/write, reject nếu một sibling entry khác spelling nhưng có `name.casefold()` trùng directory key dự kiến. Nếu dossier đã tồn tại, `WORK_ITEM.md` MUST có front-matter `id` khớp **exact canonical ID** trước khi coi đó là task truth. Sau khi resolve path, MUST verify nó vẫn nằm dưới resolved `<workspace>/work-items`; reject separator/traversal/non-canonical IDs thay vì normalize âm thầm.
 
 ## Storage contract
 
@@ -71,14 +71,17 @@ phase: intake | investigation | planning | implementation | verification | repor
 
 Body current-state đề nghị: Objective, Current Requirements, Acceptance Criteria, Scope, Decisions, Open Questions, Blockers, Current State, Next Actions. `revision` tăng khi canonical task meaning hoặc completion-relevant state đổi material.
 
+Legacy-imported dossier có thể chứa `legacy_reconciliation_required: true`. Khi flag này còn true, QiQi MUST đọc protected migration archive được dossier trỏ tới và reconcile material legacy metadata/acceptance/provenance trước substantive implementation, completion assessment hoặc final report; sau reconciliation rewrite current state, tăng revision và bỏ flag. Không để archive trở thành runtime history source sau khi reconciliation hoàn tất.
+
 ## Intake + requirement changes
 
 Khi nhận request đầu tiên:
 
 1. Validate canonical ID và derive safe directory key.
-2. Resolve/create `<workspace>/work-items/<directory-key>/` và verify path containment.
-3. Materialize `WORK_ITEM.md` revision 1 từ effective requirement.
-4. Tạo `intake.md` khi original wording/source/material change context có giá trị cho task/report.
+2. Enforce casefold uniqueness trong `<workspace>/work-items`, resolve/create dossier và verify path containment.
+3. Nếu dossier tồn tại, verify exact front-matter `id` trước khi reuse.
+4. Materialize `WORK_ITEM.md` revision 1 từ effective requirement.
+5. Tạo `intake.md` khi original wording/source/material change context có giá trị cho task/report.
 
 Khi có change request: rewrite effective current requirement, tăng revision, giữ trong `intake.md` chỉ material change context còn cần, rồi reconcile investigation/plan/review với requirement mới. Original request không phải current truth.
 
