@@ -80,26 +80,60 @@ Trong lúc export, không chạy thêm legacy Work Item mutation. Sau export th�
 bash scripts/remove-legacy-user-mcp.sh
 ```
 
-Helper chỉ remove `work_item` nếu registration hiện tại còn trỏ tới legacy managed wrapper; nó từ chối xóa registration cùng tên nhưng không thuộc harness cũ. Sau đó install/update skill và mở fresh sessions:
+Helper chỉ remove `work_item` nếu registration hiện tại còn trỏ tới legacy managed wrapper; nó từ chối xóa registration cùng tên nhưng không thuộc harness cũ. Sau đó install/update skill bundle và mở fresh sessions:
 
 ```bash
 bash scripts/install-user-skill.sh
 ```
 
+Installer quản lý cùng lúc 5 user-scoped skills cho cả Codex và Claude:
+
+```text
+work-item
+work-item-intake
+work-item-investigate
+work-item-plan
+work-item-review
+```
+
+Nó preflight toàn bộ bundle trước mutation. Existing unmanaged same-name skill chỉ được adopt khi toàn bộ tree giống source; unrelated skill không bị overwrite.
+
+## Phase clarification skills
+
+`work-item` giữ lifecycle/orchestration và canonical write boundary. Bốn skill bổ trợ chỉ làm rõ uncertainty ở đúng phase:
+
+- `work-item-intake` — mandatory semantic gate cho request mới/material requirement change: understanding, scope, terminology, acceptance và requirement ambiguity.
+- `work-item-investigate` — conditional gate khi ownership, repo/module boundary, authoritative source hoặc first investigation target chưa rõ.
+- `work-item-plan` — conditional decision gate khi approach/trade-off/risk/verification materially non-obvious.
+- `work-item-review` — mandatory acceptance gate trước completion/reporting, dựa trên actual evidence.
+
+Gate vocabulary chung:
+
+```text
+ready
+needs_user_clarification
+needs_discovery
+blocked
+```
+
+`needs_discovery` = factual/technical/evidence work mà agent có thể tự làm mà chưa cần user quyết định. Nguyên tắc xuyên suốt: **clarify meaning, not mechanics** — hỏi user cho intent/product/domain semantics/material acceptance hoặc irreversible/external-contract trade-off; tự discover repository/module facts và tự quyết normal reversible implementation details khi evidence đủ.
+
+Phase skills không tạo `clarification.md`, history hay file theo turn. Material result được QiQi reconcile vào `WORK_ITEM.md` và các lifecycle documents hiện có.
+
 ## Lifecycle
 
 ```text
 request
-→ intake/canonicalize
-→ investigate (nếu cần)
-→ plan/decide (nếu cần)
+→ intake/canonicalize + mandatory intake gate
+→ investigate (nếu cần; clarification gate chỉ khi boundary/target chưa rõ)
+→ plan/decide (nếu cần; decision gate chỉ khi materially non-obvious)
 → implement/delegate
-→ verify/review
+→ verify/review + mandatory acceptance gate
 → report
 → done
 ```
 
-Flow được phép quay lại investigation/planning khi evidence hoặc requirement đổi; không encode FSM cứng.
+Flow được phép quay lại intake/investigation/planning khi evidence hoặc requirement đổi; không encode FSM cứng.
 
 ## Verification
 
@@ -107,4 +141,4 @@ Flow được phép quay lại investigation/planning khi evidence hoặc requir
 bash scripts/work-item-template-check.sh
 ```
 
-Operational protocol nằm tại `skills/work-item/SKILL.md`.
+Operational protocol nằm tại `skills/work-item/SKILL.md`; phase semantics nằm tại các sibling `skills/work-item-*` directories.
