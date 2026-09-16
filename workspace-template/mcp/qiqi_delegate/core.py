@@ -342,10 +342,21 @@ def normalize_hook_payload(
     if response is not None and not isinstance(response, str):
         raise ValueError("last_assistant_message must be a string or null")
 
+    background_task_count = 0
     if event == "Stop":
         if not isinstance(response, str) or not response.strip():
             raise ValueError("Stop hook is missing the native final assistant message")
-        state = "settled"
+        if adapter == "claude":
+            background_tasks = payload.get("background_tasks")
+            if not isinstance(background_tasks, list):
+                raise ValueError(
+                    "Claude Stop hook is missing background_tasks; "
+                    "upgrade Claude Code to a version that reports background task state"
+                )
+            background_task_count = len(background_tasks)
+            state = "pending_async" if background_tasks else "settled"
+        else:
+            state = "settled"
         error = None
     else:
         state = "failed"
@@ -382,6 +393,7 @@ def normalize_hook_payload(
         "agent_response": response,
         "error": error,
         "cwd": cwd,
+        "background_task_count": background_task_count,
         "captured_at_ns": (
             captured_at_ns if captured_at_ns is not None else time.time_ns()
         ),
@@ -415,13 +427,13 @@ def select_capture_event(
         if event.get("version") == 1
         and event.get("adapter") == adapter
         and event.get("session_id") == session_id
-        and event.get("state") in {"settled", "failed"}
+        and event.get("state") in {"pending_async", "settled", "failed"}
         and isinstance(event.get("agent_response"), str)
         and event.get("agent_response")
     ]
     if not matching:
         raise RuntimeError(
-            "native result hook produced no valid final message for the Herdr session"
+            "native result hook produced no valid response capture for the Herdr session"
         )
     matching.sort(key=lambda item: int(item.get("captured_at_ns") or 0))
     return matching[-1]
