@@ -123,10 +123,12 @@ mcp = MCPServer(
         "policy. The MCP launches/resumes the native Codex or Claude session through Herdr "
         "and captures the native final assistant message through a static result-hook command "
         "routed to MCP-owned active-capture state; it never scrapes terminal scrollback or "
-        "parses agent transcripts. Codex trusts only the exact QiQi session hook by matching "
-        "its computed trusted_hash; global hook-trust bypass is forbidden. Settled/failed/"
-        "blocked are runtime lifecycle states, not semantic completion. Runtime session "
-        "ownership is persisted in MCP-owned SQLite state, not in a Markdown result artifact."
+        "parses agent transcripts. Claude Stop captures with in-flight background work stay "
+        "internal and pending until a later Stop reports no background tasks. Codex trusts "
+        "only the exact QiQi session hook by matching its computed trusted_hash; global "
+        "hook-trust bypass is forbidden. Settled/failed/blocked are runtime lifecycle states, "
+        "not semantic completion. Runtime session ownership is persisted in MCP-owned SQLite "
+        "state, not in a Markdown result artifact."
     ),
 )
 
@@ -1005,15 +1007,24 @@ async def _wait_for_result_capture(
 ) -> dict[str, Any]:
     deadline = time.monotonic() + NATIVE_RESULT_WAIT_SECONDS
     last_error: Exception | None = None
+    saw_pending_async = False
     while True:
         events = load_capture_events(sink, nonce)
         try:
-            return select_capture_event(
+            event = select_capture_event(
                 events, adapter=adapter, session_id=native_session_id
             )
         except RuntimeError as exc:
             last_error = exc
-        if time.monotonic() >= deadline:
+        else:
+            state = event.get("state")
+            if state in {"settled", "failed"}:
+                return event
+            if state == "pending_async":
+                saw_pending_async = True
+            else:
+                raise RuntimeError(f"native result hook produced unexpected state: {state!r}")
+        if not saw_pending_async and time.monotonic() >= deadline:
             raise RuntimeError(
                 "native final response was not captured after the agent settled; "
                 "refusing to fall back to terminal screen or transcript parsing"
