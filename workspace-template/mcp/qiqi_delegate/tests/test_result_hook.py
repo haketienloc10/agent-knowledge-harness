@@ -159,6 +159,26 @@ class ResultHookTests(unittest.TestCase):
         finally:
             temp.cleanup()
 
+    def test_static_hook_persists_missing_background_task_capability(self):
+        temp, sink, completed = self.run_static_hook(
+            "claude",
+            {
+                "hook_event_name": "Stop",
+                "session_id": "claude-session",
+                "last_assistant_message": "done",
+            },
+        )
+        try:
+            self.assertEqual(completed.returncode, 0)
+            self.assertEqual(completed.stdout.strip(), "{}")
+            files = list(sink.glob("event-*.json"))
+            self.assertEqual(len(files), 1)
+            event = json.loads(files[0].read_text(encoding="utf-8"))
+            self.assertEqual(event["state"], "capture_error")
+            self.assertIn("upgrade Claude Code", event["error"])
+        finally:
+            temp.cleanup()
+
     def test_static_resume_rejects_wrong_native_session(self):
         temp, sink, completed = self.run_static_hook(
             "codex",
