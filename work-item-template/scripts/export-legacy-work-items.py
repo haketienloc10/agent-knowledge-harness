@@ -71,6 +71,8 @@ def safe_key(item_id: str) -> str:
 
 
 def casefold_key(value: str) -> str:
+    # Canonical IDs are ASCII-only. casefold() therefore models the case aliases
+    # relevant to common case-insensitive macOS/Windows filesystems.
     return value.casefold()
 
 
@@ -92,6 +94,8 @@ def normalize_phase(value: Any) -> tuple[str, str | None]:
         return lowered, raw if raw and raw != lowered else None
     if lowered in LEGACY_PHASE_ALIASES:
         return LEGACY_PHASE_ALIASES[lowered], raw
+    # Legacy phase was intentionally free-form. Unknown values must not leak into
+    # the new enum contract; route the imported item through reconciliation instead.
     return "investigation", raw or None
 
 
@@ -340,7 +344,8 @@ def validate_artifact_schema(conn: sqlite3.Connection) -> bool:
     missing = ARTIFACT_TABLES - present
     if missing:
         die(
-            "legacy artifact schema is incomplete; present="n            + ", ".join(sorted(present))
+            "legacy artifact schema is incomplete; present="
+            + ", ".join(sorted(present))
             + "; missing="
             + ", ".join(sorted(missing))
         )
@@ -417,6 +422,8 @@ def textile_heading(title: str) -> str:
 
 
 def render_textile_report(artifact: dict[str, Any]) -> str:
+    # The canonical report file is the external Redmine deliverable. Keep artifact
+    # metadata in the JSON archive rather than injecting an extra h1/title/summary.
     parts: list[str] = []
     for section in artifact.get("sections", []):
         section_title = str(
@@ -518,6 +525,8 @@ def build_export_plan(
             )
         ]
 
+        # read_artifacts uses the legacy public ordering: newest update first,
+        # artifact_id ascending as deterministic tie-break.
         latest_by_type: dict[str, dict[str, Any]] = {}
         for artifact in artifacts:
             artifact_type = str(artifact.get("type") or "")
@@ -579,7 +588,6 @@ def main() -> int:
     workspace = Path(args.workspace).expanduser().resolve()
     if not (workspace / "repos.yaml").is_file():
         die(f"workspace is missing repos.yaml: {workspace}")
-
     db = Path(args.db).expanduser().resolve()
     if not db.is_file():
         die(
@@ -599,6 +607,8 @@ def main() -> int:
     conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True, isolation_level=None)
     conn.row_factory = sqlite3.Row
     try:
+        # Keep rows/artifacts/sections/chunks in one read snapshot while the legacy
+        # service may still exist during cutover.
         conn.execute("BEGIN")
         if not table_exists(conn, "work_items"):
             die(f"legacy DB has no work_items table: {db}")
@@ -619,6 +629,8 @@ def main() -> int:
             conn.execute("ROLLBACK")
         conn.close()
 
+    # No filesystem mutation occurs until every legacy record and output has passed
+    # preflight, including case-insensitive name aliases.
     if not args.dry_run:
         work_items_root.mkdir(parents=True, exist_ok=True)
         backup_root.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -629,10 +641,7 @@ def main() -> int:
         for path, content in entry["files"]:
             write_text(path, content, args.dry_run)
         write_text(
-            entry["archive_path"],
-            entry["archive_content"],
-            args.dry_run,
-            mode=0o600,
+            entry["archive_path"], entry["archive_content"], args.dry_run, mode=0o600
         )
 
     print("legacy Work Item export complete; source SQLite DB was not modified")
