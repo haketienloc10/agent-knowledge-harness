@@ -18,10 +18,13 @@ class ResultCaptureWaitTests(unittest.IsolatedAsyncioTestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.sink = Path(self.temp.name)
         self.original_timeout = server.NATIVE_RESULT_WAIT_SECONDS
+        self.original_pending_timeout = server.NATIVE_PENDING_RESULT_WAIT_SECONDS
         server.NATIVE_RESULT_WAIT_SECONDS = 0.05
+        server.NATIVE_PENDING_RESULT_WAIT_SECONDS = 0.2
 
     def tearDown(self) -> None:
         server.NATIVE_RESULT_WAIT_SECONDS = self.original_timeout
+        server.NATIVE_PENDING_RESULT_WAIT_SECONDS = self.original_pending_timeout
         self.temp.cleanup()
 
     def write_event(self, index: int, event: dict) -> None:
@@ -79,6 +82,51 @@ class ResultCaptureWaitTests(unittest.IsolatedAsyncioTestCase):
         result = await asyncio.wait_for(waiter, timeout=1)
         self.assertEqual(result["state"], "settled")
         self.assertEqual(result["agent_response"], "DONE — OK")
+
+    async def test_pending_background_stop_has_bounded_failure_path(self):
+        server.NATIVE_PENDING_RESULT_WAIT_SECONDS = 0.05
+        self.write_event(
+            1,
+            normalize_hook_payload(
+                adapter="claude",
+                nonce="nonce-1",
+                payload={
+                    "hook_event_name": "Stop",
+                    "session_id": "session-1",
+                    "last_assistant_message": "still waiting",
+                    "background_tasks": [{"id": "agent-1"}],
+                },
+                captured_at_ns=10,
+            ),
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "pending background work"):
+            await asyncio.wait_for(
+                server._wait_for_result_capture(
+                    self.sink, "nonce-1", "claude", "session-1"
+                ),
+                timeout=1,
+            )
+
+    async def test_missing_background_task_capability_surfaces_actionable_error(self):
+        self.write_event(
+            1,
+            normalize_hook_payload(
+                adapter="claude",
+                nonce="nonce-1",
+                payload={
+                    "hook_event_name": "Stop",
+                    "session_id": "session-1",
+                    "last_assistant_message": "done",
+                },
+                captured_at_ns=10,
+            ),
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "upgrade Claude Code"):
+            await server._wait_for_result_capture(
+                self.sink, "nonce-1", "claude", "session-1"
+            )
 
     async def test_missing_capture_still_uses_initial_timeout(self):
         with self.assertRaisesRegex(RuntimeError, "native final response was not captured"):
