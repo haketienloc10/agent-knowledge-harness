@@ -50,4 +50,4 @@ Nếu chỉ reveal factual gap, quay investigation/discovery mà không hỏi us
 
 ## Persistence
 
-QiQi reconcile material current approach/decision/risk/verification vào `plan.md`, `WORK_ITEM.md` Decisions/Next Actions và existing living state. Không tạo plan-history, decision-session hoặc clarification files.
+QiQi reconcile material current approach/decision/risk/verification vào `30_plan.md`, `00_WORK_ITEM.md` Decisions/Next Actions và existing living state. Không tạo plan-history, decision-session hoặc clarification files.

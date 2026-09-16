@@ -2,7 +2,7 @@
 
 Conditional. Dùng khi intake đã đủ rõ nhưng investigation target/boundary chưa rõ. Nếu target, ownership và required evidence đã obvious từ Work Item + repo context thì bỏ qua clarification ceremony và điều tra trực tiếp.
 
-Gate này scope investigation; không thay `investigation.md` và không thay actual investigation.
+Gate này scope investigation; không thay `20_investigation.md` và không thay actual investigation.
 
 ## Core rule
 
@@ -65,4 +65,4 @@ Khi discovery ra repo/module khác:
 
 ## Persistence
 
-QiQi merge/rewrite material scope/findings/questions vào `investigation.md` và `WORK_ITEM.md` như living current state. Không tạo clarification file, chronological note hay execution diary. Preserve evidence/provenance chỉ khi còn cần support current finding hoặc future acceptance assessment.
+QiQi merge/rewrite material scope/findings/questions vào `20_investigation.md` và `00_WORK_ITEM.md` như living current state. Không tạo clarification file, chronological note hay execution diary. Preserve evidence/provenance chỉ khi còn cần support current finding hoặc future acceptance assessment.

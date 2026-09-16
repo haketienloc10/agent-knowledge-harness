@@ -8,18 +8,24 @@ required=(
   README.md
   ARTIFACTS.md
   skills/work-item/SKILL.md
-  skills/work-item/templates/WORK_ITEM.md
-  skills/work-item/templates/intake.md
-  skills/work-item/templates/investigation.md
-  skills/work-item/templates/plan.md
-  skills/work-item/templates/review.md
-  skills/work-item/templates/report.textile
+  skills/work-item/templates/00_WORK_ITEM.md
+  skills/work-item/templates/10_intake.md
+  skills/work-item/templates/20_investigation.md
+  skills/work-item/templates/30_plan.md
+  skills/work-item/templates/40_review.md
+  skills/work-item/templates/90_report.textile
   scripts/install-user-skill.sh
   scripts/export-legacy-work-items.py
   scripts/remove-legacy-user-mcp.sh
 )
 for rel in "${required[@]}"; do
   [[ -f "$home/$rel" ]] || fail "missing required file: $rel"
+done
+
+for legacy in WORK_ITEM.md intake.md investigation.md plan.md review.md report.textile; do
+  legacy_path="$home/skills/work-item/templates/$legacy"
+  [[ ! -e "$legacy_path" && ! -L "$legacy_path" ]] || \
+    fail "legacy unprefixed Work Item template remains: $legacy"
 done
 
 [[ ! -e "$home/mcp" ]] || fail 'legacy Work Item MCP directory must not exist'
@@ -40,7 +46,12 @@ for pattern in \
   'legacy_reconciliation_required: true' \
   'verify nó vẫn nằm dưới resolved `<workspace>/work-items`' \
   'Không tạo mặc định history/turn/execution/checkpoint files' \
-  'report.textile'; do
+  '00_WORK_ITEM.md' \
+  '10_intake.md' \
+  '20_investigation.md' \
+  '30_plan.md' \
+  '40_review.md' \
+  '90_report.textile'; do
   grep -Fq -- "$pattern" "$skill" || fail "skill missing contract: $pattern"
 done
 
@@ -65,7 +76,13 @@ for pattern in \
   'mode=0o600' \
   'target.resolve().relative_to(root.resolve())' \
   'case-insensitive-equivalent' \
-  'source SQLite DB was not modified'; do
+  'source SQLite DB was not modified' \
+  '"intake": "10_intake.md"' \
+  '"investigation": "20_investigation.md"' \
+  '"plan": "30_plan.md"' \
+  '"review": "40_review.md"' \
+  '"report": "90_report.textile"' \
+  'target / "00_WORK_ITEM.md"'; do
   grep -Fq -- "$pattern" "$exporter" || fail "legacy exporter missing contract: $pattern"
 done
 
@@ -144,16 +161,17 @@ PY
 python3 "$exporter" --workspace "$tmp/workspace" --db "$tmp/legacy.sqlite3"
 dossier="$tmp/workspace/work-items/redmine~116655"
 archive="$tmp/workspace/.qiqi/migration-backups/v0024/legacy-work-items/redmine~116655.json"
-[[ -f "$dossier/WORK_ITEM.md" ]] || fail 'legacy exporter did not create dossier'
+[[ -f "$dossier/00_WORK_ITEM.md" ]] || fail 'legacy exporter did not create numbered dossier'
+[[ ! -e "$dossier/WORK_ITEM.md" ]] || fail 'legacy exporter recreated unprefixed canonical file'
 [[ -f "$archive" ]] || fail 'legacy exporter did not preserve archive'
-grep -Fxq 'legacy_reconciliation_required: true' "$dossier/WORK_ITEM.md" || fail 'legacy reconciliation gate missing'
-grep -Fq 'Active decision d1 has legacy extension/provenance fields (rationale, source)' "$dossier/WORK_ITEM.md" || fail 'decision provenance reconciliation was not surfaced'
-grep -Fq 'Protected legacy archive:' "$dossier/WORK_ITEM.md" || fail 'legacy archive locator missing'
-grep -Fq 'demo -> api: Finish API change' "$dossier/WORK_ITEM.md" || fail 'pending handoff dropped'
-grep -Fq 'demo: pytest -q: pass' "$dossier/WORK_ITEM.md" || fail 'repository verification dropped'
-grep -Fq 'Coordinate remaining work (repo=demo, owner=platform)' "$dossier/WORK_ITEM.md" || fail 'next-action ownership collapsed'
-grep -Fxq 'based_on_work_item_revision: 5' "$dossier/investigation.md" || fail 'artifact revision provenance/tie ordering drifted'
-[[ "$(head -n 1 "$dossier/report.textile")" == 'h3. +1. Root-cause/requirement:+' ]] || fail 'Textile report heading drifted'
+grep -Fxq 'legacy_reconciliation_required: true' "$dossier/00_WORK_ITEM.md" || fail 'legacy reconciliation gate missing'
+grep -Fq 'Active decision d1 has legacy extension/provenance fields (rationale, source)' "$dossier/00_WORK_ITEM.md" || fail 'decision provenance reconciliation was not surfaced'
+grep -Fq 'Protected legacy archive:' "$dossier/00_WORK_ITEM.md" || fail 'legacy archive locator missing'
+grep -Fq 'demo -> api: Finish API change' "$dossier/00_WORK_ITEM.md" || fail 'pending handoff dropped'
+grep -Fq 'demo: pytest -q: pass' "$dossier/00_WORK_ITEM.md" || fail 'repository verification dropped'
+grep -Fq 'Coordinate remaining work (repo=demo, owner=platform)' "$dossier/00_WORK_ITEM.md" || fail 'next-action ownership collapsed'
+grep -Fxq 'based_on_work_item_revision: 5' "$dossier/20_investigation.md" || fail 'artifact revision provenance/tie ordering drifted'
+[[ "$(head -n 1 "$dossier/90_report.textile")" == 'h3. +1. Root-cause/requirement:+' ]] || fail 'Textile report heading drifted'
 
 python3 - "$archive" <<'PY'
 import json, stat, sys
@@ -179,8 +197,8 @@ for item_id in ("a:b--c", "a--b:c"):
 conn.commit(); conn.close()
 PY
 python3 "$exporter" --workspace "$tmp/separator-workspace" --db "$tmp/separator.sqlite3" >/dev/null
-[[ -f "$tmp/separator-workspace/work-items/a~b--c/WORK_ITEM.md" ]] || fail 'separator-safe key missing'
-[[ -f "$tmp/separator-workspace/work-items/a--b~c/WORK_ITEM.md" ]] || fail 'separator-safe key missing'
+[[ -f "$tmp/separator-workspace/work-items/a~b--c/00_WORK_ITEM.md" ]] || fail 'separator-safe key missing'
+[[ -f "$tmp/separator-workspace/work-items/a--b~c/00_WORK_ITEM.md" ]] || fail 'separator-safe key missing'
 
 # Cross-platform policy rejects casefold-equivalent keys before any write.
 mkdir -p "$tmp/casefold-workspace"
@@ -197,8 +215,8 @@ PY
 if python3 "$exporter" --workspace "$tmp/casefold-workspace" --db "$tmp/casefold.sqlite3" >/dev/null 2>&1; then
   fail 'casefold-equivalent Work Item keys must be rejected'
 fi
-[[ ! -e "$tmp/casefold-workspace/work-items/redmine~ABC/WORK_ITEM.md" ]] || fail 'casefold collision wrote partial output'
-[[ ! -e "$tmp/casefold-workspace/work-items/redmine~abc/WORK_ITEM.md" ]] || fail 'casefold collision wrote partial output'
+[[ ! -e "$tmp/casefold-workspace/work-items/redmine~ABC/00_WORK_ITEM.md" ]] || fail 'casefold collision wrote partial output'
+[[ ! -e "$tmp/casefold-workspace/work-items/redmine~abc/00_WORK_ITEM.md" ]] || fail 'casefold collision wrote partial output'
 
 # Partial artifact schema fails closed.
 mkdir -p "$tmp/partial-workspace"
@@ -239,7 +257,7 @@ PY
 if python3 "$exporter" --workspace "$tmp/preflight-workspace" --db "$tmp/preflight.sqlite3" >/dev/null 2>&1; then
   fail 'later conflict must fail preflight'
 fi
-[[ ! -e "$tmp/preflight-workspace/work-items/redmine~1/WORK_ITEM.md" ]] || fail 'preflight wrote earlier item'
+[[ ! -e "$tmp/preflight-workspace/work-items/redmine~1/00_WORK_ITEM.md" ]] || fail 'preflight wrote earlier item'
 
 # Installer adoption protects the complete skill tree.
 bad_codex="$tmp/install-bad-codex"

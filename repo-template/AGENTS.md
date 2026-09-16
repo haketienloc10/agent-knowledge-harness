@@ -18,7 +18,7 @@ QiQi là canonical Work Item writer và cross-repo broker. Child không tự mar
 
 1. Xác nhận current directory là exact Git root.
 2. Đọc TaskPacket để hiểu objective/scope/acceptance/constraints.
-3. Nếu TaskPacket có trusted fact `work_item_path=<absolute-path>; id=<canonical-id>; revision=<n>`, đọc `<absolute-path>/WORK_ITEM.md` và chỉ lifecycle docs relevant. Không reconstruct path từ environment variable.
+3. Nếu TaskPacket có trusted fact `work_item_path=<absolute-path>; id=<canonical-id>; revision=<n>`, đọc `<absolute-path>/00_WORK_ITEM.md` và chỉ numbered lifecycle docs relevant. Không reconstruct path từ environment variable.
 4. Đọc repo architecture/verification docs khi cần.
 5. Discover source/tests/config nhỏ nhất đủ task.
 6. Dùng Shared Knowledge khi reusable context có thể đổi action; không gọi như ceremony.
@@ -27,12 +27,13 @@ TaskPacket vẫn phải semantically sufficient. Work Item cung cấp durable co
 
 ## Work Item boundary
 
-Child MAY read mounted Work Item/lifecycle docs. Child MUST NOT:
+Child MAY read mounted Work Item qua `00_WORK_ITEM.md` và relevant numbered lifecycle docs. Child MUST NOT:
 
 - trực tiếp rewrite canonical Work Item;
 - tạo turn/history/progress files trong Work Item;
 - mark overall task hoặc sibling repo done;
-- dùng stale Work Item để override newer TaskPacket instruction.
+- dùng stale Work Item để override newer TaskPacket instruction;
+- tạo legacy unprefixed lifecycle file song song với numbered canonical files.
 
 Nếu Work Item revision trên disk khác delegated revision và khác biệt có thể material, surface về QiQi thay vì tự chọn product truth.
 

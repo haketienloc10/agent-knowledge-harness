@@ -1,0 +1,28 @@
+{
+  "version": 27,
+  "from_ref": "0e77ddfae8b99e39c0f5d41febe75d54949aa444",
+  "to_ref": "7bcae02754f4fc112684c9e08d829f0984aa761b",
+  "description": "adopt ordered Work Item dossier filenames (00/10/20/30/40/90), install and execute a fail-closed rename hook for existing dossiers, and update workspace/repository policy plus verification to require the numbered canonical contract",
+  "workspace_hook": "scripts/migrate-work-item-filenames-v27.py",
+  "workspace": {
+    "merge": [
+      "workspace-template/AGENTS.md"
+    ],
+    "replace": [
+      "workspace-template/docs/WORKSPACE_SETUP.md",
+      "workspace-template/mcp/qiqi_delegate/tests/test_work_item_filename_migration.py",
+      "workspace-template/scripts/migrate-work-item-filenames-v27.py",
+      "workspace-template/scripts/workspace-check.sh"
+    ],
+    "delete": [],
+    "manual_review": []
+  },
+  "repo": {
+    "merge": [
+      "repo-template/AGENTS.md"
+    ],
+    "replace": [],
+    "delete": [],
+    "manual_review": []
+  }
+}

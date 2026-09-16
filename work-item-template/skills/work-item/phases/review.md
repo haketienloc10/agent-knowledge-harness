@@ -66,4 +66,4 @@ Review theo **current Work Item revision**, không theo obsolete delegated revis
 
 ## Persistence
 
-QiQi reconcile current acceptance evidence/gaps vào `review.md` và `WORK_ITEM.md`. Không tạo review-session/history files; giữ chỉ material evidence và unresolved completion state.
+QiQi reconcile current acceptance evidence/gaps vào `40_review.md` và `00_WORK_ITEM.md`. Không tạo review-session/history files; giữ chỉ material evidence và unresolved completion state.

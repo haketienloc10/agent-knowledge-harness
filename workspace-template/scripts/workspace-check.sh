@@ -14,6 +14,7 @@ required=(
   instructions/agent-routing.yaml
   instructions/model-routing.md
   scripts/qiqi-mcp-server.sh
+  scripts/migrate-work-item-filenames-v27.py
   mcp/qiqi_delegate/server.py
   mcp/qiqi_delegate/core.py
   .codex/config.toml
@@ -71,6 +72,12 @@ for pattern in \
   'Work Item là filesystem current-state dossier' \
   'child continuity không được phụ thuộc vào env inheritance từ Herdr server' \
   'work_item_path=<absolute dossier path>; id=<canonical id>; revision=<n>' \
+  '00_WORK_ITEM.md' \
+  '10_intake.md' \
+  '20_investigation.md' \
+  '30_plan.md' \
+  '40_review.md' \
+  '90_report.textile' \
   'Requirement change rewrite current requirement' \
   'TaskPacket phải là smallest sufficient' \
   'Default delegation route = `claude-balanced`' \
@@ -195,6 +202,54 @@ if not template_mode:
     assert len(roots) == len(set(roots)), "multiple repositories resolve to the same Git root"
 PY
 
+# Real workspaces must be fully migrated to the ordered Work Item filename contract.
+# Template CI has only work-items/.gitkeep and intentionally skips runtime dossiers.
+if [[ "$template_mode" != "1" ]]; then
+  python3 - "$workspace_root/work-items" <<'PY'
+from pathlib import Path
+import sys
+
+root = Path(sys.argv[1])
+legacy = {
+    "WORK_ITEM.md",
+    "intake.md",
+    "investigation.md",
+    "plan.md",
+    "review.md",
+    "report.textile",
+}
+numbered_optional = {
+    "10_intake.md",
+    "20_investigation.md",
+    "30_plan.md",
+    "40_review.md",
+    "90_report.textile",
+}
+
+for dossier in sorted(root.iterdir(), key=lambda p: p.name.casefold()):
+    if dossier.name.startswith("."):
+        continue
+    assert dossier.is_dir() and not dossier.is_symlink(), (
+        f"Work Item entry must be a real dossier directory: {dossier}"
+    )
+    present_legacy = sorted(name for name in legacy if (dossier / name).exists() or (dossier / name).is_symlink())
+    assert not present_legacy, (
+        f"legacy unprefixed Work Item filenames remain in {dossier}: {', '.join(present_legacy)}; "
+        "run scripts/migrate-work-item-filenames-v27.py"
+    )
+    primary = dossier / "00_WORK_ITEM.md"
+    assert primary.is_file() and not primary.is_symlink(), (
+        f"missing/invalid canonical Work Item file: {primary}"
+    )
+    for name in numbered_optional:
+        path = dossier / name
+        if path.exists() or path.is_symlink():
+            assert path.is_file() and not path.is_symlink(), (
+                f"numbered lifecycle path must be a regular file: {path}"
+            )
+PY
+fi
+
 # On a real workspace, verification is also a runtime-readiness check. The template
 # CI cannot install machine-local Herdr integrations, so it explicitly opts out.
 if [[ "$template_mode" != "1" ]]; then
@@ -216,6 +271,7 @@ fi
 
 bash -n "$launcher"
 bash -n "$workspace_root/scripts/workspace-check.sh"
+python3 -m py_compile "$workspace_root/scripts/migrate-work-item-filenames-v27.py"
 
 uv run --project "$mcp_project" python -m unittest discover -s "$mcp_project/tests" -v
 

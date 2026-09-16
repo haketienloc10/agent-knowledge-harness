@@ -17,11 +17,11 @@ ARTIFACT_TABLES = {
     "work_item_artifact_chunks",
 }
 ARTIFACT_FILE_BY_TYPE = {
-    "intake": "intake.md",
-    "investigation": "investigation.md",
-    "plan": "plan.md",
-    "review": "review.md",
-    "report": "report.textile",
+    "intake": "10_intake.md",
+    "investigation": "20_investigation.md",
+    "plan": "30_plan.md",
+    "review": "40_review.md",
+    "report": "90_report.textile",
 }
 REVISIONED_ARTIFACT_TYPES = {"investigation", "plan", "review"}
 VALID_PHASES = {
@@ -515,7 +515,7 @@ def build_export_plan(
         )
         files: list[tuple[Path, str]] = [
             (
-                target / "WORK_ITEM.md",
+                target / "00_WORK_ITEM.md",
                 render_work_item(
                     document,
                     revision,

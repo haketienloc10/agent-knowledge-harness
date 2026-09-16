@@ -87,6 +87,26 @@ def load_migrations(directory: Path) -> list[dict]:
                 value = data[scope].get(strategy)
                 if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
                     die(f"{path.name}: {scope}.{strategy} must be an array of strings")
+
+        hook = data.get("workspace_hook")
+        if hook is not None:
+            if not isinstance(hook, str) or not hook.strip():
+                die(f"{path.name}: workspace_hook must be a non-empty relative path")
+            hook_path = Path(hook)
+            if hook_path.is_absolute() or ".." in hook_path.parts or hook_path.as_posix() != hook:
+                die(f"{path.name}: workspace_hook must be a normalized workspace-relative path")
+            hook_source = f"workspace-template/{hook}"
+            managed_workspace_sources = {
+                source
+                for strategy in ("merge", "replace")
+                for source in data["workspace"][strategy]
+            }
+            if hook_source not in managed_workspace_sources:
+                die(
+                    f"{path.name}: workspace_hook must be materialized by workspace merge/replace: "
+                    f"{hook_source}"
+                )
+
         data["_path"] = path
         migrations.append(data)
     return migrations
@@ -217,6 +237,72 @@ def relative_source(prefix: str, source: str) -> Path:
     if not source.startswith(marker):
         die(f"migration path outside {prefix}: {source}")
     return Path(source[len(marker):])
+
+
+def workspace_hook_source(migration: dict) -> str | None:
+    hook = migration.get("workspace_hook")
+    if hook is None:
+        return None
+    return f"workspace-template/{hook}"
+
+
+def emit_hook_output(result: subprocess.CompletedProcess[str]) -> None:
+    if result.stdout:
+        print(result.stdout.rstrip())
+    if result.stderr:
+        print(result.stderr.rstrip(), file=sys.stderr)
+
+
+def preflight_workspace_hook(harness: Path, workspace: Path, migration: dict) -> bool:
+    hook = migration.get("workspace_hook")
+    source = workspace_hook_source(migration)
+    if hook is None or source is None:
+        return True
+    if not ref_file_exists(harness, migration["to_ref"], source):
+        print(
+            f"CONFLICT: migration {migration['version']} workspace hook is missing at to_ref: {source}",
+            file=sys.stderr,
+        )
+        return False
+
+    print(f"workspace: preflight migration hook {hook}")
+    with tempfile.TemporaryDirectory() as directory:
+        script = Path(directory) / Path(hook).name
+        script.write_bytes(ref_bytes(harness, migration["to_ref"], source))
+        result = subprocess.run(
+            [sys.executable, str(script), "--workspace", str(workspace), "--dry-run"],
+            cwd=workspace,
+            text=True,
+            capture_output=True,
+        )
+    emit_hook_output(result)
+    if result.returncode:
+        print(
+            f"CONFLICT: migration {migration['version']} workspace hook preflight failed: {hook}",
+            file=sys.stderr,
+        )
+        return False
+    return True
+
+
+def apply_workspace_hook(workspace: Path, migration: dict, *, dry_run: bool) -> None:
+    hook = migration.get("workspace_hook")
+    if hook is None:
+        return
+    if dry_run:
+        print(f"workspace: dry-run hook {hook} (preflight succeeded; not executed)")
+        return
+
+    script = workspace / hook
+    if not regular_file(script):
+        die(f"workspace hook was not materialized as a regular file: {script}")
+    print(f"workspace: apply migration hook {hook}")
+    result = run(
+        [sys.executable, str(script), "--workspace", str(workspace)],
+        cwd=workspace,
+        check=True,
+    )
+    emit_hook_output(result)
 
 
 def backup_path(workspace: Path, key: str, version: int, relative: Path) -> Path:
@@ -462,11 +548,16 @@ def main() -> int:
             print(f"{key}: preflight migration {version} - {migration['description']}")
             if not preflight_scope(harness, workspace, migration, key, prefix, root, args.force):
                 failed = True
+        if any(key == "workspace" for key, _, _ in scopes):
+            if not preflight_workspace_hook(harness, workspace, migration):
+                failed = True
         if failed:
             die(f"migration {version} has conflicts; no files for this migration were changed")
 
         for key, prefix, root in scopes:
             apply_scope(harness, workspace, migration, key, prefix, root, args.force, args.dry_run)
+            if key == "workspace":
+                apply_workspace_hook(workspace, migration, dry_run=args.dry_run)
             state[key] = version
 
     if args.verify:
