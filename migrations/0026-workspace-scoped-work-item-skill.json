@@ -1,0 +1,20 @@
+{
+  "version": 26,
+  "from_ref": "3e8123b6dd04f3c7434409603d20169b7f2b9060",
+  "to_ref": "0e77ddfae8b99e39c0f5d41febe75d54949aa444",
+  "description": "document the Work Item lifecycle as one workspace-scoped QiQi skill with internal phase protocols, replacing user/global installation guidance while keeping repository children on TaskPacket plus read-only mounted Work Item context",
+  "workspace": {
+    "merge": [],
+    "replace": [
+      "workspace-template/docs/WORKSPACE_SETUP.md"
+    ],
+    "delete": [],
+    "manual_review": []
+  },
+  "repo": {
+    "merge": [],
+    "replace": [],
+    "delete": [],
+    "manual_review": []
+  }
+}
