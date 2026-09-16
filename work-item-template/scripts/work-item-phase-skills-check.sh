@@ -75,6 +75,8 @@ for skill in "${skills[@]}"; do
   grep -Fq -- "$skill" "$installer" || fail "installer does not manage skill: $skill"
 done
 grep -Fq -- 'before the first mutation' "$installer" || fail 'installer must preflight bundle before mutation'
+grep -Fq -- 'CODEX_HOME' "$installer" || fail 'installer must honor CODEX_HOME'
+grep -Fq -- '.agents/skills' "$installer" || fail 'installer must recognize legacy Codex skill root for cleanup'
 
 bash -n "$installer"
 
@@ -105,5 +107,39 @@ for skill in "${skills[@]}"; do
 done
 grep -Fq 'name: unrelated-plan' "$conflict_claude/work-item-plan/SKILL.md" || \
   fail 'installer mutated unrelated same-name skill'
+
+# Default Codex install follows the Codex-native $CODEX_HOME/skills contract and
+# removes only old harness-managed copies from ~/.agents/skills after success.
+default_home="$tmp/default-home"
+default_codex_home="$default_home/custom-codex-home"
+default_claude="$tmp/default-claude"
+mkdir -p "$default_home/.agents/skills"
+cp -R "$home/skills/work-item" "$default_home/.agents/skills/work-item"
+: > "$default_home/.agents/skills/work-item/.agent-knowledge-harness-managed"
+HOME="$default_home" CODEX_HOME="$default_codex_home" \
+  bash "$installer" --claude-root "$default_claude" >/dev/null
+for skill in "${skills[@]}"; do
+  [[ -f "$default_codex_home/skills/$skill/SKILL.md" ]] || \
+    fail "default Codex install missed CODEX_HOME/skills/$skill"
+done
+[[ ! -e "$default_home/.agents/skills/work-item" ]] || \
+  fail 'legacy harness-managed Codex skill was not removed after native install'
+
+# An unmanaged same-name skill in the legacy Codex discovery root must block the
+# default migration before the native target is mutated.
+legacy_conflict_home="$tmp/legacy-conflict-home"
+legacy_conflict_codex="$legacy_conflict_home/codex-home"
+legacy_conflict_claude="$tmp/legacy-conflict-claude"
+mkdir -p "$legacy_conflict_home/.agents/skills/work-item"
+printf '%s\n' '---' 'name: unrelated-work-item' '---' > \
+  "$legacy_conflict_home/.agents/skills/work-item/SKILL.md"
+if HOME="$legacy_conflict_home" CODEX_HOME="$legacy_conflict_codex" \
+  bash "$installer" --claude-root "$legacy_conflict_claude" >/dev/null 2>&1; then
+  fail 'installer must reject unmanaged duplicate skill in legacy Codex discovery root'
+fi
+[[ ! -e "$legacy_conflict_codex/skills/work-item" ]] || \
+  fail 'legacy Codex conflict caused partial native Codex installation'
+grep -Fq 'name: unrelated-work-item' "$legacy_conflict_home/.agents/skills/work-item/SKILL.md" || \
+  fail 'installer mutated unmanaged legacy Codex skill'
 
 printf 'Work Item phase skills: OK\n'
