@@ -116,6 +116,7 @@ class ResultHookTests(unittest.TestCase):
                 "hook_event_name": "Stop",
                 "session_id": "claude-session",
                 "last_assistant_message": response,
+                "background_tasks": [],
             },
         )
         try:
@@ -126,6 +127,35 @@ class ResultHookTests(unittest.TestCase):
             event = json.loads(files[0].read_text(encoding="utf-8"))
             self.assertEqual(event["nonce"], "static-nonce")
             self.assertEqual(event["agent_response"], response)
+            self.assertEqual(event["state"], "settled")
+        finally:
+            temp.cleanup()
+
+    def test_static_hook_captures_background_stop_as_pending(self):
+        temp, sink, completed = self.run_static_hook(
+            "claude",
+            {
+                "hook_event_name": "Stop",
+                "session_id": "claude-session",
+                "last_assistant_message": "waiting for child",
+                "background_tasks": [
+                    {
+                        "id": "agent-1",
+                        "type": "subagent",
+                        "status": "running",
+                        "description": "investigate",
+                    }
+                ],
+            },
+        )
+        try:
+            self.assertEqual(completed.returncode, 0)
+            self.assertEqual(completed.stdout.strip(), "{}")
+            files = list(sink.glob("event-*.json"))
+            self.assertEqual(len(files), 1)
+            event = json.loads(files[0].read_text(encoding="utf-8"))
+            self.assertEqual(event["state"], "pending_async")
+            self.assertEqual(event["background_task_count"], 1)
         finally:
             temp.cleanup()
 
