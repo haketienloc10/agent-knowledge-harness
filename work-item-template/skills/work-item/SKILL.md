@@ -73,6 +73,30 @@ Body current-state đề nghị: Objective, Current Requirements, Acceptance Cri
 
 Legacy-imported dossier có thể chứa `legacy_reconciliation_required: true`. Khi flag này còn true, QiQi MUST đọc protected migration archive được dossier trỏ tới và reconcile material legacy metadata/acceptance/provenance trước substantive implementation, completion assessment hoặc final report; sau reconciliation rewrite current state, tăng revision và bỏ flag. Không để archive trở thành runtime history source sau khi reconciliation hoàn tất.
 
+## Phase clarification gates
+
+`$work-item` là lifecycle/orchestration skill. Bốn skill bổ trợ chỉ làm rõ uncertainty ở đúng phase và MUST NOT tạo thêm lifecycle/history files hoặc tự mutate canonical dossier:
+
+- `$work-item-intake` — **mandatory** cho initial tracked intake và material requirement change; làm rõ understanding, scope, acceptance, terminology và requirement ambiguity.
+- `$work-item-investigate` — **conditional** khi investigation target/ownership/repository-module boundary hoặc authoritative source chưa rõ.
+- `$work-item-plan` — **conditional** khi approach/trade-off/risk/verification strategy materially non-obvious trước implementation.
+- `$work-item-review` — **mandatory** trước completion/reporting; assess acceptance bằng actual evidence và xác định deviation/blocking question.
+
+Các gate dùng vocabulary chung:
+
+```text
+ready
+needs_user_clarification
+needs_discovery
+blocked
+```
+
+`needs_discovery` nghĩa là agent còn factual/technical/evidence work có thể tự làm mà chưa cần user decision. Với review, nó có thể bao gồm verify, reproduce, fix, gather evidence hoặc re-investigate trước khi acceptance được quyết định.
+
+Nguyên tắc chung: **clarify meaning, not mechanics**. Ask user cho intent/product/domain semantics/material scope/acceptance/irreversible or external-contract trade-off. Tự discover factual/module/repository details. Tự chọn normal reversible implementation detail khi evidence và repo conventions đủ rõ.
+
+Phase skill trả assessment cho `$work-item`; QiQi reconcile only material current truth vào `WORK_ITEM.md`, `intake.md`, `investigation.md`, `plan.md`, `review.md`. Không persist clarification transcript, question/answer chronology hoặc routine reasoning.
+
 ## Intake + requirement changes
 
 Khi nhận request đầu tiên:
@@ -80,10 +104,11 @@ Khi nhận request đầu tiên:
 1. Validate canonical ID và derive safe directory key.
 2. Enforce casefold uniqueness trong `<workspace>/work-items`, resolve/create dossier và verify path containment.
 3. Nếu dossier tồn tại, verify exact front-matter `id` trước khi reuse.
-4. Materialize `WORK_ITEM.md` revision 1 từ effective requirement.
-5. Tạo `intake.md` khi original wording/source/material change context có giá trị cho task/report.
+4. Apply `$work-item-intake` và chỉ canonicalize requirement khi gate cho phép; material user clarification được reconcile thành current truth, không thành transcript.
+5. Materialize `WORK_ITEM.md` revision 1 từ effective requirement.
+6. Tạo `intake.md` khi original wording/source/material change context có giá trị cho task/report.
 
-Khi có change request: rewrite effective current requirement, tăng revision, giữ trong `intake.md` chỉ material change context còn cần, rồi reconcile investigation/plan/review với requirement mới. Original request không phải current truth.
+Khi có change request: apply intake clarification cho material meaning change, rewrite effective current requirement, tăng revision, giữ trong `intake.md` chỉ material change context còn cần, rồi reconcile investigation/plan/review với requirement mới. Original request không phải current truth.
 
 ## Multi-turn rule
 
@@ -93,11 +118,13 @@ Multi-turn continuity MUST be represented as **current semantic state**, not chr
 
 `investigation.md` là living state: Scope, Verified Findings, Relevant Evidence, Open Questions, Conclusion. Nhiều turn merge/rewrite cùng file; không append turn log.
 
-Requirement change không tự invalidate prior findings. Reconcile từng finding: fact còn đúng → keep; implication đổi → keep + reinterpret; phụ thuộc assumption superseded → revalidate/remove; contradicted by newer authoritative input → replace.
+Nếu target/boundary/ownership chưa rõ, apply `$work-item-investigate`; không hỏi user về facts mà repo/docs/tests/config có thể tự establish. Requirement change không tự invalidate prior findings. Reconcile từng finding: fact còn đúng → keep; implication đổi → keep + reinterpret; phụ thuộc assumption superseded → revalidate/remove; contradicted by newer authoritative input → replace.
 
 ## Plan
 
 `plan.md` giữ current approach, remaining steps, risks và verification strategy. Không lưu plan versions. Giữ rejected approach chỉ khi rationale vẫn material để tránh lặp lại.
+
+Nếu approach/trade-off materially non-obvious, apply `$work-item-plan`. Technical reversible choice thuộc agent khi evidence đủ; product behavior/public contract/data semantics/irreversible decision cần user khi requirement chưa quyết định.
 
 ## Delegation
 
@@ -116,9 +143,9 @@ Sau child return: nếu runtime state là `blocked`, giữ exact `session_id`, k
 
 ## Review + completion
 
-Implementation child nói “done” không đủ để mark Work Item done. Trước completion, current requirements phải resolved/accepted, acceptance được assessed bằng actual evidence, không còn blocking question, required repo work đã reconciled, required verification/review hoàn tất và required final report đã generated.
+Implementation child nói “done” không đủ để mark Work Item done. Apply `$work-item-review` trước completion/reporting. Trước completion, current requirements phải resolved/accepted, acceptance được assessed bằng actual evidence, không còn blocking question, required repo work đã reconciled, required verification/review hoàn tất và required final report đã generated.
 
-`review.md` là current acceptance assessment, không phải execution summary.
+`review.md` là current acceptance assessment, không phải execution summary. Distinguish implemented, verified và accepted; test pass đơn lẻ không tự chứng minh mọi acceptance criterion.
 
 ## Report
 
