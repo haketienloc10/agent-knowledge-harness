@@ -2,16 +2,24 @@
 set -euo pipefail
 
 home="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-source_skill="$home/skills/work-item"
+source_root="$home/skills"
 codex_root="${HOME}/.agents/skills"
 claude_root="${HOME}/.claude/skills"
+skills=(
+  work-item
+  work-item-intake
+  work-item-investigate
+  work-item-plan
+  work-item-review
+)
 
 usage() {
   cat <<'EOF'
 Usage: install-user-skill.sh [--codex-root PATH] [--claude-root PATH]
 
-Installs the managed `work-item` Agent Skill for user-scope discovery by Codex and
-Claude Code. Existing unrelated skills with the same name are not silently overwritten.
+Installs the managed Work Item Agent Skill bundle (`work-item` plus phase
+clarification skills) for user-scope discovery by Codex and Claude Code. Existing
+unrelated skills with the same names are not silently overwritten.
 EOF
 }
 
@@ -39,10 +47,12 @@ while (($#)); do
   esac
 done
 
-[[ -f "$source_skill/SKILL.md" ]] || {
-  printf 'ERROR: missing source skill: %s/SKILL.md\n' "$source_skill" >&2
-  exit 66
-}
+for skill in "${skills[@]}"; do
+  [[ -f "$source_root/$skill/SKILL.md" ]] || {
+    printf 'ERROR: missing source skill: %s/%s/SKILL.md\n' "$source_root" "$skill" >&2
+    exit 66
+  }
+done
 
 command -v python3 >/dev/null 2>&1 || {
   printf 'ERROR: missing command: python3\n' >&2
@@ -54,7 +64,7 @@ normalize_path() {
 }
 
 skill_tree_matches() {
-  python3 - "$source_skill" "$1" <<'PY'
+  python3 - "$1" "$2" <<'PY'
 from pathlib import Path
 import sys
 
@@ -87,38 +97,62 @@ PY
 codex_root="$(normalize_path "$codex_root")"
 claude_root="$(normalize_path "$claude_root")"
 
-install_skill() {
+preflight_skill() {
   local client="$1"
   local root="$2"
-  local target="$root/work-item"
+  local skill="$3"
+  local source="$source_root/$skill"
+  local target="$root/$skill"
   local marker="$target/.agent-knowledge-harness-managed"
-  local temp_parent temp
-
-  mkdir -p "$root"
 
   if [[ -e "$target" && ! -d "$target" ]]; then
     printf 'ERROR: %s skill target exists and is not a directory: %s\n' "$client" "$target" >&2
     return 78
   fi
 
-  if [[ -d "$target" && ! -f "$marker" ]]; then
-    # The filesystem Work Item protocol depends on SKILL.md plus its templates.
-    # Adopt only an exact unmanaged tree; matching SKILL.md alone can hide missing
-    # or stale templates and would make a broken install look harness-managed.
-    if skill_tree_matches "$target"; then
-      printf 'Adopting existing identical %s skill tree: %s\n' "$client" "$target"
-      : > "$marker"
-      return 0
-    fi
-    printf 'ERROR: %s skill `work-item` already exists and is not an identical managed tree: %s\n' \
-      "$client" "$target" >&2
+  if [[ -d "$target" && ! -f "$marker" ]] && ! skill_tree_matches "$source" "$target"; then
+    printf 'ERROR: %s skill `%s` already exists and is not an identical managed tree: %s\n' \
+      "$client" "$skill" "$target" >&2
     printf 'Move/remove that skill explicitly, then rerun installer.\n' >&2
     return 78
   fi
+}
 
-  temp_parent="$(mktemp -d "$root/.work-item.XXXXXX")"
-  temp="$temp_parent/work-item"
-  cp -R "$source_skill" "$temp"
+# Preflight the complete bundle for both clients before the first mutation. A conflict
+# in one phase skill must not leave a partially updated Work Item skill set behind.
+for client in Codex Claude; do
+  if [[ "$client" == Codex ]]; then
+    root="$codex_root"
+  else
+    root="$claude_root"
+  fi
+  for skill in "${skills[@]}"; do
+    preflight_skill "$client" "$root" "$skill"
+  done
+done
+
+install_skill() {
+  local client="$1"
+  local root="$2"
+  local skill="$3"
+  local source="$source_root/$skill"
+  local target="$root/$skill"
+  local marker="$target/.agent-knowledge-harness-managed"
+  local temp_parent temp
+
+  mkdir -p "$root"
+
+  if [[ -d "$target" && ! -f "$marker" ]]; then
+    # Preflight already proved this is an exact unmanaged tree. Adopt it without
+    # replacing user bytes, but only after the entire bundle has passed preflight.
+    printf 'Adopting existing identical %s skill tree: %s\n' "$client" "$target"
+    : > "$marker"
+    return 0
+  fi
+
+  temp_parent="$(mktemp -d "$root/.${skill}.XXXXXX")"
+  temp="$temp_parent/$skill"
+  cp -R "$source" "$temp"
   : > "$temp/.agent-knowledge-harness-managed"
 
   if [[ -d "$target" ]]; then
@@ -130,7 +164,15 @@ install_skill() {
   printf '%s skill installed: %s/SKILL.md\n' "$client" "$target"
 }
 
-install_skill 'Codex' "$codex_root"
-install_skill 'Claude' "$claude_root"
+for client in Codex Claude; do
+  if [[ "$client" == Codex ]]; then
+    root="$codex_root"
+  else
+    root="$claude_root"
+  fi
+  for skill in "${skills[@]}"; do
+    install_skill "$client" "$root" "$skill"
+  done
+done
 
-printf 'Open a fresh agent session if the skill is not already visible in the skills list.\n'
+printf 'Open a fresh agent session if the skills are not already visible in the skills list.\n'
