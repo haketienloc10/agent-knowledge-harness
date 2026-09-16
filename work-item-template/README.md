@@ -14,13 +14,13 @@ Canonical ID giữ dạng `source:external-id`, ví dụ `redmine:116655`, và M
 ^[a-z][a-z0-9_-]*:[A-Za-z0-9][A-Za-z0-9._-]*$
 ```
 
-Filesystem không dùng raw ID. Directory key được derive bằng cách thay colon separator đầu tiên bằng `~`:
+Filesystem không dùng raw ID. Directory key thay colon separator đầu tiên bằng `~`:
 
 ```text
 redmine:116655 -> work-items/redmine~116655/
 ```
 
-`~` không thuộc grammar của source/external-id, nên mapping này không collision giữa hai canonical IDs hợp lệ. Resolved task directory phải nằm dưới resolved `<workspace>/work-items`; reject traversal/separator/non-canonical IDs.
+`~` giải quyết collision cú pháp do separator. Để portable qua filesystem case-insensitive, toàn `work-items/` còn phải **casefold-unique**: hai canonical IDs không được tạo directory keys khác spelling nhưng có cùng `casefold()`. Dossier tồn tại chỉ được reuse nếu `WORK_ITEM.md` có exact front-matter `id` khớp canonical ID. Resolved directory phải nằm dưới resolved `<workspace>/work-items`; reject traversal/separator/non-canonical IDs.
 
 Mỗi tracked task có:
 
@@ -56,23 +56,35 @@ Requirement change rewrite effective current state. Investigation/plan/review l�
 
 ## Legacy SQLite cutover
 
-Trước khi gỡ user-scoped legacy `work_item` MCP registration, export dữ liệu cũ:
+Trước khi gỡ legacy `work_item` MCP registration, export dữ liệu cũ:
 
 ```bash
 python3 scripts/export-legacy-work-items.py --workspace /absolute/path/to/workspace
 ```
 
-Exporter đọc mặc định `~/.local/share/agent-work-items/work-items.sqlite3` hoặc `WORK_ITEM_DB_PATH`. Nếu legacy installer trước đây dùng `--db-path`, truyền **đúng path đó** bằng `--db /absolute/path/to/work-items.sqlite3`; exporter fail nếu selected DB không tồn tại thay vì báo success rỗng.
+Exporter đọc mặc định `~/.local/share/agent-work-items/work-items.sqlite3` hoặc `WORK_ITEM_DB_PATH`. Nếu legacy installer dùng `--db-path`, truyền **đúng path đó** bằng `--db /absolute/path/to/work-items.sqlite3`; exporter fail nếu selected DB không tồn tại.
 
-Exporter lấy Work Item rows + artifact rows/sections/chunks trong một SQLite read snapshot, preflight toàn bộ output trước khi ghi, tạo current filesystem dossiers, materialize latest lifecycle artifact theo legacy ordering, và lưu full legacy JSON + artifact/chunk metadata dưới:
+Exporter lấy Work Item + artifact/section/chunk trong một SQLite read snapshot, preflight toàn bộ output, reject casefold-equivalent directory keys, materialize latest lifecycle artifact theo legacy ordering và lưu full legacy JSON/artifact metadata dưới:
 
 ```text
 <workspace>/.qiqi/migration-backups/v0024/legacy-work-items/
 ```
 
-Backup directory/file dùng permission hạn chế (`0700`/`0600`). Source SQLite DB không bị sửa/xóa. Imported current dossier giữ active decisions/open questions/open blockers/pending handoffs, repository status/summary/verification và next-action ownership; imported investigation/plan/review giữ `based_on_work_item_revision`; imported report giữ canonical Textile section shape. Partial legacy artifact schema hoặc target conflict đều fail trước filesystem write.
+Backup directory/file dùng permission hạn chế (`0700`/`0600`). Source SQLite không bị sửa/xóa. Imported dossier giữ current handoff/repo verification/next-action ownership; investigation/plan/review giữ `based_on_work_item_revision`; report giữ Textile section shape. Partial artifact schema, target conflict hoặc cross-platform key alias đều fail trước filesystem write.
 
-Trong lúc export, không chạy thêm legacy Work Item mutation. Chỉ remove legacy MCP registration sau khi export thành công và kiểm tra dossier cần thiết.
+Legacy canonical records có thể chứa provenance/evidence extension fields và không có Acceptance Criteria section tương đương protocol mới. Vì vậy imported dossier có `legacy_reconciliation_required: true` và protected archive locator. QiQi phải reconcile material legacy metadata/acceptance/provenance trước substantive implementation/completion/report, rewrite current state + increment revision rồi bỏ flag.
+
+Trong lúc export, không chạy thêm legacy Work Item mutation. Sau export thành công và kiểm tra dossiers cần thiết, remove registration cũ bằng helper verified:
+
+```bash
+bash scripts/remove-legacy-user-mcp.sh
+```
+
+Helper chỉ remove `work_item` nếu registration hiện tại còn trỏ tới legacy managed wrapper; nó từ chối xóa registration cùng tên nhưng không thuộc harness cũ. Sau đó install/update skill và mở fresh sessions:
+
+```bash
+bash scripts/install-user-skill.sh
+```
 
 ## Lifecycle
 
@@ -89,10 +101,9 @@ request
 
 Flow được phép quay lại investigation/planning khi evidence hoặc requirement đổi; không encode FSM cứng.
 
-## Skill + verification
+## Verification
 
 ```bash
-bash scripts/install-user-skill.sh
 bash scripts/work-item-template-check.sh
 ```
 
