@@ -1,8 +1,8 @@
 # Filesystem Work Item
 
-Work Item là **current task dossier** dùng chung trong một QiQi workspace. Nó không còn là MCP service, không dùng SQLite cho runtime mới và không phải lịch sử thao tác của agent.
+Work Item là **current task dossier** dùng chung trong một QiQi workspace. Runtime mới không còn Work Item MCP/SQLite và không dùng Work Item như execution history.
 
-Canonical parent-side location:
+Canonical task location:
 
 ```text
 <workspace>/work-items
@@ -14,15 +14,15 @@ Canonical ID giữ dạng `source:external-id`, ví dụ `redmine:116655`, và M
 ^[a-z][a-z0-9_-]*:[A-Za-z0-9][A-Za-z0-9._-]*$
 ```
 
-Filesystem không dùng raw ID. Directory key thay colon separator đầu tiên bằng `~`:
+Filesystem directory key replace colon separator đầu tiên bằng `~`:
 
 ```text
 redmine:116655 -> work-items/redmine~116655/
 ```
 
-`~` giải quyết collision cú pháp do separator. Để portable qua filesystem case-insensitive, toàn `work-items/` còn phải **casefold-unique**: hai canonical IDs không được tạo directory keys khác spelling nhưng có cùng `casefold()`. Dossier tồn tại chỉ được reuse nếu `WORK_ITEM.md` có exact front-matter `id` khớp canonical ID. Resolved directory phải nằm dưới resolved `<workspace>/work-items`; reject traversal/separator/non-canonical IDs.
+Toàn `work-items/` phải casefold-unique để portable qua filesystem case-insensitive. Existing dossier chỉ reuse khi `WORK_ITEM.md` có exact front-matter `id` khớp canonical ID và resolved path vẫn nằm dưới Work Items root.
 
-Mỗi tracked task có:
+Mỗi tracked task có thể materialize:
 
 ```text
 work-items/<directory-key>/
@@ -31,28 +31,88 @@ work-items/<directory-key>/
 ├── investigation.md?
 ├── plan.md?
 ├── review.md?
+├── references/?
 └── report.textile?
 ```
 
-Không tạo mặc định `history/`, `turns/`, `executions/`, `checkpoints/` hay file theo turn. Dossier tăng theo độ phức tạp material của task, không theo số agent turn.
+Không tạo mặc định `history/`, `turns/`, `executions/`, `checkpoints/` hay file theo turn. `references/` chỉ chứa task-specific source material/evidence cần tra cứu; lifecycle state vẫn nằm trong các living documents phía trên.
 
-## Truth boundary
+## Ownership boundary
 
 ```text
-WORK_ITEM.md          = current canonical task truth
-lifecycle documents  = current material phase state / deliverable
-Repo source/test     = implementation truth
-Knowledge MCP        = reusable durable truth
-.qiqi/state          = runtime/session truth
+Workspace QiQi          = Work Item lifecycle + canonical writer
+Repository child        = repo-local investigation/implementation/verification
+TaskPacket              = current delegated assignment
+Mounted Work Item       = read-only durable task context cho child
+Repo source/test        = implementation truth
+Knowledge MCP           = reusable durable truth
+.qiqi/state             = runtime/session truth
 ```
 
-QiQi là canonical writer. Repository child đọc dossier đã được mount bằng `--add-dir`, nhưng locator được truyền bằng absolute `work_item_path=...` trong TaskPacket context; child không phụ thuộc vào việc inherit `QIQI_WORK_ITEMS_DIR` từ Herdr server.
+`$work-item` là **workspace-scoped skill** cho QiQi parent. Repo child không cần và không sở hữu Work Item lifecycle; child đọc TaskPacket + mounted dossier rồi trả material evidence/conclusion về QiQi.
 
-## Current-state, không phải history
+## One skill, internal phase protocols
 
-Persist chỉ thông tin mà nếu bỏ đi sẽ làm turn sau hiểu sai requirement/scope/acceptance, lặp investigation material, đi lại vào hướng implementation đã bị loại, đánh giá sai completion hoặc tạo sai report. Không persist command chronology, agent turn, intermediate attempts hoặc routine progress.
+Harness chỉ expose **một Agent Skill**:
 
-Requirement change rewrite effective current state. Investigation/plan/review là living documents và được merge/rewrite qua nhiều turn.
+```text
+work-item-template/skills/work-item/
+├── SKILL.md
+├── phases/
+│   ├── intake.md
+│   ├── investigation.md
+│   ├── planning.md
+│   └── review.md
+└── templates/
+    ├── WORK_ITEM.md
+    ├── intake.md
+    ├── investigation.md
+    ├── plan.md
+    ├── review.md
+    └── report.textile
+```
+
+Các phase file là internal progressive-disclosure references, không phải skill độc lập. `SKILL.md` chỉ đọc phase cần thiết just-in-time:
+
+- intake: mandatory cho task mới/material requirement change;
+- investigation: conditional khi target/ownership/boundary chưa rõ;
+- planning: conditional khi approach/trade-off materially non-obvious;
+- review: mandatory trước completion/reporting.
+
+Gate vocabulary chung: `ready | needs_user_clarification | needs_discovery | blocked`.
+
+Core rule: **clarify meaning, not mechanics**. Product/domain intent hoặc material acceptance cần user; factual repo/module/evidence unknown thì agent tự discover; normal reversible implementation choice thì agent tự quyết khi evidence đủ.
+
+## Workspace-scoped installation
+
+Từ harness checkout:
+
+```bash
+cd work-item-template
+bash scripts/work-item-template-check.sh
+bash scripts/install-workspace-skill.sh /absolute/path/to/workspace
+```
+
+Installer yêu cầu workspace có `repos.yaml` và `identity.md`, rồi materialize cùng source skill tree vào:
+
+```text
+<workspace>/.agents/skills/work-item/   # Codex parent at workspace root
+<workspace>/.claude/skills/work-item/   # Claude parent at workspace root
+```
+
+Installer **không** copy skill xuống repo con. Repo agent policy + TaskPacket + mounted Work Item mới là execution contract của child.
+
+Historical harness releases từng cài `work-item` ở user/global roots (`~/.agents/skills`, `~/.codex/skills`, `~/.claude/skills`). Sau khi cả hai workspace targets cài thành công, installer chỉ xóa old copy có `.agent-knowledge-harness-managed`. Same-name global entry không có marker bị fail closed và không bị xóa, để tránh shadow/duplicate discovery ngoài ý muốn.
+
+`install-user-skill.sh` chỉ còn là compatibility wrapper chuyển sang workspace installer; new setup nên gọi `install-workspace-skill.sh` trực tiếp.
+
+Sau install/update, mở fresh QiQi session **từ workspace root** để refresh skill discovery.
+
+## Current-state semantics
+
+`WORK_ITEM.md` là current canonical task truth. `intake.md`, `investigation.md`, `plan.md`, `review.md`, `report.textile` là living lifecycle docs, merge/rewrite theo current meaning; không append execution chronology.
+
+Requirement change rewrite effective requirement + increment revision; prior findings được reconcile theo materiality thay vì auto discard. Persist chỉ datum mà nếu bỏ đi có thể làm turn sau hiểu sai requirement, lặp material investigation, đi sai implementation, đánh giá sai acceptance hoặc report sai.
 
 ## Legacy SQLite cutover
 
@@ -62,44 +122,38 @@ Trước khi gỡ legacy `work_item` MCP registration, export dữ liệu cũ:
 python3 scripts/export-legacy-work-items.py --workspace /absolute/path/to/workspace
 ```
 
-Exporter đọc mặc định `~/.local/share/agent-work-items/work-items.sqlite3` hoặc `WORK_ITEM_DB_PATH`. Nếu legacy installer dùng `--db-path`, truyền **đúng path đó** bằng `--db /absolute/path/to/work-items.sqlite3`; exporter fail nếu selected DB không tồn tại.
+Default source DB là `~/.local/share/agent-work-items/work-items.sqlite3` hoặc `WORK_ITEM_DB_PATH`. Nếu legacy installer dùng custom `--db-path`, truyền exact DB bằng `--db /absolute/path/to/work-items.sqlite3`.
 
-Exporter lấy Work Item + artifact/section/chunk trong một SQLite read snapshot, preflight toàn bộ output, reject casefold-equivalent directory keys, materialize latest lifecycle artifact theo legacy ordering và lưu full legacy JSON/artifact metadata dưới:
+Exporter lấy Work Item + artifact/section/chunk trong một SQLite read snapshot, preflight toàn bộ output, reject casefold-equivalent keys, materialize latest lifecycle artifacts và lưu protected raw backup dưới:
 
 ```text
 <workspace>/.qiqi/migration-backups/v0024/legacy-work-items/
 ```
 
-Backup directory/file dùng permission hạn chế (`0700`/`0600`). Source SQLite không bị sửa/xóa. Imported dossier giữ current handoff/repo verification/next-action ownership; investigation/plan/review giữ `based_on_work_item_revision`; report giữ Textile section shape. Partial artifact schema, target conflict hoặc cross-platform key alias đều fail trước filesystem write.
+Source SQLite không bị sửa/xóa. Imported dossier có thể có `legacy_reconciliation_required: true`; QiQi phải reconcile material legacy acceptance/provenance trước substantive implementation/completion/report rồi rewrite current state, increment revision và bỏ flag.
 
-Legacy canonical records có thể chứa provenance/evidence extension fields và không có Acceptance Criteria section tương đương protocol mới. Vì vậy imported dossier có `legacy_reconciliation_required: true` và protected archive locator. QiQi phải reconcile material legacy metadata/acceptance/provenance trước substantive implementation/completion/report, rewrite current state + increment revision rồi bỏ flag.
-
-Trong lúc export, không chạy thêm legacy Work Item mutation. Sau export thành công và kiểm tra dossiers cần thiết, remove registration cũ bằng helper verified:
+Sau export và inspection, remove legacy registration bằng:
 
 ```bash
 bash scripts/remove-legacy-user-mcp.sh
 ```
 
-Helper chỉ remove `work_item` nếu registration hiện tại còn trỏ tới legacy managed wrapper; nó từ chối xóa registration cùng tên nhưng không thuộc harness cũ. Sau đó install/update skill và mở fresh sessions:
-
-```bash
-bash scripts/install-user-skill.sh
-```
+Helper chỉ remove `work_item` khi registration còn trỏ tới legacy harness-managed wrapper; unrelated same-name registration bị reject.
 
 ## Lifecycle
 
 ```text
 request
-→ intake/canonicalize
-→ investigate (nếu cần)
-→ plan/decide (nếu cần)
+→ intake/canonicalize + mandatory intake gate
+→ investigate (nếu cần; clarification gate chỉ khi boundary/target chưa rõ)
+→ plan/decide (nếu cần; decision gate chỉ khi materially non-obvious)
 → implement/delegate
-→ verify/review
+→ verify/review + mandatory acceptance gate
 → report
 → done
 ```
 
-Flow được phép quay lại investigation/planning khi evidence hoặc requirement đổi; không encode FSM cứng.
+Flow được phép quay lại intake/investigation/planning khi evidence hoặc requirement đổi; không encode FSM cứng.
 
 ## Verification
 
@@ -107,4 +161,4 @@ Flow được phép quay lại investigation/planning khi evidence hoặc requir
 bash scripts/work-item-template-check.sh
 ```
 
-Operational protocol nằm tại `skills/work-item/SKILL.md`.
+Operational protocol: `skills/work-item/SKILL.md`. Phase semantics: `skills/work-item/phases/*.md`.
