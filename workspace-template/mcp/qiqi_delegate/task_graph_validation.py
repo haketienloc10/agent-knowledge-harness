@@ -1,9 +1,74 @@
 from __future__ import annotations
 
 from collections.abc import Collection
+from typing import Any
 
-from core import TaskPacket, build_task_packet
-from task_graph import TaskGraph
+from core import (
+    ClaimToInvestigate,
+    TaskContext,
+    TaskPacket,
+    TrustedFact,
+    build_task_packet,
+)
+from task_graph import GraphNode, TaskGraph
+
+
+def _tuple_as_builder_list(value: Any) -> Any:
+    """Convert a valid TaskPacket tuple field without hiding invalid raw values."""
+
+    if isinstance(value, tuple):
+        return list(value)
+    return value
+
+
+def _task_context_as_builder_input(value: Any) -> Any:
+    """Preserve every raw context field while adapting valid dataclasses."""
+
+    if not isinstance(value, TaskContext):
+        return value
+
+    trusted_facts: Any = value.trusted_facts
+    if isinstance(trusted_facts, tuple):
+        trusted_facts = [
+            {"fact": item.fact, "source": item.source}
+            if isinstance(item, TrustedFact)
+            else item
+            for item in trusted_facts
+        ]
+
+    claims: Any = value.claims_to_investigate
+    if isinstance(claims, tuple):
+        claims = [
+            {"claim": item.claim, "source": item.source}
+            if isinstance(item, ClaimToInvestigate)
+            else item
+            for item in claims
+        ]
+
+    return {
+        "trusted_facts": trusted_facts,
+        "claims_to_investigate": claims,
+    }
+
+
+def _task_packet_as_builder_input(packet: TaskPacket) -> dict[str, Any]:
+    """Return a lossless builder payload for an existing TaskPacket object.
+
+    Unlike TaskPacket.as_dict(), this intentionally includes falsy optional fields.
+    Valid in-memory tuple/dataclass representations are adapted to the public builder
+    input shape, while malformed raw values are preserved so build_task_packet()
+    rejects them through the canonical validation path.
+    """
+
+    return {
+        "objective": packet.objective,
+        "scope": _tuple_as_builder_list(packet.scope),
+        "acceptance_criteria": _tuple_as_builder_list(packet.acceptance_criteria),
+        "out_of_scope": _tuple_as_builder_list(packet.out_of_scope),
+        "context": _task_context_as_builder_input(packet.context),
+        "constraints": _tuple_as_builder_list(packet.constraints),
+        "known_unknowns": _tuple_as_builder_list(packet.known_unknowns),
+    }
 
 
 def validate_task_graph(
@@ -18,13 +83,24 @@ def validate_task_graph(
     this module owns only graph-specific invariants.
     """
 
+    if not isinstance(graph, TaskGraph):
+        raise ValueError("task graph must be a TaskGraph")
+    if not isinstance(graph.nodes, tuple):
+        raise ValueError("task graph nodes must be a tuple of GraphNode objects")
     if not graph.nodes:
         raise ValueError("task graph must contain at least one node")
 
+    if isinstance(repository_names, (str, bytes)):
+        raise ValueError("repository_names must be a collection of repository names")
     repositories = set(repository_names)
+    if any(not isinstance(name, str) or not name.strip() for name in repositories):
+        raise ValueError("repository_names must contain non-empty strings")
+
     node_ids: set[str] = set()
 
     for node in graph.nodes:
+        if not isinstance(node, GraphNode):
+            raise ValueError("task graph nodes must be GraphNode objects")
         if not isinstance(node.node_id, str) or not node.node_id.strip():
             raise ValueError("graph node_id must not be empty")
         if node.node_id in node_ids:
@@ -43,9 +119,16 @@ def validate_task_graph(
             )
         if not isinstance(node.task_packet, TaskPacket):
             raise ValueError(f"repo_task node {node.node_id!r} must contain a TaskPacket")
+        if not isinstance(node.depends_on, tuple):
+            raise ValueError(f"node {node.node_id!r} depends_on must be a tuple")
+        for dependency in node.depends_on:
+            if not isinstance(dependency, str) or not dependency.strip():
+                raise ValueError(
+                    f"node {node.node_id!r} dependencies must be non-empty strings"
+                )
 
         try:
-            build_task_packet(**node.task_packet.as_dict())
+            build_task_packet(**_task_packet_as_builder_input(node.task_packet))
         except ValueError as exc:
             raise ValueError(
                 f"node {node.node_id!r} has invalid TaskPacket: {exc}"
