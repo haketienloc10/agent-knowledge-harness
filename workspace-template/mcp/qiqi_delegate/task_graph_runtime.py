@@ -53,6 +53,15 @@ class RetryPlan:
     feedback: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class WaveAttempt:
+    """One claimed node execution inside the current runtime wave."""
+
+    node: GraphNode
+    retry_plan: RetryPlan | None
+    attempt_id: str
+
+
 class RecoverableRepoTaskExecutionError(RuntimeError):
     """Execution failed after native session ownership was already captured."""
 
@@ -259,10 +268,10 @@ class GraphRuntime:
     """QiQi outer-loop runtime over scheduler, persistence, and repo-task execution.
 
     Authored TaskGraph semantics remain process-owned and are not copied into SQLite.
-    Phase 6 executes exactly one runnable repo-task per wave through the existing
-    delegate_repo_task primitive. Phase 7 exposes per-node semantic review. Phase 8 adds
-    selective retry with a fresh TaskPacket snapshot plus START/RESUME choice. Parallel
-    waves, graph mutation/reconciliation, and durable authored-graph recovery remain later.
+    Phase 6 established sequential execution, Phase 7 per-node semantic review, and Phase 8
+    selective START/RESUME retry. Phase 9 executes independent runnable nodes concurrently
+    in one wave while preserving per-node attempts and review. Graph mutation/reconciliation
+    and durable authored-graph recovery remain later phases.
     """
 
     def __init__(self, store: GraphRuntimeStore):
@@ -373,6 +382,144 @@ class GraphRuntime:
             "authored_node_count": len(graph.nodes),
         }
 
+    def _select_wave_nodes(
+        self,
+        graph_run_id: str,
+        candidates: tuple[GraphNode, ...],
+    ) -> list[tuple[GraphNode, RetryPlan | None]]:
+        """Choose a deterministic conflict-free wave from currently runnable nodes.
+
+        Pending retries sort ahead of fresh work. Until repo-local worktree isolation exists,
+        only one node per repository may enter a wave. Exact RESUME sessions are also unique
+        wave resources, preventing two nodes from racing the same native conversation.
+        """
+
+        retry_nodes = [
+            node
+            for node in candidates
+            if (graph_run_id, node.node_id) in self._retry_plans
+        ]
+        fresh_nodes = [
+            node
+            for node in candidates
+            if (graph_run_id, node.node_id) not in self._retry_plans
+        ]
+        selected: list[tuple[GraphNode, RetryPlan | None]] = []
+        repositories: set[str] = set()
+        sessions: set[str] = set()
+
+        for node in [*retry_nodes, *fresh_nodes]:
+            retry_plan = self._retry_plans.get((graph_run_id, node.node_id))
+            if node.repository in repositories:
+                continue
+            if (
+                retry_plan is not None
+                and retry_plan.resume_session
+                and retry_plan.session_id is not None
+                and retry_plan.session_id in sessions
+            ):
+                continue
+            execution_node = (
+                replace(node, task_packet=retry_plan.task_packet)
+                if retry_plan is not None
+                else node
+            )
+            selected.append((execution_node, retry_plan))
+            repositories.add(node.repository)
+            if (
+                retry_plan is not None
+                and retry_plan.resume_session
+                and retry_plan.session_id is not None
+            ):
+                sessions.add(retry_plan.session_id)
+
+        return selected
+
+    async def _execute_claimed_attempt(
+        self,
+        wave_attempt: WaveAttempt,
+        *,
+        executor: RepoTaskExecutor,
+        resume_executor: ResumeRepoTaskExecutor | None,
+    ) -> dict[str, Any]:
+        retry_plan = wave_attempt.retry_plan
+        try:
+            if retry_plan is not None and retry_plan.resume_session:
+                assert retry_plan.session_id is not None
+                assert resume_executor is not None
+                raw_result = await resume_executor(
+                    wave_attempt.node,
+                    retry_plan.session_id,
+                )
+            else:
+                raw_result = await executor(wave_attempt.node)
+            result = _validated_execution_result(raw_result)
+        except asyncio.CancelledError:
+            self.store.finish_attempt(
+                wave_attempt.attempt_id,
+                runtime_state="failed",
+                result={
+                    "state": "failed",
+                    "agent_response": None,
+                    "failure_type": "execution_cancelled",
+                },
+            )
+            raise
+        except RecoverableRepoTaskExecutionError as exc:
+            self.store.finish_attempt(
+                wave_attempt.attempt_id,
+                runtime_state="failed",
+                result={
+                    "state": "failed",
+                    "agent_response": None,
+                    "failure_type": "executor_exception",
+                },
+                session_id=exc.session_id,
+            )
+            raise
+        except Exception:
+            self.store.finish_attempt(
+                wave_attempt.attempt_id,
+                runtime_state="failed",
+                result={
+                    "state": "failed",
+                    "agent_response": None,
+                    "failure_type": "executor_exception",
+                },
+            )
+            raise
+
+        self.store.finish_attempt(
+            wave_attempt.attempt_id,
+            runtime_state=result["state"],
+            result=result,
+            session_id=result["session_id"],
+            turn_id=result["turn_id"],
+        )
+        return result
+
+    def _terminalize_running_wave_attempts(
+        self,
+        attempts: list[WaveAttempt],
+        *,
+        failure_type: str,
+    ) -> None:
+        """Fail-safe cleanup for tasks cancelled before their coroutine body runs."""
+
+        for item in attempts:
+            persisted = self.store.get_attempt(item.attempt_id)
+            if persisted is None or persisted.get("runtime_state") != "running":
+                continue
+            self.store.finish_attempt(
+                item.attempt_id,
+                runtime_state="failed",
+                result={
+                    "state": "failed",
+                    "agent_response": None,
+                    "failure_type": failure_type,
+                },
+            )
+
     async def delegate_next(
         self,
         graph_run_id: str,
@@ -380,12 +527,11 @@ class GraphRuntime:
         executor: RepoTaskExecutor,
         resume_executor: ResumeRepoTaskExecutor | None = None,
     ) -> dict[str, Any]:
-        """Execute exactly one runnable repo-task and return control to QiQi.
+        """Execute one deterministic conflict-free runnable wave and return to QiQi.
 
-        A pending retry is preferred over unrelated fresh runnable work. Retry execution
-        uses a freshly built TaskPacket snapshot. When QiQi requested continuity, the exact
-        persisted native session is passed through both the Graph store guard and the
-        existing direct delegation RESUME ownership checks.
+        Independent repositories execute concurrently. Retry nodes are ordered before fresh
+        work and retain the Phase-8 fresh TaskPacket / exact-session RESUME semantics. The
+        wave is closed only after every claimed attempt reaches a terminal runtime state.
         """
 
         _, snapshot, _ = self._snapshot(graph_run_id)
@@ -397,131 +543,125 @@ class GraphRuntime:
         candidates = runnable_nodes(snapshot)
         if not candidates:
             raise RuntimeError("graph is ready but has no runnable node")
-
-        retry_candidates = [
-            item
-            for item in candidates
-            if (graph_run_id, item.node_id) in self._retry_plans
-        ]
-        node = retry_candidates[0] if retry_candidates else candidates[0]
-        retry_key = (graph_run_id, node.node_id)
-        retry_plan = self._retry_plans.get(retry_key)
-        execution_node = (
-            replace(node, task_packet=retry_plan.task_packet)
-            if retry_plan is not None
-            else node
-        )
-        if execution_node.route is None:
-            raise RuntimeError(
-                f"runnable node {execution_node.node_id!r} has no route for repository execution"
-            )
         if not callable(executor):
             raise ValueError("repo-task executor must be callable")
-        if (
-            retry_plan is not None
-            and retry_plan.resume_session
-            and not callable(resume_executor)
-        ):
-            raise RuntimeError("retry requested RESUME but no resume executor is available")
+
+        selected = self._select_wave_nodes(graph_run_id, candidates)
+        if not selected:
+            raise RuntimeError("graph is ready but no conflict-free runnable wave exists")
+        for execution_node, retry_plan in selected:
+            if execution_node.route is None:
+                raise RuntimeError(
+                    f"runnable node {execution_node.node_id!r} has no route for repository execution"
+                )
+            if (
+                retry_plan is not None
+                and retry_plan.resume_session
+                and not callable(resume_executor)
+            ):
+                raise RuntimeError(
+                    "retry requested RESUME but no resume executor is available"
+                )
 
         wave_id = new_wave_id()
-        attempt_id = self.store.start_attempt(
-            graph_run_id,
-            execution_node.node_id,
-            wave_id,
-            resume_session=(retry_plan.resume_session if retry_plan is not None else False),
-            session_id=(retry_plan.session_id if retry_plan is not None else None),
-        )
-        if retry_plan is not None:
-            self._retry_plans.pop(retry_key, None)
-
+        claimed: list[WaveAttempt] = []
         try:
-            if retry_plan is not None and retry_plan.resume_session:
-                assert retry_plan.session_id is not None
-                assert resume_executor is not None
-                raw_result = await resume_executor(execution_node, retry_plan.session_id)
-            else:
-                raw_result = await executor(execution_node)
-            result = _validated_execution_result(raw_result)
-        except asyncio.CancelledError:
-            # Cancellation bypasses `except Exception` on supported Python versions.
-            # Persist a terminal runtime fact and close the wave before propagating the
-            # cancellation so the graph cannot be stranded permanently in `running`.
-            self.store.finish_attempt(
-                attempt_id,
-                runtime_state="failed",
-                result={
-                    "state": "failed",
-                    "agent_response": None,
-                    "failure_type": "execution_cancelled",
-                },
-            )
-            self.store.close_wave(graph_run_id, wave_id)
-            raise
-        except RecoverableRepoTaskExecutionError as exc:
-            # Direct delegation can discover/persist the native session before final-result
-            # capture fails. Keep that exact recovery key on the failed graph attempt so a
-            # later semantic RETRY may RESUME the same native conversation.
-            self.store.finish_attempt(
-                attempt_id,
-                runtime_state="failed",
-                result={
-                    "state": "failed",
-                    "agent_response": None,
-                    "failure_type": "executor_exception",
-                },
-                session_id=exc.session_id,
-            )
-            self.store.close_wave(graph_run_id, wave_id)
-            raise
+            for execution_node, retry_plan in selected:
+                attempt_id = self.store.start_attempt(
+                    graph_run_id,
+                    execution_node.node_id,
+                    wave_id,
+                    resume_session=(
+                        retry_plan.resume_session if retry_plan is not None else False
+                    ),
+                    session_id=(retry_plan.session_id if retry_plan is not None else None),
+                )
+                claimed.append(
+                    WaveAttempt(
+                        node=execution_node,
+                        retry_plan=retry_plan,
+                        attempt_id=attempt_id,
+                    )
+                )
         except Exception:
-            # Do not strand deterministic runtime state when the synchronous execution
-            # primitive fails before producing its normalized terminal result. Preserve
-            # only a generic execution fact here; the original exception still propagates
-            # through the public tool boundary without being copied into runtime history.
-            self.store.finish_attempt(
-                attempt_id,
-                runtime_state="failed",
-                result={
-                    "state": "failed",
-                    "agent_response": None,
-                    "failure_type": "executor_exception",
-                },
+            if claimed:
+                self._terminalize_running_wave_attempts(
+                    claimed,
+                    failure_type="wave_start_failed",
+                )
+                self.store.close_wave(graph_run_id, wave_id)
+            raise
+
+        # Retry metadata is consumed only after the whole wave has been claimed. This keeps
+        # retry intent intact if wave setup fails partway through before execution starts.
+        for item in claimed:
+            if item.retry_plan is not None:
+                self._retry_plans.pop((graph_run_id, item.node.node_id), None)
+
+        tasks = [
+            asyncio.create_task(
+                self._execute_claimed_attempt(
+                    item,
+                    executor=executor,
+                    resume_executor=resume_executor,
+                )
+            )
+            for item in claimed
+        ]
+        try:
+            outcomes = await asyncio.gather(*tasks, return_exceptions=True)
+        except asyncio.CancelledError:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            self._terminalize_running_wave_attempts(
+                claimed,
+                failure_type="execution_cancelled",
             )
             self.store.close_wave(graph_run_id, wave_id)
             raise
 
-        self.store.finish_attempt(
-            attempt_id,
-            runtime_state=result["state"],
-            result=result,
-            session_id=result["session_id"],
-            turn_id=result["turn_id"],
+        self._terminalize_running_wave_attempts(
+            claimed,
+            failure_type="executor_exception",
         )
         self.store.close_wave(graph_run_id, wave_id)
 
+        # Preserve the pre-Phase-9 public behavior for executor failures: runtime state is
+        # terminal and inspectable, but the execution exception still propagates. We wait
+        # for every sibling first so no wave can be stranded by a fast-failing child.
+        for outcome in outcomes:
+            if isinstance(outcome, BaseException):
+                raise outcome
+
         current = self.get_graph(graph_run_id)
-        return {
-            **current,
-            "wave_id": wave_id,
-            "results": [
+        results: list[dict[str, Any]] = []
+        for item, outcome in zip(claimed, outcomes, strict=True):
+            assert isinstance(outcome, dict)
+            results.append(
                 {
-                    "node_id": execution_node.node_id,
-                    "attempt_id": attempt_id,
-                    "runtime_state": result["state"],
-                    "session_id": result["session_id"],
-                    "turn_id": result["turn_id"],
-                    "agent_response": result["agent_response"],
+                    "node_id": item.node.node_id,
+                    "attempt_id": item.attempt_id,
+                    "runtime_state": outcome["state"],
+                    "session_id": outcome["session_id"],
+                    "turn_id": outcome["turn_id"],
+                    "agent_response": outcome["agent_response"],
                     "resume_session": bool(
-                        retry_plan is not None and retry_plan.resume_session
+                        item.retry_plan is not None
+                        and item.retry_plan.resume_session
                     ),
                     **(
-                        {"blocker_type": result["blocker_type"]}
-                        if "blocker_type" in result
+                        {"blocker_type": outcome["blocker_type"]}
+                        if "blocker_type" in outcome
                         else {}
                     ),
                 }
-            ],
+            )
+        return {
+            **current,
+            "wave_id": wave_id,
+            "results": results,
         }
 
     def submit_decisions(
