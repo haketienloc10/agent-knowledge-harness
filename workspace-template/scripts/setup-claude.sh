@@ -18,7 +18,8 @@ repository child isolation. --children-only provisions only repo-local isolation
 for Claude execution agents without enabling Claude as a workspace coordinator.
 
 Machine-local absolute claudeMdExcludes entries are written only to each repository's
-.claude/settings.local.json and that file is added to the repository's Git info/exclude.
+canonical Claude project-local settings file and excluded through Git's common info/exclude.
+For linked worktrees, Claude reads the local settings file at the main checkout root.
 EOF
 }
 
@@ -147,7 +148,24 @@ while IFS= read -r relative_repo; do
     exit 78
   fi
 
-  child_claude_dir="$repo_root/.claude"
+  # Claude Code stores project-local settings at the main checkout root for linked
+  # worktrees. --git-common-dir resolves to <main-checkout>/.git for both ordinary
+  # repositories and linked worktrees, so its parent is the canonical settings root.
+  git_common_dir="$(git -C "$repo_root" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+  if [[ -z "$git_common_dir" ]]; then
+    git_common_dir="$(git -C "$repo_root" rev-parse --git-common-dir)"
+    if [[ "$git_common_dir" != /* ]]; then
+      git_common_dir="$repo_root/$git_common_dir"
+    fi
+  fi
+  git_common_dir="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$git_common_dir")"
+  settings_repo_root="$(python3 -c 'import os,sys; print(os.path.dirname(os.path.realpath(sys.argv[1])))' "$git_common_dir")"
+  [[ -d "$settings_repo_root" ]] || {
+    printf 'ERROR: canonical Claude settings root does not exist: %s\n' "$settings_repo_root" >&2
+    exit 66
+  }
+
+  child_claude_dir="$settings_repo_root/.claude"
   child_settings="$child_claude_dir/settings.local.json"
   mkdir -p "$child_claude_dir"
 
@@ -186,17 +204,19 @@ env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] = "1"
 path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 PY
 
-  info_exclude="$(git -C "$repo_root" rev-parse --git-path info/exclude)"
-  if [[ "$info_exclude" != /* ]]; then
-    info_exclude="$repo_root/$info_exclude"
-  fi
+  info_exclude="$git_common_dir/info/exclude"
   mkdir -p "$(dirname "$info_exclude")"
   touch "$info_exclude"
   if ! grep -Fxq "$child_settings_rel" "$info_exclude"; then
     printf '%s\n' "$child_settings_rel" >> "$info_exclude"
   fi
 
-  printf 'Claude child isolation: %s\n' "$repo_root"
+  if [[ "$settings_repo_root" == "$repo_root" ]]; then
+    printf 'Claude child isolation: %s\n' "$repo_root"
+  else
+    printf 'Claude child isolation: %s (local settings at main checkout %s)\n' \
+      "$repo_root" "$settings_repo_root"
+  fi
 done < <(yq -r '.repositories[].path' "$repos_yaml")
 
 if ((children_only)); then
