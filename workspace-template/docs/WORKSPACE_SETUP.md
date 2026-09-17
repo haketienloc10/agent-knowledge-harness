@@ -1,5 +1,38 @@
 # Workspace setup
 
+## Recommended installer
+
+Sau khi materialize hoặc migrate workspace, chạy từ harness checkout:
+
+```bash
+bash scripts/setup-workspace.sh /absolute/path/to/workspace
+```
+
+Wizard chọn độc lập QiQi coordinator (`claude|codex|both`), Herdr execution agents (`claude|codex|both`) và default balanced route khi cả hai execution agents được enable.
+
+Installer thực hiện current-main setup contract:
+
+- cài workspace-scoped `$work-item` skill chỉ cho coordinator đã chọn;
+- cài Shared Knowledge skill/MCP cho union của coordinator + execution agents;
+- configure Claude coordinator/local-scope `qiqi_delegate` khi được chọn;
+- provision Claude nested-repo isolation khi Claude là coordinator hoặc execution agent;
+- verify Codex project adapter khi Codex là coordinator;
+- install Herdr integrations chỉ cho selected execution agents;
+- lưu machine-local `.qiqi/config.local.json` với `coordinators`, `execution_agents`, `default_route`;
+- chạy `scripts/workspace-check.sh`.
+
+Non-interactive example:
+
+```bash
+bash scripts/setup-workspace.sh /absolute/path/to/workspace \
+  --coordinators both \
+  --agents both \
+  --default-route claude \
+  --non-interactive
+```
+
+Work Item **không còn là MCP/SQLite service**. Unified installer không cài/recreate legacy `work_item` MCP.
+
 ## Layout
 
 ```text
@@ -9,8 +42,9 @@
 ├── repos.yaml
 ├── SYSTEM_MAP.md
 ├── work-items/
-├── .agents/skills/work-item/    # Codex workspace-scoped parent skill
-├── .claude/skills/work-item/    # Claude workspace-scoped parent skill
+├── .agents/skills/work-item/    # khi Codex coordinator được chọn
+├── .claude/skills/work-item/    # khi Claude coordinator được chọn
+├── .claude/CLAUDE.md            # generated khi Claude coordinator được chọn
 ├── instructions/
 ├── mcp/qiqi_delegate/
 └── scripts/
@@ -31,6 +65,37 @@ Child **không phụ thuộc vào env inheritance từ Herdr server**. Với tra
 ```text
 work_item_path=<absolute-workspace-path>/work-items/<directory-key>; id=<canonical-id>; revision=<n>
 ```
+
+## Claude Code coordinator + child isolation
+
+Claude coordinator setup nằm trong:
+
+```bash
+bash scripts/setup-claude.sh
+```
+
+Unified installer gọi helper này tự động khi cần. Helper không tạo workspace `.mcp.json`; thay vào đó:
+
+```text
+.claude/CLAUDE.md -> @../AGENTS.md
+qiqi_delegate      -> Claude local MCP scope for workspace project
+```
+
+Claude nested repo có thể discover ancestor coordinator instructions. Vì `claudeMdExcludes` match absolute path, setup generate machine-local entry trong từng registered repo:
+
+```text
+<repo>/.claude/settings.local.json
+```
+
+File này chứa exclusion tới exact workspace `.claude/CLAUDE.md` và auto-memory guards, rồi được thêm vào repository Git `info/exclude`. Installer fail nếu path đó đang tracked, tránh commit machine-specific absolute path.
+
+Case Codex coordinator + Claude execution agent dùng:
+
+```bash
+bash scripts/setup-claude.sh --children-only
+```
+
+để chỉ provision child isolation mà không enable Claude coordinator.
 
 ## Work Item ID/path
 
@@ -78,24 +143,24 @@ Helper chỉ remove registration `work_item` khi current definition còn trỏ t
 
 ## Work Item lifecycle skill
 
-Cài/update `$work-item` từ **harness checkout** vào workspace:
+Unified installer gọi skill installer với exact coordinator selection. Manual form:
 
 ```bash
 cd /path/to/agent-knowledge-harness/work-item-template
 bash scripts/work-item-template-check.sh
-bash scripts/install-workspace-skill.sh /absolute/path/to/workspace
+bash scripts/install-workspace-skill.sh --clients claude|codex|both /absolute/path/to/workspace
 ```
 
-Expected runtime paths:
+Expected runtime paths chỉ cho selected coordinator clients:
 
 ```text
 <workspace>/.agents/skills/work-item/SKILL.md
 <workspace>/.claude/skills/work-item/SKILL.md
 ```
 
-Hai target dùng cùng một managed skill tree. Skill có internal `phases/intake.md`, `phases/investigation.md`, `phases/planning.md`, `phases/review.md`; đây không phải các top-level Agent Skills.
+Skill có internal `phases/intake.md`, `phases/investigation.md`, `phases/planning.md`, `phases/review.md`; đây không phải các top-level Agent Skills.
 
-Installer yêu cầu workspace có `repos.yaml` + `identity.md`, preflight cả hai workspace targets trước mutation và chỉ adopt unmanaged target nếu toàn tree giống source. Historical harness-managed user/global `work-item` copies được cleanup **sau** successful workspace install; same-name global entry không có managed marker bị fail closed và không bị xóa.
+Installer yêu cầu workspace có `repos.yaml` + `identity.md`, preflight selected workspace targets trước mutation và chỉ adopt unmanaged target nếu toàn tree giống source. Historical harness-managed user/global `work-item` copies cho selected clients được cleanup **sau** successful workspace install; same-name global entry không có managed marker bị fail closed và không bị xóa.
 
 Không chạy installer bên trong từng repo con và không copy `.agents/.claude` Work Item skill vào repo child. Repo agent chỉ đọc TaskPacket + mounted Work Item/lifecycle docs, không mutate canonical dossier.
 
@@ -127,29 +192,29 @@ Helper preflight toàn bộ dossiers trước mutation, reject symlink/non-regul
 
 ## Herdr + qiqi_delegate readiness
 
-Fresh workspace phải cài integrations cho các native adapters trước delegation:
+Unified installer chỉ cài Herdr integrations cho selected execution agents. Manual equivalent:
 
 ```bash
-herdr integration install codex
-herdr integration install claude
+herdr integration install claude   # nếu Claude execution được enable
+herdr integration install codex    # nếu Codex execution được enable
 herdr integration status
 uv sync --project mcp/qiqi_delegate
 ```
 
-`herdr integration status` phải báo `codex: current` và `claude: current` (hoặc mọi adapter được cấu hình trong `instructions/agent-routing.yaml`). `delegate_repo_task` cũng fail closed nếu integration không current, nên đây là setup prerequisite chứ không chỉ troubleshooting step.
+Khi `.qiqi/config.local.json` tồn tại, `workspace-check.sh` chỉ yêu cầu `current` cho adapters tương ứng với `execution_agents`. Workspace legacy không có local config giữ behavior cũ và verify mọi adapter được cấu hình trong `instructions/agent-routing.yaml`.
 
 ## Repo delegation
 
 TaskPacket vẫn chứa objective/scope/acceptance đầy đủ. Child được đọc exact mounted dossier từ `work_item_path`, bắt đầu ở `00_WORK_ITEM.md`, nhưng không mutate canonical dossier và không chạy Work Item lifecycle thay QiQi.
 
-`instructions/model-routing.md` không phải mandatory startup material. Default delegation route là `claude-balanced`; khi một turn thực sự delegate, QiQi đọc route policy just-in-time ngay trước route decision.
+`instructions/model-routing.md` không phải mandatory startup material. Khi actual delegation bắt đầu, QiQi resolve `.qiqi/config.local.json` nếu có: route chỉ được chọn trong `execution_agents` đã enable và `default_route` là deterministic fallback. Nếu local config không tồn tại, fallback vẫn là `claude-balanced`.
 
 ## Verification
 
-Sau khi `repos.yaml` đã được materialize thành repository thực, workspace skill đã cài, Work Item filenames đã ở canonical numbered form và Herdr integrations đã cài:
+Sau khi `repos.yaml` đã được materialize thành repository thực, workspace skill đã cài, Work Item filenames đã ở canonical numbered form và selected Herdr integrations đã cài:
 
 ```bash
 bash scripts/workspace-check.sh
 ```
 
-Checker verify repository registry shape, `required_for`/`depends_on`, duplicate/unknown/self dependencies, dependency cycles, relative paths, exact Git roots, duplicate roots, qiqi_delegate tests và Herdr integration readiness. Harness CI dùng `QIQI_TEMPLATE_CHECK=1` chỉ để validate unmaterialized template placeholders mà không giả vờ kiểm machine-local Git roots/Herdr state.
+Checker verify repository registry shape, `required_for`/`depends_on`, duplicate/unknown/self dependencies, dependency cycles, relative paths, exact Git roots, duplicate roots, local route config, qiqi_delegate tests và selected Herdr integration readiness. Harness CI dùng `QIQI_TEMPLATE_CHECK=1` chỉ để validate unmaterialized template placeholders mà không giả vờ kiểm machine-local Git roots/Herdr state.
