@@ -1,0 +1,21 @@
+{
+  "version": 32,
+  "from_ref": "c98d4f71f1f905723d4a110ea935bbec86782410",
+  "to_ref": "2af1fc70fdd9a56b9bfe79f8cba76bcabc6cc19d",
+  "description": "add durable TaskGraph runtime persistence for graph runs, node state, waves, attempts, session/turn linkage, normalized results, and retry/resume metadata without persisting authored TaskGraph semantics",
+  "workspace": {
+    "merge": [],
+    "replace": [
+      "workspace-template/mcp/qiqi_delegate/task_graph_store.py",
+      "workspace-template/mcp/qiqi_delegate/tests/test_task_graph_store.py"
+    ],
+    "delete": [],
+    "manual_review": []
+  },
+  "repo": {
+    "merge": [],
+    "replace": [],
+    "delete": [],
+    "manual_review": []
+  }
+}
