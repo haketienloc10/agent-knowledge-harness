@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import ast
 import functools
+import re
 from typing import Any
 
 from mcp.server.mcpserver.exceptions import ToolError
@@ -16,12 +18,17 @@ from server import (
 from task_graph import GraphNode
 from task_graph_runtime import (
     GraphRuntime,
+    RecoverableRepoTaskExecutionError,
     decisions_from_payload,
     task_graph_from_payload,
 )
 from task_graph_store import GraphRuntimeStore
 
 _graph_runtime = GraphRuntime(GraphRuntimeStore(STATE_DB))
+_PRESERVED_SESSION_PATTERN = re.compile(
+    r"native session ownership was preserved and can be resumed with "
+    r"session_id=(?P<literal>'(?:\\.|[^'])*'|\"(?:\\.|[^\"])*\")"
+)
 
 
 def _graph_tool_error(exc: ValueError | RuntimeError) -> ToolError:
@@ -75,6 +82,26 @@ def _delegate_context(node: GraphNode) -> TaskContextInput | None:
     return TaskContextInput(**context.as_dict())
 
 
+def _preserved_session_id(exc: ToolError) -> str | None:
+    """Recover the exact session from the direct delegation recovery contract.
+
+    The direct tool intentionally exposes this sentence only after SessionStore ownership
+    has already been persisted. Match that explicit recovery clause rather than arbitrary
+    `session_id` text from unrelated errors.
+    """
+
+    match = _PRESERVED_SESSION_PATTERN.search(str(exc))
+    if match is None:
+        return None
+    try:
+        value = ast.literal_eval(match.group("literal"))
+    except (SyntaxError, ValueError):
+        return None
+    if not isinstance(value, str) or not value.strip():
+        return None
+    return value
+
+
 async def _execute_repo_task(
     node: GraphNode,
     *,
@@ -87,18 +114,27 @@ async def _execute_repo_task(
             f"runnable node {node.node_id!r} has no route for repository execution"
         )
     packet = node.task_packet
-    return await delegate_repo_task(
-        repository=node.repository,
-        route=node.route,
-        objective=packet.objective,
-        scope=list(packet.scope),
-        acceptance_criteria=list(packet.acceptance_criteria),
-        out_of_scope=list(packet.out_of_scope),
-        context=_delegate_context(node),
-        constraints=list(packet.constraints),
-        known_unknowns=list(packet.known_unknowns),
-        session_id=session_id,
-    )
+    try:
+        return await delegate_repo_task(
+            repository=node.repository,
+            route=node.route,
+            objective=packet.objective,
+            scope=list(packet.scope),
+            acceptance_criteria=list(packet.acceptance_criteria),
+            out_of_scope=list(packet.out_of_scope),
+            context=_delegate_context(node),
+            constraints=list(packet.constraints),
+            known_unknowns=list(packet.known_unknowns),
+            session_id=session_id,
+        )
+    except ToolError as exc:
+        preserved_session_id = _preserved_session_id(exc)
+        if preserved_session_id is None:
+            raise
+        raise RecoverableRepoTaskExecutionError(
+            str(exc),
+            session_id=preserved_session_id,
+        ) from exc
 
 
 async def _start_repo_task(node: GraphNode) -> dict[str, Any]:
