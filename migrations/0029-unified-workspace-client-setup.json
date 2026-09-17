@@ -1,8 +1,8 @@
 {
   "version": 29,
   "from_ref": "78736b7489a34641f368e23b3701f1f94e637b2c",
-  "to_ref": "aab982a33075223bbc16d56564b8c46d26a64de7",
-  "description": "add unified selectable Claude/Codex workspace setup on top of the filesystem Work Item runtime; preserve current qiqi_delegate Work Item mounts and Claude background-stop handling; add native Claude coordinator setup with local-scope qiqi_delegate registration, generated nested-repository instruction isolation, machine-local execution/default-route preferences, and client-selective workspace Work Item / Shared Knowledge installation; after migration run harness-level scripts/setup-workspace.sh against the workspace to choose coordinator clients, execution agents, and default route",
+  "to_ref": "54d5e182536c40209133450baca1736dc4eaf729",
+  "description": "add unified selectable Claude/Codex workspace setup on top of the filesystem Work Item runtime; preserve current qiqi_delegate Work Item mounts and Claude background-stop handling; add native Claude coordinator setup with local-scope qiqi_delegate registration, generated nested-repository instruction isolation including linked-worktree local-settings placement, machine-local execution/default-route preferences, and client-selective workspace Work Item / Shared Knowledge installation; after migration run harness-level scripts/setup-workspace.sh against the workspace to choose coordinator clients, execution agents, and default route",
   "workspace": {
     "merge": [
       "workspace-template/.qiqi/.gitignore",
