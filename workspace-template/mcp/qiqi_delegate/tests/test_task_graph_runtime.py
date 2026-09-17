@@ -72,13 +72,14 @@ class TaskGraphRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(started["graph_state"], "ready")
         self.assertEqual(started["revision"], 0)
         self.assertEqual(started["runnable_nodes"], ["contracts"])
+        self.assertEqual(started["review_required"], [])
         self.assertEqual(started["authored_node_count"], 2)
         self.assertEqual(
             [item["semantic_state"] for item in started["nodes"]],
             ["pending", "pending"],
         )
 
-    async def test_delegate_next_executes_one_node_and_persists_terminal_result(self) -> None:
+    async def test_delegate_next_executes_one_node_and_exposes_review_envelope(self) -> None:
         started = self.start()
         run_id = started["graph_run_id"]
         calls: list[str] = []
@@ -100,6 +101,23 @@ class TaskGraphRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["results"][0]["runtime_state"], "settled")
         self.assertEqual(result["results"][0]["session_id"], "session-contracts")
         self.assertEqual(result["results"][0]["turn_id"], "turn-contracts")
+        self.assertEqual(
+            result["review_required"],
+            [
+                {
+                    "node_id": "contracts",
+                    "repository": "contracts",
+                    "runtime_state": "settled",
+                    "acceptance_criteria": ["focused verification passes"],
+                    "result": {
+                        "session_id": "session-contracts",
+                        "turn_id": "turn-contracts",
+                        "state": "settled",
+                        "agent_response": "completed contracts",
+                    },
+                }
+            ],
+        )
         self.assertEqual(persisted["runtime_state"], "settled")
         self.assertEqual(persisted["session_id"], "session-contracts")
         self.assertEqual(persisted["turn_id"], "turn-contracts")
@@ -140,6 +158,7 @@ class TaskGraphRuntimeTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(calls, ["backend"])
         self.assertEqual(result["graph_state"], "awaiting_review")
+        self.assertEqual([item["node_id"] for item in result["review_required"]], ["backend"])
         self.assertEqual(len(self.store.list_attempts(run_id, "backend")), 1)
         self.assertEqual(self.store.list_attempts(run_id, "frontend"), [])
         self.assertEqual(self.store.get_node(run_id, "frontend")["runtime_state"], "idle")
@@ -157,6 +176,7 @@ class TaskGraphRuntimeTests(unittest.IsolatedAsyncioTestCase):
         current = self.runtime.get_graph(run_id)
         attempts = self.store.list_attempts(run_id, "contracts")
         self.assertEqual(current["graph_state"], "awaiting_review")
+        self.assertEqual([item["node_id"] for item in current["review_required"]], ["contracts"])
         self.assertIsNone(current["current_wave_id"])
         self.assertEqual(current["nodes"][0]["runtime_state"], "failed")
         self.assertEqual(len(attempts), 1)
@@ -196,16 +216,13 @@ class TaskGraphRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.store.list_attempts(run_id, "backend"), [])
         self.assertEqual(self.runtime.get_graph(run_id)["graph_state"], "ready")
 
-    async def test_submit_decisions_returns_control_to_ready_state(self) -> None:
+    async def test_accept_decision_returns_control_to_ready_state(self) -> None:
         started = self.start()
         run_id = started["graph_run_id"]
         reviewable = await self.runtime.delegate_next(
             run_id,
             executor=self.settled_executor,
         )
-
-        self.assertEqual(reviewable["graph_state"], "awaiting_review")
-        self.assertEqual(reviewable["nodes"][0]["result"]["state"], "settled")
 
         updated = self.runtime.submit_decisions(
             run_id,
@@ -217,8 +234,53 @@ class TaskGraphRuntimeTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(updated["graph_state"], "ready")
         self.assertEqual(updated["runnable_nodes"], ["backend"])
+        self.assertEqual(updated["review_required"], [])
         self.assertEqual(updated["nodes"][0]["semantic_state"], "satisfied")
+        self.assertEqual(
+            updated["decision_outcomes"],
+            [
+                {
+                    "node_id": "contracts",
+                    "action": "accept",
+                    "semantic_state": "satisfied",
+                }
+            ],
+        )
+        self.assertEqual(updated["replan_required_nodes"], [])
         self.assertGreater(updated["revision"], reviewable["revision"])
+
+    async def test_retry_block_and_replan_have_distinct_outer_loop_outcomes(self) -> None:
+        expected = {
+            "retry": ("ready", "pending", []),
+            "block": ("blocked", "blocked", []),
+            "replan": ("blocked", "blocked", ["contracts"]),
+        }
+        for action, (graph_state, semantic_state, replan_nodes) in expected.items():
+            with self.subTest(action=action):
+                runtime = GraphRuntime(GraphRuntimeStore(Path(self.temp.name) / f"{action}.sqlite3"))
+                started = runtime.start_graph(
+                    self.graph(),
+                    repository_names={"contracts", "backend"},
+                )
+                run_id = started["graph_run_id"]
+                reviewable = await runtime.delegate_next(
+                    run_id,
+                    executor=self.settled_executor,
+                )
+
+                updated = runtime.submit_decisions(
+                    run_id,
+                    decisions_from_payload(
+                        [{"node_id": "contracts", "action": action}]
+                    ),
+                    expected_revision=reviewable["revision"],
+                )
+
+                self.assertEqual(updated["graph_state"], graph_state)
+                self.assertEqual(updated["nodes"][0]["semantic_state"], semantic_state)
+                self.assertEqual(updated["replan_required_nodes"], replan_nodes)
+                self.assertEqual(updated["decision_outcomes"][0]["action"], action)
+                self.assertEqual(updated["review_required"], [])
 
     async def test_submit_decisions_rejects_stale_revision(self) -> None:
         started = self.start()
@@ -321,11 +383,12 @@ class TaskGraphRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 }
             )
 
-    async def test_decision_transport_is_strict_and_replan_remains_unsupported(self) -> None:
+    async def test_decision_transport_is_strict_and_replan_is_supported(self) -> None:
         decisions = decisions_from_payload(
-            [{"node_id": "backend", "action": "accept"}]
+            [{"node_id": "backend", "action": "replan"}]
         )
         self.assertEqual(decisions[0].node_id, "backend")
+        self.assertEqual(decisions[0].action, "replan")
 
         with self.assertRaisesRegex(ValueError, "unsupported fields: reason"):
             decisions_from_payload(
@@ -338,11 +401,11 @@ class TaskGraphRuntimeTests(unittest.IsolatedAsyncioTestCase):
             run_id,
             executor=self.settled_executor,
         )
-        with self.assertRaisesRegex(ValueError, "unsupported decision action 'replan'"):
+        with self.assertRaisesRegex(ValueError, "unsupported decision action 'skip'"):
             self.runtime.submit_decisions(
                 run_id,
                 decisions_from_payload(
-                    [{"node_id": "contracts", "action": "replan"}]
+                    [{"node_id": "contracts", "action": "skip"}]
                 ),
                 expected_revision=reviewable["revision"],
             )
