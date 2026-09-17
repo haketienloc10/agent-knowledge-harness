@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable, Collection
+from dataclasses import dataclass, replace
 from typing import Any
 
-from core import build_task_packet
+from core import TaskPacket, build_task_packet
 from task_graph import GraphNode, TaskGraph
 from task_graph_scheduler import (
     REVIEWABLE_RUNTIME_STATES,
@@ -23,10 +24,41 @@ _NODE_FIELDS = frozenset(
     {"node_id", "kind", "repository", "route", "depends_on", "task_packet"}
 )
 _NODE_REQUIRED_FIELDS = frozenset({"node_id", "repository", "task_packet"})
-_DECISION_FIELDS = frozenset({"node_id", "action"})
+_DECISION_FIELDS = frozenset({"node_id", "action", "resume_session", "feedback"})
+_DECISION_REQUIRED_FIELDS = frozenset({"node_id", "action"})
 _EXECUTION_TERMINAL_STATES = frozenset({"settled", "failed", "blocked"})
+_RETRY_FEEDBACK_SOURCE = "QiQi semantic review"
 
 RepoTaskExecutor = Callable[[GraphNode], Awaitable[dict[str, Any]]]
+ResumeRepoTaskExecutor = Callable[[GraphNode, str], Awaitable[dict[str, Any]]]
+
+
+@dataclass(frozen=True)
+class ReviewDecision:
+    """QiQi semantic decision plus retry-only execution guidance."""
+
+    node_id: str
+    action: str
+    resume_session: bool = False
+    feedback: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class RetryPlan:
+    """Process-owned execution plan for the next attempt of one reviewed node."""
+
+    task_packet: TaskPacket
+    resume_session: bool
+    session_id: str | None
+    feedback: tuple[str, ...]
+
+
+class RecoverableRepoTaskExecutionError(RuntimeError):
+    """Execution failed after native session ownership was already captured."""
+
+    def __init__(self, message: str, *, session_id: str):
+        super().__init__(message)
+        self.session_id = session_id
 
 
 def _require_object(value: Any, label: str) -> dict[str, Any]:
@@ -67,6 +99,59 @@ def _validated_execution_result(value: Any) -> dict[str, Any]:
     if response is not None and not isinstance(response, str):
         raise RuntimeError("repo-task execution result agent_response must be a string or null")
     return dict(value)
+
+
+def _feedback_from_payload(value: Any, label: str) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    if not isinstance(value, list):
+        raise ValueError(f"graph {label} must be a list of strings")
+    result: list[str] = []
+    for index, item in enumerate(value):
+        if not isinstance(item, str):
+            raise ValueError(f"graph {label}[{index}] must be a string")
+        cleaned = item.strip()
+        if not cleaned:
+            raise ValueError(f"graph {label}[{index}] must not be empty")
+        result.append(cleaned)
+    return tuple(result)
+
+
+def _retry_task_packet(packet: TaskPacket, feedback: tuple[str, ...]) -> TaskPacket:
+    """Create a fresh delegated-turn TaskPacket without mutating authored semantics.
+
+    Retry feedback is execution context, not a new Graph schema. It is represented through
+    the existing TaskPacket context contract as claims to investigate, while objective,
+    scope, acceptance criteria, exclusions, constraints, and known unknowns stay authored.
+    Feedback that repeats an existing trusted fact or claim keeps the existing classification
+    instead of creating a contradictory/duplicate context entry.
+    """
+
+    payload = packet.as_dict()
+    if feedback:
+        context = dict(payload.get("context", {}))
+        trusted = list(context.get("trusted_facts", []))
+        claims = list(context.get("claims_to_investigate", []))
+        known_propositions = {
+            item["fact"].casefold()
+            for item in trusted
+            if isinstance(item, dict) and isinstance(item.get("fact"), str)
+        }
+        known_propositions.update(
+            item["claim"].casefold()
+            for item in claims
+            if isinstance(item, dict) and isinstance(item.get("claim"), str)
+        )
+        for item in feedback:
+            key = item.casefold()
+            if key in known_propositions:
+                continue
+            claims.append({"claim": item, "source": _RETRY_FEEDBACK_SOURCE})
+            known_propositions.add(key)
+        if claims:
+            context["claims_to_investigate"] = claims
+        payload["context"] = context
+    return build_task_packet(**payload)
 
 
 def task_graph_from_payload(payload: Any) -> TaskGraph:
@@ -131,23 +216,38 @@ def task_graph_from_payload(payload: Any) -> TaskGraph:
     return TaskGraph(nodes=tuple(nodes))
 
 
-def decisions_from_payload(payload: Any) -> tuple[NodeDecision, ...]:
+def decisions_from_payload(payload: Any) -> tuple[ReviewDecision, ...]:
     if not isinstance(payload, list):
         raise ValueError("graph decisions must be a list")
-    decisions: list[NodeDecision] = []
+    decisions: list[ReviewDecision] = []
     for index, raw_decision in enumerate(payload):
         label = f"decisions[{index}]"
         decision = _require_object(raw_decision, label)
         _reject_extra_fields(decision, _DECISION_FIELDS, label)
-        missing = sorted(_DECISION_FIELDS - set(decision))
+        missing = sorted(_DECISION_REQUIRED_FIELDS - set(decision))
         if missing:
             raise ValueError(
                 f"graph {label} is missing required fields: {', '.join(missing)}"
             )
+
+        action = decision["action"]
+        has_retry_metadata = "resume_session" in decision or "feedback" in decision
+        if action != "retry" and has_retry_metadata:
+            raise ValueError(
+                f"graph {label} retry metadata is only valid for action='retry'"
+            )
+
+        resume_session = decision.get("resume_session", False)
+        if not isinstance(resume_session, bool):
+            raise ValueError(f"graph {label}.resume_session must be a boolean")
+        feedback = _feedback_from_payload(decision.get("feedback"), f"{label}.feedback")
+
         decisions.append(
-            NodeDecision(
+            ReviewDecision(
                 node_id=decision["node_id"],
-                action=decision["action"],
+                action=action,
+                resume_session=resume_session,
+                feedback=feedback,
             )
         )
     if not decisions:
@@ -159,15 +259,16 @@ class GraphRuntime:
     """QiQi outer-loop runtime over scheduler, persistence, and repo-task execution.
 
     Authored TaskGraph semantics remain process-owned and are not copied into SQLite.
-    Phase 6 executes exactly one runnable repo-task per wave through an injected adapter
-    for the existing delegate_repo_task primitive. Phase 7 exposes the per-node review
-    contract and structured semantic decisions. Parallel waves, selective RESUME, graph
-    mutation/reconciliation, and durable authored-graph recovery remain later phases.
+    Phase 6 executes exactly one runnable repo-task per wave through the existing
+    delegate_repo_task primitive. Phase 7 exposes per-node semantic review. Phase 8 adds
+    selective retry with a fresh TaskPacket snapshot plus START/RESUME choice. Parallel
+    waves, graph mutation/reconciliation, and durable authored-graph recovery remain later.
     """
 
     def __init__(self, store: GraphRuntimeStore):
         self.store = store
         self._graphs: dict[str, TaskGraph] = {}
+        self._retry_plans: dict[tuple[str, str], RetryPlan] = {}
 
     def start_graph(
         self,
@@ -222,6 +323,7 @@ class GraphRuntime:
                 else None
             )
             result = attempt.get("result") if attempt is not None else None
+            retry_plan = self._retry_plans.get((graph_run_id, state.node_id))
             execution_nodes.append(
                 {
                     "node_id": state.node_id,
@@ -231,6 +333,15 @@ class GraphRuntime:
                     "session_id": persisted.get("session_id"),
                     "turn_id": persisted.get("turn_id"),
                     "result": result,
+                    "retry_pending": (
+                        {
+                            "resume_session": retry_plan.resume_session,
+                            "session_id": retry_plan.session_id,
+                            "feedback": list(retry_plan.feedback),
+                        }
+                        if retry_plan is not None
+                        else None
+                    ),
                 }
             )
 
@@ -267,12 +378,14 @@ class GraphRuntime:
         graph_run_id: str,
         *,
         executor: RepoTaskExecutor,
+        resume_executor: ResumeRepoTaskExecutor | None = None,
     ) -> dict[str, Any]:
         """Execute exactly one runnable repo-task and return control to QiQi.
 
-        Runtime settlement remains distinct from semantic acceptance: after a settled,
-        failed, or blocked child turn the node remains semantically pending and the graph
-        becomes `awaiting_review` until QiQi submits a decision.
+        A pending retry is preferred over unrelated fresh runnable work. Retry execution
+        uses a freshly built TaskPacket snapshot. When QiQi requested continuity, the exact
+        persisted native session is passed through both the Graph store guard and the
+        existing direct delegation RESUME ownership checks.
         """
 
         _, snapshot, _ = self._snapshot(graph_run_id)
@@ -284,23 +397,52 @@ class GraphRuntime:
         candidates = runnable_nodes(snapshot)
         if not candidates:
             raise RuntimeError("graph is ready but has no runnable node")
-        node = candidates[0]
-        if node.route is None:
+
+        retry_candidates = [
+            item
+            for item in candidates
+            if (graph_run_id, item.node_id) in self._retry_plans
+        ]
+        node = retry_candidates[0] if retry_candidates else candidates[0]
+        retry_key = (graph_run_id, node.node_id)
+        retry_plan = self._retry_plans.get(retry_key)
+        execution_node = (
+            replace(node, task_packet=retry_plan.task_packet)
+            if retry_plan is not None
+            else node
+        )
+        if execution_node.route is None:
             raise RuntimeError(
-                f"runnable node {node.node_id!r} has no route for repository execution"
+                f"runnable node {execution_node.node_id!r} has no route for repository execution"
             )
         if not callable(executor):
             raise ValueError("repo-task executor must be callable")
+        if (
+            retry_plan is not None
+            and retry_plan.resume_session
+            and not callable(resume_executor)
+        ):
+            raise RuntimeError("retry requested RESUME but no resume executor is available")
 
         wave_id = new_wave_id()
         attempt_id = self.store.start_attempt(
             graph_run_id,
-            node.node_id,
+            execution_node.node_id,
             wave_id,
+            resume_session=(retry_plan.resume_session if retry_plan is not None else False),
+            session_id=(retry_plan.session_id if retry_plan is not None else None),
         )
+        if retry_plan is not None:
+            self._retry_plans.pop(retry_key, None)
 
         try:
-            result = _validated_execution_result(await executor(node))
+            if retry_plan is not None and retry_plan.resume_session:
+                assert retry_plan.session_id is not None
+                assert resume_executor is not None
+                raw_result = await resume_executor(execution_node, retry_plan.session_id)
+            else:
+                raw_result = await executor(execution_node)
+            result = _validated_execution_result(raw_result)
         except asyncio.CancelledError:
             # Cancellation bypasses `except Exception` on supported Python versions.
             # Persist a terminal runtime fact and close the wave before propagating the
@@ -313,6 +455,22 @@ class GraphRuntime:
                     "agent_response": None,
                     "failure_type": "execution_cancelled",
                 },
+            )
+            self.store.close_wave(graph_run_id, wave_id)
+            raise
+        except RecoverableRepoTaskExecutionError as exc:
+            # Direct delegation can discover/persist the native session before final-result
+            # capture fails. Keep that exact recovery key on the failed graph attempt so a
+            # later semantic RETRY may RESUME the same native conversation.
+            self.store.finish_attempt(
+                attempt_id,
+                runtime_state="failed",
+                result={
+                    "state": "failed",
+                    "agent_response": None,
+                    "failure_type": "executor_exception",
+                },
+                session_id=exc.session_id,
             )
             self.store.close_wave(graph_run_id, wave_id)
             raise
@@ -348,12 +506,15 @@ class GraphRuntime:
             "wave_id": wave_id,
             "results": [
                 {
-                    "node_id": node.node_id,
+                    "node_id": execution_node.node_id,
                     "attempt_id": attempt_id,
                     "runtime_state": result["state"],
                     "session_id": result["session_id"],
                     "turn_id": result["turn_id"],
                     "agent_response": result["agent_response"],
+                    "resume_session": bool(
+                        retry_plan is not None and retry_plan.resume_session
+                    ),
                     **(
                         {"blocker_type": result["blocker_type"]}
                         if "blocker_type" in result
@@ -366,7 +527,7 @@ class GraphRuntime:
     def submit_decisions(
         self,
         graph_run_id: str,
-        decisions: tuple[NodeDecision, ...],
+        decisions: tuple[ReviewDecision, ...],
         *,
         expected_revision: int,
     ) -> dict[str, Any]:
@@ -388,28 +549,71 @@ class GraphRuntime:
                 f"current state={graph_state!r}"
             )
 
-        updated = apply_decisions(snapshot, decisions)
+        scheduler_decisions = tuple(
+            NodeDecision(node_id=decision.node_id, action=decision.action)
+            for decision in decisions
+        )
+        updated = apply_decisions(snapshot, scheduler_decisions)
+
+        graph_nodes = {node.node_id: node for node in graph.nodes}
+        retry_plans: dict[tuple[str, str], RetryPlan] = {}
+        for decision in decisions:
+            if decision.action != "retry":
+                continue
+            persisted = self.store.get_node(graph_run_id, decision.node_id)
+            if persisted is None:
+                raise RuntimeError(
+                    f"persisted graph run is missing node state for {decision.node_id!r}"
+                )
+            session_id = persisted.get("session_id") if decision.resume_session else None
+            if decision.resume_session and (
+                not isinstance(session_id, str) or not session_id.strip()
+            ):
+                raise RuntimeError(
+                    f"retry requested RESUME for node {decision.node_id!r} "
+                    "but no previous native session is available"
+                )
+            authored = graph_nodes[decision.node_id]
+            retry_plans[(graph_run_id, decision.node_id)] = RetryPlan(
+                task_packet=_retry_task_packet(authored.task_packet, decision.feedback),
+                resume_session=decision.resume_session,
+                session_id=session_id,
+                feedback=decision.feedback,
+            )
+
         self.store.save_snapshot(
             graph_run_id,
             updated,
             expected_revision=expected_revision,
         )
-        # `graph` is intentionally retained in the process registry; save_snapshot
-        # persists only execution state.
+        # The current authored graph remains unchanged. Retry plans are process-owned
+        # execution metadata, matching the current process-owned graph-definition boundary.
         self._graphs[graph_run_id] = graph
+        for decision in decisions:
+            self._retry_plans.pop((graph_run_id, decision.node_id), None)
+        self._retry_plans.update(retry_plans)
 
         updated_states = {state.node_id: state for state in updated.node_states}
         current = self.get_graph(graph_run_id)
+        outcomes: list[dict[str, Any]] = []
+        for decision in decisions:
+            outcome: dict[str, Any] = {
+                "node_id": decision.node_id,
+                "action": decision.action,
+                "semantic_state": updated_states[decision.node_id].semantic_state,
+            }
+            if decision.action == "retry":
+                plan = retry_plans[(graph_run_id, decision.node_id)]
+                outcome["retry_execution"] = {
+                    "resume_session": plan.resume_session,
+                    "session_id": plan.session_id,
+                    "feedback": list(plan.feedback),
+                }
+            outcomes.append(outcome)
+
         return {
             **current,
-            "decision_outcomes": [
-                {
-                    "node_id": decision.node_id,
-                    "action": decision.action,
-                    "semantic_state": updated_states[decision.node_id].semantic_state,
-                }
-                for decision in decisions
-            ],
+            "decision_outcomes": outcomes,
             "replan_required_nodes": [
                 decision.node_id
                 for decision in decisions
