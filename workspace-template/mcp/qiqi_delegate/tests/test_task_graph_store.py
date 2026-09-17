@@ -95,6 +95,7 @@ class TaskGraphRuntimeStoreTests(unittest.TestCase):
         self.assertEqual(run["graph_run_id"], run_id)
         self.assertIsNone(run["current_wave_id"])
         self.assertEqual(run["revision"], 0)
+        self.assertEqual(len(run["graph_fingerprint"]), 64)
         self.assertNotIn("graph_json", run)
         self.assertNotIn("task_packet_json", run)
 
@@ -306,6 +307,36 @@ class TaskGraphRuntimeStoreTests(unittest.TestCase):
         self.assertEqual(contracts, NodeState("contracts", "pending", "settled"))
         self.assertEqual(derive_graph_state(persisted), "awaiting_review")
 
+    def test_closed_wave_identifier_cannot_be_reopened(self) -> None:
+        run_id, graph = self.create_run()
+        self.finish_contracts_attempt(run_id, runtime_state="failed", wave_id="wave-1")
+        self.store.close_wave(run_id, "wave-1")
+
+        reviewable, revision = self.store.load_snapshot_with_revision(run_id, graph)
+        retried = apply_decisions(
+            reviewable,
+            (NodeDecision(node_id="contracts", action="retry"),),
+        )
+        self.store.save_snapshot(run_id, retried, expected_revision=revision)
+
+        with self.assertRaisesRegex(RuntimeError, "has already been used and closed"):
+            self.store.start_attempt(
+                run_id,
+                "contracts",
+                "wave-1",
+                resume_session=True,
+                session_id="session-1",
+            )
+
+        attempt_id = self.store.start_attempt(
+            run_id,
+            "contracts",
+            "wave-2",
+            resume_session=True,
+            session_id="session-1",
+        )
+        self.assertEqual(self.store.get_attempt(attempt_id)["wave_id"], "wave-2")
+
     def test_store_rejects_state_that_would_desynchronize_an_active_attempt(self) -> None:
         run_id, graph = self.create_run()
         self.store.start_attempt(run_id, "contracts", "wave-1")
@@ -343,8 +374,38 @@ class TaskGraphRuntimeStoreTests(unittest.TestCase):
             )
         )
 
-        with self.assertRaisesRegex(RuntimeError, "does not match TaskGraph"):
+        with self.assertRaisesRegex(RuntimeError, "TaskGraph semantics do not match"):
             self.store.load_snapshot(run_id, other_graph)
+
+    def test_same_node_ids_with_changed_semantics_do_not_inherit_runtime_state(self) -> None:
+        run_id, graph = self.create_run()
+        self.finish_contracts_attempt(run_id)
+        self.store.close_wave(run_id, "wave-1")
+        reviewable, revision = self.store.load_snapshot_with_revision(run_id, graph)
+        accepted = apply_decisions(
+            reviewable,
+            (NodeDecision(node_id="contracts", action="accept"),),
+        )
+        self.store.save_snapshot(run_id, accepted, expected_revision=revision)
+
+        changed_graph = TaskGraph(
+            nodes=(
+                GraphNode(
+                    node_id="contracts",
+                    repository="contracts",
+                    task_packet=self.packet("Replace the shared contract semantics."),
+                ),
+                GraphNode(
+                    node_id="backend",
+                    repository="backend",
+                    task_packet=self.packet("Update backend consumer."),
+                    depends_on=("contracts",),
+                ),
+            )
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "TaskGraph semantics do not match"):
+            self.store.load_snapshot(run_id, changed_graph)
 
     def test_attempt_result_must_be_a_json_object_and_finish_is_single_use(self) -> None:
         run_id, _ = self.create_run()
