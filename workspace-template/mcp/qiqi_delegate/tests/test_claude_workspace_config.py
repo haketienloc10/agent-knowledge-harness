@@ -56,7 +56,9 @@ class ClaudeWorkspaceConfigTests(unittest.TestCase):
         self.assertIn("claudeMdExcludes", self.setup_script)
         self.assertIn("workspace_claude_md", self.setup_script)
         self.assertIn("ls-files --error-unmatch", self.setup_script)
-        self.assertIn("rev-parse --git-path info/exclude", self.setup_script)
+        self.assertIn("--git-common-dir", self.setup_script)
+        self.assertIn("settings_repo_root", self.setup_script)
+        self.assertIn('info_exclude="$git_common_dir/info/exclude"', self.setup_script)
         self.assertIn(
             'env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] = "1"', self.setup_script
         )
