@@ -85,7 +85,6 @@ def _graph_fingerprint(graph: TaskGraph) -> str:
 
 
 def _validated_states(snapshot: GraphSnapshot) -> dict[str, NodeState]:
-    # Reuse the Phase-3 state machine as the canonical NodeState/snapshot validator.
     derive_graph_state(snapshot)
     return {state.node_id: state for state in snapshot.node_states}
 
@@ -93,10 +92,10 @@ def _validated_states(snapshot: GraphSnapshot) -> dict[str, NodeState]:
 class GraphRuntimeStore:
     """Durable execution state for TaskGraph runs.
 
-    This store intentionally does not persist authored TaskGraph/TaskPacket semantics.
-    Callers supply the current TaskGraph when reconstructing a GraphSnapshot, while
-    `.qiqi/state` owns run/wave/attempt/session/result execution facts. A stable graph
-    fingerprint prevents runtime state from being attached to changed authored work.
+    Authored TaskGraph/TaskPacket semantics remain process-owned. The store persists only
+    execution facts plus a stable fingerprint of the current authored graph. Retired nodes
+    stay in runtime storage with active=0 so graph mutation never deletes attempt/session/
+    result history merely because a semantic work unit is no longer material.
     """
 
     def __init__(self, path: Path):
@@ -131,6 +130,7 @@ class GraphRuntimeStore:
                     CHECK (semantic_state IN ('pending', 'satisfied', 'blocked', 'cancelled')),
                 runtime_state TEXT NOT NULL
                     CHECK (runtime_state IN ('idle', 'running', 'settled', 'failed', 'blocked', 'awaiting_review')),
+                active INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0, 1)),
                 current_attempt_id TEXT,
                 session_id TEXT,
                 turn_id TEXT,
@@ -170,6 +170,15 @@ class GraphRuntimeStore:
                 WHERE runtime_state = 'running';
             """
         )
+        columns = {
+            row["name"] if isinstance(row, sqlite3.Row) else row[1]
+            for row in conn.execute("PRAGMA table_info(graph_node_states)").fetchall()
+        }
+        if "active" not in columns:
+            conn.execute(
+                "ALTER TABLE graph_node_states ADD COLUMN active INTEGER NOT NULL "
+                "DEFAULT 1 CHECK (active IN (0, 1))"
+            )
 
     def create_run(
         self,
@@ -195,9 +204,9 @@ class GraphRuntimeStore:
                 )
                 conn.executemany(
                     "INSERT INTO graph_node_states("
-                    "graph_run_id, node_id, semantic_state, runtime_state, "
+                    "graph_run_id, node_id, semantic_state, runtime_state, active, "
                     "current_attempt_id, session_id, turn_id, updated_at_ns"
-                    ") VALUES (?, ?, ?, ?, NULL, NULL, NULL, ?)",
+                    ") VALUES (?, ?, ?, ?, 1, NULL, NULL, NULL, ?)",
                     [
                         (
                             run_id,
@@ -252,7 +261,7 @@ class GraphRuntimeStore:
                 raise RuntimeError("TaskGraph semantics do not match persisted graph run")
             rows = conn.execute(
                 "SELECT node_id, semantic_state, runtime_state "
-                "FROM graph_node_states WHERE graph_run_id = ?",
+                "FROM graph_node_states WHERE graph_run_id = ? AND active = 1",
                 (run_id,),
             ).fetchall()
 
@@ -320,7 +329,7 @@ class GraphRuntimeStore:
 
             rows = conn.execute(
                 "SELECT node_id, current_attempt_id FROM graph_node_states "
-                "WHERE graph_run_id = ?",
+                "WHERE graph_run_id = ? AND active = 1",
                 (run_id,),
             ).fetchall()
             persisted_ids = {row["node_id"] for row in rows}
@@ -355,7 +364,7 @@ class GraphRuntimeStore:
 
             conn.executemany(
                 "UPDATE graph_node_states SET semantic_state = ?, runtime_state = ?, updated_at_ns = ? "
-                "WHERE graph_run_id = ? AND node_id = ?",
+                "WHERE graph_run_id = ? AND node_id = ? AND active = 1",
                 [
                     (
                         state.semantic_state,
@@ -374,6 +383,113 @@ class GraphRuntimeStore:
             )
             if updated.rowcount != 1:
                 raise RuntimeError("graph run revision changed while saving snapshot")
+
+    def reconcile_graph(
+        self,
+        graph_run_id: str,
+        previous_graph: TaskGraph,
+        snapshot: GraphSnapshot,
+        *,
+        expected_revision: int,
+    ) -> None:
+        """Atomically replace the active semantic graph while retaining execution history."""
+
+        run_id = _required_id(graph_run_id, "graph_run_id")
+        clean_expected_revision = _required_revision(expected_revision)
+        states = _validated_states(snapshot)
+        previous_fingerprint = _graph_fingerprint(previous_graph)
+        next_fingerprint = _graph_fingerprint(snapshot.graph)
+        previous_ids = {node.node_id for node in previous_graph.nodes}
+        next_ids = set(states)
+        now = time.time_ns()
+
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            run = conn.execute(
+                "SELECT graph_fingerprint, current_wave_id, revision "
+                "FROM graph_runs WHERE graph_run_id = ?",
+                (run_id,),
+            ).fetchone()
+            if run is None:
+                raise RuntimeError(f"unknown graph_run_id: {run_id!r}")
+            if run["graph_fingerprint"] != previous_fingerprint:
+                raise RuntimeError("current TaskGraph semantics do not match persisted graph run")
+            current_revision = int(run["revision"])
+            if current_revision != clean_expected_revision:
+                raise RuntimeError(
+                    "stale graph snapshot revision: "
+                    f"expected {clean_expected_revision}, current {current_revision}"
+                )
+            if run["current_wave_id"] is not None:
+                raise RuntimeError("graph reconciliation cannot run while a wave is active")
+            running = conn.execute(
+                "SELECT COUNT(*) FROM graph_attempts "
+                "WHERE graph_run_id = ? AND runtime_state = 'running'",
+                (run_id,),
+            ).fetchone()[0]
+            if running:
+                raise RuntimeError("graph reconciliation cannot run while node attempts are active")
+
+            active_rows = conn.execute(
+                "SELECT node_id FROM graph_node_states "
+                "WHERE graph_run_id = ? AND active = 1",
+                (run_id,),
+            ).fetchall()
+            persisted_active_ids = {row["node_id"] for row in active_rows}
+            if persisted_active_ids != previous_ids:
+                raise RuntimeError("active persisted node set differs from current TaskGraph")
+
+            existing_rows = conn.execute(
+                "SELECT node_id FROM graph_node_states WHERE graph_run_id = ?",
+                (run_id,),
+            ).fetchall()
+            existing_ids = {row["node_id"] for row in existing_rows}
+
+            removed_ids = previous_ids - next_ids
+            if removed_ids:
+                conn.executemany(
+                    "UPDATE graph_node_states SET active = 0, semantic_state = 'cancelled', "
+                    "runtime_state = 'idle', updated_at_ns = ? "
+                    "WHERE graph_run_id = ? AND node_id = ? AND active = 1",
+                    [(now, run_id, node_id) for node_id in sorted(removed_ids)],
+                )
+
+            for state in snapshot.node_states:
+                if state.node_id in existing_ids:
+                    conn.execute(
+                        "UPDATE graph_node_states SET active = 1, semantic_state = ?, "
+                        "runtime_state = ?, updated_at_ns = ? "
+                        "WHERE graph_run_id = ? AND node_id = ?",
+                        (
+                            state.semantic_state,
+                            state.runtime_state,
+                            now,
+                            run_id,
+                            state.node_id,
+                        ),
+                    )
+                else:
+                    conn.execute(
+                        "INSERT INTO graph_node_states("
+                        "graph_run_id, node_id, semantic_state, runtime_state, active, "
+                        "current_attempt_id, session_id, turn_id, updated_at_ns"
+                        ") VALUES (?, ?, ?, ?, 1, NULL, NULL, NULL, ?)",
+                        (
+                            run_id,
+                            state.node_id,
+                            state.semantic_state,
+                            state.runtime_state,
+                            now,
+                        ),
+                    )
+
+            updated = conn.execute(
+                "UPDATE graph_runs SET graph_fingerprint = ?, updated_at_ns = ?, "
+                "revision = revision + 1 WHERE graph_run_id = ? AND revision = ?",
+                (next_fingerprint, now, run_id, clean_expected_revision),
+            )
+            if updated.rowcount != 1:
+                raise RuntimeError("graph run revision changed while reconciling graph")
 
     def start_attempt(
         self,
@@ -422,12 +538,12 @@ class GraphRuntimeStore:
                 )
 
             node = conn.execute(
-                "SELECT semantic_state, runtime_state, session_id "
+                "SELECT semantic_state, runtime_state, session_id, active "
                 "FROM graph_node_states WHERE graph_run_id = ? AND node_id = ?",
                 (run_id, clean_node_id),
             ).fetchone()
-            if node is None:
-                raise RuntimeError(f"unknown graph node for run: {clean_node_id!r}")
+            if node is None or not bool(node["active"]):
+                raise RuntimeError(f"unknown active graph node for run: {clean_node_id!r}")
             if node["semantic_state"] != "pending" or node["runtime_state"] != "idle":
                 raise RuntimeError(
                     f"node {clean_node_id!r} is not pending+idle and cannot start an attempt"
@@ -476,7 +592,7 @@ class GraphRuntimeStore:
             conn.execute(
                 "UPDATE graph_node_states SET runtime_state = 'running', "
                 "current_attempt_id = ?, session_id = ?, turn_id = NULL, updated_at_ns = ? "
-                "WHERE graph_run_id = ? AND node_id = ?",
+                "WHERE graph_run_id = ? AND node_id = ? AND active = 1",
                 (clean_attempt_id, clean_session_id, now, run_id, clean_node_id),
             )
             conn.execute(
@@ -507,7 +623,7 @@ class GraphRuntimeStore:
 
             node = conn.execute(
                 "SELECT current_attempt_id FROM graph_node_states "
-                "WHERE graph_run_id = ? AND node_id = ?",
+                "WHERE graph_run_id = ? AND node_id = ? AND active = 1",
                 (attempt["graph_run_id"], attempt["node_id"]),
             ).fetchone()
             if node is None or node["current_attempt_id"] != clean_attempt_id:
@@ -520,7 +636,7 @@ class GraphRuntimeStore:
             )
             conn.execute(
                 "UPDATE graph_node_states SET session_id = ?, updated_at_ns = ? "
-                "WHERE graph_run_id = ? AND node_id = ?",
+                "WHERE graph_run_id = ? AND node_id = ? AND active = 1",
                 (
                     clean_session_id,
                     now,
@@ -570,7 +686,7 @@ class GraphRuntimeStore:
 
             node = conn.execute(
                 "SELECT current_attempt_id FROM graph_node_states "
-                "WHERE graph_run_id = ? AND node_id = ?",
+                "WHERE graph_run_id = ? AND node_id = ? AND active = 1",
                 (attempt["graph_run_id"], attempt["node_id"]),
             ).fetchone()
             if node is None or node["current_attempt_id"] != clean_attempt_id:
@@ -590,7 +706,7 @@ class GraphRuntimeStore:
             )
             conn.execute(
                 "UPDATE graph_node_states SET runtime_state = ?, session_id = ?, turn_id = ?, "
-                "updated_at_ns = ? WHERE graph_run_id = ? AND node_id = ?",
+                "updated_at_ns = ? WHERE graph_run_id = ? AND node_id = ? AND active = 1",
                 (
                     runtime_state,
                     clean_session_id,
