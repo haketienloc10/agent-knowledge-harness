@@ -1,0 +1,21 @@
+{
+  "version": 30,
+  "from_ref": "5fd908b73479d50a6a958377dd272a3b4648c521",
+  "to_ref": "24c402c618ee5374ee68ec40dd767a41680159e0",
+  "description": "add deterministic TaskGraph validation for graph-specific invariants while reusing the existing TaskPacket validation path",
+  "workspace": {
+    "merge": [],
+    "replace": [
+      "workspace-template/mcp/qiqi_delegate/task_graph_validation.py",
+      "workspace-template/mcp/qiqi_delegate/tests/test_task_graph_validation.py"
+    ],
+    "delete": [],
+    "manual_review": []
+  },
+  "repo": {
+    "merge": [],
+    "replace": [],
+    "delete": [],
+    "manual_review": []
+  }
+}
