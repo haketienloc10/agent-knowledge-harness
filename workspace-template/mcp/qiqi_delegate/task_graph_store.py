@@ -38,6 +38,12 @@ def _optional_id(value: Any, label: str) -> str | None:
     return _required_id(value, label)
 
 
+def _required_revision(value: Any) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError("expected_revision must be a non-negative integer")
+    return value
+
+
 def _result_json(result: Any) -> str:
     if not isinstance(result, dict):
         raise ValueError("normalized node result must be an object")
@@ -86,6 +92,7 @@ class GraphRuntimeStore:
             CREATE TABLE IF NOT EXISTS graph_runs (
                 graph_run_id TEXT PRIMARY KEY,
                 current_wave_id TEXT,
+                revision INTEGER NOT NULL CHECK (revision >= 0),
                 created_at_ns INTEGER NOT NULL,
                 updated_at_ns INTEGER NOT NULL
             );
@@ -152,8 +159,9 @@ class GraphRuntimeStore:
         try:
             with self._connect() as conn:
                 conn.execute(
-                    "INSERT INTO graph_runs(graph_run_id, current_wave_id, created_at_ns, updated_at_ns) "
-                    "VALUES (?, NULL, ?, ?)",
+                    "INSERT INTO graph_runs("
+                    "graph_run_id, current_wave_id, revision, created_at_ns, updated_at_ns"
+                    ") VALUES (?, NULL, 0, ?, ?)",
                     (run_id, now, now),
                 )
                 conn.executemany(
@@ -180,7 +188,7 @@ class GraphRuntimeStore:
         run_id = _required_id(graph_run_id, "graph_run_id")
         with self._connect() as conn:
             row = conn.execute(
-                "SELECT graph_run_id, current_wave_id, created_at_ns, updated_at_ns "
+                "SELECT graph_run_id, current_wave_id, revision, created_at_ns, updated_at_ns "
                 "FROM graph_runs WHERE graph_run_id = ?",
                 (run_id,),
             ).fetchone()
@@ -196,14 +204,18 @@ class GraphRuntimeStore:
             ).fetchone()
         return dict(row) if row is not None else None
 
-    def load_snapshot(self, graph_run_id: str, graph: TaskGraph) -> GraphSnapshot:
+    def load_snapshot_with_revision(
+        self,
+        graph_run_id: str,
+        graph: TaskGraph,
+    ) -> tuple[GraphSnapshot, int]:
         run_id = _required_id(graph_run_id, "graph_run_id")
         if not isinstance(graph, TaskGraph):
             raise ValueError("graph must be a TaskGraph")
 
         with self._connect() as conn:
             run = conn.execute(
-                "SELECT 1 FROM graph_runs WHERE graph_run_id = ?",
+                "SELECT revision FROM graph_runs WHERE graph_run_id = ?",
                 (run_id,),
             ).fetchone()
             if run is None:
@@ -240,21 +252,38 @@ class GraphRuntimeStore:
             ),
         )
         _validated_states(snapshot)
+        return snapshot, int(run["revision"])
+
+    def load_snapshot(self, graph_run_id: str, graph: TaskGraph) -> GraphSnapshot:
+        snapshot, _ = self.load_snapshot_with_revision(graph_run_id, graph)
         return snapshot
 
-    def save_snapshot(self, graph_run_id: str, snapshot: GraphSnapshot) -> None:
+    def save_snapshot(
+        self,
+        graph_run_id: str,
+        snapshot: GraphSnapshot,
+        *,
+        expected_revision: int,
+    ) -> None:
         run_id = _required_id(graph_run_id, "graph_run_id")
+        clean_expected_revision = _required_revision(expected_revision)
         states = _validated_states(snapshot)
         now = time.time_ns()
 
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             run = conn.execute(
-                "SELECT 1 FROM graph_runs WHERE graph_run_id = ?",
+                "SELECT revision FROM graph_runs WHERE graph_run_id = ?",
                 (run_id,),
             ).fetchone()
             if run is None:
                 raise RuntimeError(f"unknown graph_run_id: {run_id!r}")
+            current_revision = int(run["revision"])
+            if current_revision != clean_expected_revision:
+                raise RuntimeError(
+                    "stale graph snapshot revision: "
+                    f"expected {clean_expected_revision}, current {current_revision}"
+                )
 
             rows = conn.execute(
                 "SELECT node_id, current_attempt_id FROM graph_node_states "
@@ -305,10 +334,13 @@ class GraphRuntimeStore:
                     for state in snapshot.node_states
                 ],
             )
-            conn.execute(
-                "UPDATE graph_runs SET updated_at_ns = ? WHERE graph_run_id = ?",
-                (now, run_id),
+            updated = conn.execute(
+                "UPDATE graph_runs SET updated_at_ns = ?, revision = revision + 1 "
+                "WHERE graph_run_id = ? AND revision = ?",
+                (now, run_id, clean_expected_revision),
             )
+            if updated.rowcount != 1:
+                raise RuntimeError("graph run revision changed while saving snapshot")
 
     def start_attempt(
         self,
@@ -329,6 +361,8 @@ class GraphRuntimeStore:
         clean_session_id = _optional_id(session_id, "session_id")
         if resume_session and clean_session_id is None:
             raise ValueError("resume_session requires an existing session_id")
+        if not resume_session and clean_session_id is not None:
+            raise ValueError("fresh START must not pre-bind a session_id")
 
         now = time.time_ns()
         with self._connect() as conn:
@@ -346,8 +380,8 @@ class GraphRuntimeStore:
                 )
 
             node = conn.execute(
-                "SELECT semantic_state, runtime_state FROM graph_node_states "
-                "WHERE graph_run_id = ? AND node_id = ?",
+                "SELECT semantic_state, runtime_state, session_id "
+                "FROM graph_node_states WHERE graph_run_id = ? AND node_id = ?",
                 (run_id, clean_node_id),
             ).fetchone()
             if node is None:
@@ -356,6 +390,15 @@ class GraphRuntimeStore:
                 raise RuntimeError(
                     f"node {clean_node_id!r} is not pending+idle and cannot start an attempt"
                 )
+            if resume_session:
+                if node["session_id"] is None:
+                    raise RuntimeError(
+                        f"node {clean_node_id!r} has no previously bound session to resume"
+                    )
+                if clean_session_id != node["session_id"]:
+                    raise RuntimeError(
+                        f"resume session does not match node {clean_node_id!r} latest session"
+                    )
 
             attempt_number = int(
                 conn.execute(
@@ -395,8 +438,8 @@ class GraphRuntimeStore:
                 (clean_attempt_id, clean_session_id, now, run_id, clean_node_id),
             )
             conn.execute(
-                "UPDATE graph_runs SET current_wave_id = ?, updated_at_ns = ? "
-                "WHERE graph_run_id = ?",
+                "UPDATE graph_runs SET current_wave_id = ?, updated_at_ns = ?, "
+                "revision = revision + 1 WHERE graph_run_id = ?",
                 (clean_wave_id, now, run_id),
             )
         return clean_attempt_id
@@ -444,7 +487,8 @@ class GraphRuntimeStore:
                 ),
             )
             conn.execute(
-                "UPDATE graph_runs SET updated_at_ns = ? WHERE graph_run_id = ?",
+                "UPDATE graph_runs SET updated_at_ns = ?, revision = revision + 1 "
+                "WHERE graph_run_id = ?",
                 (now, attempt["graph_run_id"]),
             )
 
@@ -515,7 +559,8 @@ class GraphRuntimeStore:
                 ),
             )
             conn.execute(
-                "UPDATE graph_runs SET updated_at_ns = ? WHERE graph_run_id = ?",
+                "UPDATE graph_runs SET updated_at_ns = ?, revision = revision + 1 "
+                "WHERE graph_run_id = ?",
                 (now, attempt["graph_run_id"]),
             )
 
@@ -544,8 +589,8 @@ class GraphRuntimeStore:
             if active:
                 raise RuntimeError("cannot close a wave while node attempts are running")
             conn.execute(
-                "UPDATE graph_runs SET current_wave_id = NULL, updated_at_ns = ? "
-                "WHERE graph_run_id = ?",
+                "UPDATE graph_runs SET current_wave_id = NULL, updated_at_ns = ?, "
+                "revision = revision + 1 WHERE graph_run_id = ?",
                 (now, run_id),
             )
 
