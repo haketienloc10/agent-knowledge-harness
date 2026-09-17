@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Collection
+from collections.abc import Awaitable, Callable, Collection
 from typing import Any
 
 from core import build_task_packet
@@ -13,7 +13,7 @@ from task_graph_scheduler import (
     initial_graph_snapshot,
     runnable_nodes,
 )
-from task_graph_store import GraphRuntimeStore
+from task_graph_store import GraphRuntimeStore, new_wave_id
 from task_graph_validation import validate_task_graph
 
 _GRAPH_FIELDS = frozenset({"nodes"})
@@ -22,6 +22,9 @@ _NODE_FIELDS = frozenset(
 )
 _NODE_REQUIRED_FIELDS = frozenset({"node_id", "repository", "task_packet"})
 _DECISION_FIELDS = frozenset({"node_id", "action"})
+_EXECUTION_TERMINAL_STATES = frozenset({"settled", "failed", "blocked"})
+
+RepoTaskExecutor = Callable[[GraphNode], Awaitable[dict[str, Any]]]
 
 
 def _require_object(value: Any, label: str) -> dict[str, Any]:
@@ -36,6 +39,32 @@ def _reject_extra_fields(value: dict[str, Any], allowed: Collection[str], label:
         raise ValueError(
             f"graph {label} has unsupported fields: {', '.join(extra)}"
         )
+
+
+def _required_execution_id(value: Any, label: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise RuntimeError(f"repo-task execution result {label} must be a non-empty string")
+    return value
+
+
+def _validated_execution_result(value: Any) -> dict[str, Any]:
+    """Validate the normalized result returned by the existing repo-task primitive."""
+
+    if not isinstance(value, dict):
+        raise RuntimeError("repo-task executor returned a non-object result")
+    state = value.get("state")
+    if state not in _EXECUTION_TERMINAL_STATES:
+        raise RuntimeError(
+            f"repo-task executor returned unsupported terminal state: {state!r}"
+        )
+    _required_execution_id(value.get("session_id"), "session_id")
+    _required_execution_id(value.get("turn_id"), "turn_id")
+    if "agent_response" not in value:
+        raise RuntimeError("repo-task execution result is missing agent_response")
+    response = value["agent_response"]
+    if response is not None and not isinstance(response, str):
+        raise RuntimeError("repo-task execution result agent_response must be a string or null")
+    return dict(value)
 
 
 def task_graph_from_payload(payload: Any) -> TaskGraph:
@@ -125,11 +154,12 @@ def decisions_from_payload(payload: Any) -> tuple[NodeDecision, ...]:
 
 
 class GraphRuntime:
-    """Phase-5 QiQi outer-loop API over scheduler + durable runtime state.
+    """QiQi outer-loop runtime over scheduler, persistence, and repo-task execution.
 
-    Authored TaskGraph semantics remain process-owned in Phase 5 and are not copied
-    into SQLite. Durable restart recovery of authored graph definitions is intentionally
-    deferred to the later recovery/reconciliation phase.
+    Authored TaskGraph semantics remain process-owned and are not copied into SQLite.
+    Phase 6 executes exactly one runnable repo-task per wave through an injected adapter
+    for the existing delegate_repo_task primitive. Parallel waves, selective RESUME,
+    and durable authored-graph recovery remain later phases.
     """
 
     def __init__(self, store: GraphRuntimeStore):
@@ -159,7 +189,7 @@ class GraphRuntime:
             raise RuntimeError(f"unknown graph_run_id: {graph_run_id!r}")
         raise RuntimeError(
             "graph definition is unavailable for this persisted graph_run_id; "
-            "Phase 5 restart recovery is not implemented"
+            "durable authored-graph restart recovery is not implemented"
         )
 
     def _snapshot(self, graph_run_id: str) -> tuple[TaskGraph, GraphSnapshot, int]:
@@ -208,14 +238,20 @@ class GraphRuntime:
             "authored_node_count": len(graph.nodes),
         }
 
-    def delegate_next(self, graph_run_id: str) -> dict[str, Any]:
-        """Return the deterministic next dispatch contract without executing it.
+    async def delegate_next(
+        self,
+        graph_run_id: str,
+        *,
+        executor: RepoTaskExecutor,
+    ) -> dict[str, Any]:
+        """Execute exactly one runnable repo-task and return control to QiQi.
 
-        Phase 6 connects this exact dispatch boundary to delegate_repo_task(). Phase 5
-        deliberately has no child-agent/Herdr side effect.
+        Runtime settlement remains distinct from semantic acceptance: after a settled,
+        failed, or blocked child turn the node remains semantically pending and the graph
+        becomes `awaiting_review` until QiQi submits a decision.
         """
 
-        graph, snapshot, revision = self._snapshot(graph_run_id)
+        _, snapshot, _ = self._snapshot(graph_run_id)
         graph_state = derive_graph_state(snapshot)
         if graph_state != "ready":
             raise RuntimeError(
@@ -225,16 +261,67 @@ class GraphRuntime:
         if not candidates:
             raise RuntimeError("graph is ready but has no runnable node")
         node = candidates[0]
+        if node.route is None:
+            raise RuntimeError(
+                f"runnable node {node.node_id!r} has no route for repository execution"
+            )
+        if not callable(executor):
+            raise ValueError("repo-task executor must be callable")
+
+        wave_id = new_wave_id()
+        attempt_id = self.store.start_attempt(
+            graph_run_id,
+            node.node_id,
+            wave_id,
+        )
+
+        try:
+            result = _validated_execution_result(await executor(node))
+        except Exception:
+            # Do not strand deterministic runtime state when the synchronous execution
+            # primitive fails before producing its normalized terminal result. Preserve
+            # only a generic execution fact here; the original exception still propagates
+            # through the public tool boundary without being copied into runtime history.
+            self.store.finish_attempt(
+                attempt_id,
+                runtime_state="failed",
+                result={
+                    "state": "failed",
+                    "agent_response": None,
+                    "failure_type": "executor_exception",
+                },
+            )
+            self.store.close_wave(graph_run_id, wave_id)
+            raise
+
+        self.store.finish_attempt(
+            attempt_id,
+            runtime_state=result["state"],
+            result=result,
+            session_id=result["session_id"],
+            turn_id=result["turn_id"],
+        )
+        self.store.close_wave(graph_run_id, wave_id)
+
+        current = self.get_graph(graph_run_id)
         return {
-            "graph_run_id": graph_run_id,
-            "graph_state": graph_state,
-            "revision": revision,
-            "dispatch": {
-                "node": node.as_dict(),
-                "execution_state": "planned",
-                "execution_side_effect": False,
-            },
-            "remaining_runnable_nodes": [item.node_id for item in candidates[1:]],
+            **current,
+            "wave_id": wave_id,
+            "results": [
+                {
+                    "node_id": node.node_id,
+                    "attempt_id": attempt_id,
+                    "runtime_state": result["state"],
+                    "session_id": result["session_id"],
+                    "turn_id": result["turn_id"],
+                    "agent_response": result["agent_response"],
+                    **(
+                        {"blocker_type": result["blocker_type"]}
+                        if "blocker_type" in result
+                        else {}
+                    ),
+                }
+            ],
         }
 
     def submit_decisions(
