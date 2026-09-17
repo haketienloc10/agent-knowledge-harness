@@ -172,12 +172,14 @@ async def get_graph(graph_run_id: str) -> dict[str, Any]:
 @mcp.tool()
 @_graph_public_errors
 async def delegate_next(graph_run_id: str) -> dict[str, Any]:
-    """Execute one deterministic runnable repo-task and return control to QiQi.
+    """Execute one deterministic conflict-free runnable wave and return control to QiQi.
 
-    Phase 8 prefers a pending selective retry over unrelated fresh work. A retry executes
-    a new TaskPacket snapshot and either STARTs fresh or RESUMEs the exact prior native
-    session selected by QiQi. Existing delegate_repo_task session ownership remains the
-    authoritative repository/agent continuity guard.
+    Phase 9 may execute multiple independent repositories concurrently in the same wave.
+    Pending selective retries are prioritized before unrelated fresh work; each retry still
+    uses a fresh TaskPacket snapshot and either STARTs fresh or RESUMEs the exact prior
+    native session selected by QiQi. Until repo-local worktree isolation exists, at most one
+    node per repository enters a wave. Existing delegate_repo_task repository/session
+    ownership remains the authoritative runtime conflict guard.
     """
     return await _graph_runtime.delegate_next(
         graph_run_id,
@@ -199,7 +201,8 @@ async def submit_decisions(
     set `resume_session=true` to continue the exact prior native session and may provide
     `feedback=[...]`; feedback is carried into a fresh TaskPacket snapshot through the
     existing context.claims_to_investigate contract. Omit/false `resume_session` for a
-    fresh START. `replan` still fails closed until Phase 10 graph mutation/reconciliation.
+    fresh START. Decisions remain per-node even when several nodes settled in one Phase-9
+    wave. `replan` still fails closed until Phase 10 graph mutation/reconciliation.
     """
     return _graph_runtime.submit_decisions(
         graph_run_id,
