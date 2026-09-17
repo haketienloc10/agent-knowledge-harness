@@ -45,6 +45,9 @@ def _graph_tool_error(exc: ValueError | RuntimeError) -> ToolError:
     elif "no route for repository execution" in lowered:
         code = "graph_execution_invalid"
         action = "author a non-empty route on the repo-task node before executing the graph"
+    elif "retry requested resume" in lowered:
+        code = "graph_retry_invalid"
+        action = "retry with resume_session=false unless the node has a previous native session"
     elif "not ready for delegation" in lowered or "only accepted while graph_state" in lowered:
         code = "graph_state_conflict"
         action = "follow the returned graph_state outer-loop transition before retrying"
@@ -72,7 +75,11 @@ def _delegate_context(node: GraphNode) -> TaskContextInput | None:
     return TaskContextInput(**context.as_dict())
 
 
-async def _execute_repo_task(node: GraphNode) -> dict[str, Any]:
+async def _execute_repo_task(
+    node: GraphNode,
+    *,
+    session_id: str | None,
+) -> dict[str, Any]:
     """Adapt one GraphNode back into the existing direct delegation primitive."""
 
     if node.route is None:
@@ -90,8 +97,16 @@ async def _execute_repo_task(node: GraphNode) -> dict[str, Any]:
         context=_delegate_context(node),
         constraints=list(packet.constraints),
         known_unknowns=list(packet.known_unknowns),
-        session_id=None,
+        session_id=session_id,
     )
+
+
+async def _start_repo_task(node: GraphNode) -> dict[str, Any]:
+    return await _execute_repo_task(node, session_id=None)
+
+
+async def _resume_repo_task(node: GraphNode, session_id: str) -> dict[str, Any]:
+    return await _execute_repo_task(node, session_id=session_id)
 
 
 @mcp.tool()
@@ -123,14 +138,15 @@ async def get_graph(graph_run_id: str) -> dict[str, Any]:
 async def delegate_next(graph_run_id: str) -> dict[str, Any]:
     """Execute one deterministic runnable repo-task and return control to QiQi.
 
-    Phase 6 runs exactly one node per wave through the existing `delegate_repo_task`
-    primitive. Phase 7 returns `review_required` entries containing the canonical
-    TaskPacket acceptance criteria plus persisted execution evidence for QiQi review.
-    Runtime settlement still does not satisfy the node automatically.
+    Phase 8 prefers a pending selective retry over unrelated fresh work. A retry executes
+    a new TaskPacket snapshot and either STARTs fresh or RESUMEs the exact prior native
+    session selected by QiQi. Existing delegate_repo_task session ownership remains the
+    authoritative repository/agent continuity guard.
     """
     return await _graph_runtime.delegate_next(
         graph_run_id,
-        executor=_execute_repo_task,
+        executor=_start_repo_task,
+        resume_executor=_resume_repo_task,
     )
 
 
@@ -143,11 +159,11 @@ async def submit_decisions(
 ) -> dict[str, Any]:
     """Apply QiQi per-node semantic review decisions and recompute graph state.
 
-    Supported structured actions are `accept`, `retry`, `replan`, and `block`.
-    Phase-7 `replan` fails closed by blocking the current authored graph and returning
-    `replan_required_nodes`; Phase 10 adds TaskGraph mutation/reconciliation. The
-    `expected_revision` remains the optimistic-CAS guard. Phase 8 adds selective
-    START/RESUME retry policy; Phase 7 retries still use the Phase-6 fresh START path.
+    Supported actions are `accept`, `retry`, `replan`, and `block`. For `retry`, QiQi may
+    set `resume_session=true` to continue the exact prior native session and may provide
+    `feedback=[...]`; feedback is carried into a fresh TaskPacket snapshot through the
+    existing context.claims_to_investigate contract. Omit/false `resume_session` for a
+    fresh START. `replan` still fails closed until Phase 10 graph mutation/reconciliation.
     """
     return _graph_runtime.submit_decisions(
         graph_run_id,
