@@ -126,7 +126,7 @@ class TaskGraphRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(attempts[0]["resume_session"])
         self.assertEqual(attempts[0]["result"]["agent_response"], "completed contracts")
 
-    async def test_delegate_next_executes_only_first_runnable_node_per_wave(self) -> None:
+    async def test_delegate_next_executes_all_conflict_free_runnable_nodes_per_wave(self) -> None:
         graph = TaskGraph(
             nodes=(
                 GraphNode(
@@ -156,12 +156,22 @@ class TaskGraphRuntimeTests(unittest.IsolatedAsyncioTestCase):
 
         result = await self.runtime.delegate_next(run_id, executor=executor)
 
-        self.assertEqual(calls, ["backend"])
+        self.assertEqual(calls, ["backend", "frontend"])
         self.assertEqual(result["graph_state"], "awaiting_review")
-        self.assertEqual([item["node_id"] for item in result["review_required"]], ["backend"])
-        self.assertEqual(len(self.store.list_attempts(run_id, "backend")), 1)
-        self.assertEqual(self.store.list_attempts(run_id, "frontend"), [])
-        self.assertEqual(self.store.get_node(run_id, "frontend")["runtime_state"], "idle")
+        self.assertEqual(
+            [item["node_id"] for item in result["review_required"]],
+            ["backend", "frontend"],
+        )
+        self.assertEqual(
+            [item["node_id"] for item in result["results"]],
+            ["backend", "frontend"],
+        )
+        backend_attempts = self.store.list_attempts(run_id, "backend")
+        frontend_attempts = self.store.list_attempts(run_id, "frontend")
+        self.assertEqual(len(backend_attempts), 1)
+        self.assertEqual(len(frontend_attempts), 1)
+        self.assertEqual(backend_attempts[0]["wave_id"], result["wave_id"])
+        self.assertEqual(frontend_attempts[0]["wave_id"], result["wave_id"])
 
     async def test_executor_exception_terminalizes_attempt_and_closes_wave(self) -> None:
         started = self.start()
