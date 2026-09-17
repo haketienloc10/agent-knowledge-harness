@@ -14,7 +14,7 @@ GRAPH_STATES = frozenset(
 REVIEWABLE_RUNTIME_STATES = frozenset(
     {"settled", "failed", "blocked", "awaiting_review"}
 )
-DECISION_ACTIONS = frozenset({"accept", "retry", "block"})
+DECISION_ACTIONS = frozenset({"accept", "retry", "replan", "block"})
 TERMINAL_SEMANTIC_STATES = frozenset({"satisfied", "cancelled"})
 
 
@@ -41,7 +41,7 @@ class GraphSnapshot:
 
 @dataclass(frozen=True)
 class NodeDecision:
-    """Phase-3 semantic transition for one node after reviewable runtime output."""
+    """QiQi semantic transition for one node after reviewable runtime output."""
 
     node_id: str
     action: str
@@ -179,10 +179,13 @@ def apply_decisions(
     snapshot: GraphSnapshot,
     decisions: tuple[NodeDecision, ...],
 ) -> GraphSnapshot:
-    """Apply review decisions immutably and return the next deterministic snapshot.
+    """Apply QiQi per-node review decisions immutably.
 
-    Phase 3 supports `accept`, `retry`, and `block`. `replan` changes authored
-    topology/semantics and therefore remains a later graph-mutation concern.
+    `accept` satisfies the node, `retry` returns it to pending+idle, and `block`
+    stops progress on an external/user dependency. `replan` is a fail-closed
+    Phase-7 boundary: it also blocks the current authored graph so it cannot keep
+    executing stale semantics. Phase 10 adds the graph mutation/reconciliation API
+    that will replace this blocked graph with QiQi's newly authored topology.
     """
 
     states = _state_map(snapshot)
@@ -204,7 +207,7 @@ def apply_decisions(
             raise ValueError(f"decision references unknown node {decision.node_id!r}")
         if decision.action not in DECISION_ACTIONS:
             raise ValueError(
-                f"unsupported decision action {decision.action!r} for Phase 3"
+                f"unsupported decision action {decision.action!r}"
             )
 
         current = updated[decision.node_id]
@@ -228,7 +231,7 @@ def apply_decisions(
                 semantic_state="pending",
                 runtime_state="idle",
             )
-        else:  # block
+        else:  # block | replan
             updated[decision.node_id] = replace(
                 current,
                 semantic_state="blocked",
