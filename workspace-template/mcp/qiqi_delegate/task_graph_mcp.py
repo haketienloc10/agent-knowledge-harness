@@ -114,7 +114,7 @@ async def start_graph(graph: dict[str, Any]) -> dict[str, Any]:
 @mcp.tool()
 @_graph_public_errors
 async def get_graph(graph_run_id: str) -> dict[str, Any]:
-    """Return the current execution snapshot for one graph run."""
+    """Return the current execution snapshot and any per-node review envelopes."""
     return _graph_runtime.get_graph(graph_run_id)
 
 
@@ -124,8 +124,9 @@ async def delegate_next(graph_run_id: str) -> dict[str, Any]:
     """Execute one deterministic runnable repo-task and return control to QiQi.
 
     Phase 6 runs exactly one node per wave through the existing `delegate_repo_task`
-    primitive. The child result is persisted as runtime evidence, but runtime settlement
-    does not satisfy the node: the graph returns `awaiting_review` for QiQi review.
+    primitive. Phase 7 returns `review_required` entries containing the canonical
+    TaskPacket acceptance criteria plus persisted execution evidence for QiQi review.
+    Runtime settlement still does not satisfy the node automatically.
     """
     return await _graph_runtime.delegate_next(
         graph_run_id,
@@ -140,12 +141,13 @@ async def submit_decisions(
     decisions: list[dict[str, Any]],
     expected_revision: int,
 ) -> dict[str, Any]:
-    """Apply QiQi semantic review decisions and return the recomputed graph snapshot.
+    """Apply QiQi per-node semantic review decisions and recompute graph state.
 
-    The current structured actions remain `accept`, `retry`, and `block`. `replan`
-    remains a later dynamic-graph mutation concern. `expected_revision` is an
-    optimistic-CAS guard against reviewing stale execution state. Phase 8 will add the
-    selective START/RESUME retry policy; Phase 6 always executes a fresh START.
+    Supported structured actions are `accept`, `retry`, `replan`, and `block`.
+    Phase-7 `replan` fails closed by blocking the current authored graph and returning
+    `replan_required_nodes`; Phase 10 adds TaskGraph mutation/reconciliation. The
+    `expected_revision` remains the optimistic-CAS guard. Phase 8 adds selective
+    START/RESUME retry policy; Phase 7 retries still use the Phase-6 fresh START path.
     """
     return _graph_runtime.submit_decisions(
         graph_run_id,

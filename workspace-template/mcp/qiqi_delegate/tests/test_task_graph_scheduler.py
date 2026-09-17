@@ -202,6 +202,18 @@ class TaskGraphSchedulerTests(unittest.TestCase):
         self.assertEqual(updated.node_states[0], NodeState("contracts", "blocked", "idle"))
         self.assertEqual(derive_graph_state(updated), "blocked")
 
+    def test_replan_decision_blocks_stale_authored_graph_until_mutation(self) -> None:
+        snapshot = self.snapshot_with(contracts=("pending", "settled"))
+
+        updated = apply_decisions(
+            snapshot,
+            (NodeDecision(node_id="contracts", action="replan"),),
+        )
+
+        self.assertEqual(updated.node_states[0], NodeState("contracts", "blocked", "idle"))
+        self.assertEqual(derive_graph_state(updated), "blocked")
+        self.assertEqual(runnable_nodes(updated), ())
+
     def test_apply_decisions_requires_reviewable_runtime_state(self) -> None:
         snapshot = initial_graph_snapshot(self.graph())
 
@@ -211,7 +223,7 @@ class TaskGraphSchedulerTests(unittest.TestCase):
                 (NodeDecision(node_id="contracts", action="accept"),),
             )
 
-    def test_apply_decisions_rejects_unknown_duplicate_and_replan_actions(self) -> None:
+    def test_apply_decisions_rejects_unknown_duplicate_and_invalid_actions(self) -> None:
         snapshot = self.snapshot_with(contracts=("pending", "awaiting_review"))
 
         with self.assertRaisesRegex(ValueError, "unknown node 'missing'"):
@@ -229,10 +241,10 @@ class TaskGraphSchedulerTests(unittest.TestCase):
                 ),
             )
 
-        with self.assertRaisesRegex(ValueError, "unsupported decision action 'replan'"):
+        with self.assertRaisesRegex(ValueError, "unsupported decision action 'skip'"):
             apply_decisions(
                 snapshot,
-                (NodeDecision(node_id="contracts", action="replan"),),
+                (NodeDecision(node_id="contracts", action="skip"),),
             )
 
     def test_snapshot_requires_exact_valid_node_state_set(self) -> None:

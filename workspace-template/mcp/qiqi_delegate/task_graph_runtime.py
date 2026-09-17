@@ -7,6 +7,7 @@ from typing import Any
 from core import build_task_packet
 from task_graph import GraphNode, TaskGraph
 from task_graph_scheduler import (
+    REVIEWABLE_RUNTIME_STATES,
     GraphSnapshot,
     NodeDecision,
     apply_decisions,
@@ -159,8 +160,9 @@ class GraphRuntime:
 
     Authored TaskGraph semantics remain process-owned and are not copied into SQLite.
     Phase 6 executes exactly one runnable repo-task per wave through an injected adapter
-    for the existing delegate_repo_task primitive. Parallel waves, selective RESUME,
-    and durable authored-graph recovery remain later phases.
+    for the existing delegate_repo_task primitive. Phase 7 exposes the per-node review
+    contract and structured semantic decisions. Parallel waves, selective RESUME, graph
+    mutation/reconciliation, and durable authored-graph recovery remain later phases.
     """
 
     def __init__(self, store: GraphRuntimeStore):
@@ -204,7 +206,9 @@ class GraphRuntime:
         if run is None:
             raise RuntimeError(f"unknown graph_run_id: {graph_run_id!r}")
 
+        graph_nodes = {node.node_id: node for node in graph.nodes}
         execution_nodes: list[dict[str, Any]] = []
+        review_required: list[dict[str, Any]] = []
         for state in snapshot.node_states:
             persisted = self.store.get_node(graph_run_id, state.node_id)
             if persisted is None:
@@ -217,6 +221,7 @@ class GraphRuntime:
                 if isinstance(current_attempt_id, str) and current_attempt_id
                 else None
             )
+            result = attempt.get("result") if attempt is not None else None
             execution_nodes.append(
                 {
                     "node_id": state.node_id,
@@ -225,9 +230,26 @@ class GraphRuntime:
                     "current_attempt_id": current_attempt_id,
                     "session_id": persisted.get("session_id"),
                     "turn_id": persisted.get("turn_id"),
-                    "result": attempt.get("result") if attempt is not None else None,
+                    "result": result,
                 }
             )
+
+            if (
+                state.semantic_state == "pending"
+                and state.runtime_state in REVIEWABLE_RUNTIME_STATES
+            ):
+                authored = graph_nodes[state.node_id]
+                review_required.append(
+                    {
+                        "node_id": state.node_id,
+                        "repository": authored.repository,
+                        "runtime_state": state.runtime_state,
+                        "acceptance_criteria": list(
+                            authored.task_packet.acceptance_criteria
+                        ),
+                        "result": result,
+                    }
+                )
 
         return {
             "graph_run_id": graph_run_id,
@@ -235,6 +257,7 @@ class GraphRuntime:
             "revision": revision,
             "current_wave_id": run.get("current_wave_id"),
             "runnable_nodes": [node.node_id for node in runnable_nodes(snapshot)],
+            "review_required": review_required,
             "nodes": execution_nodes,
             "authored_node_count": len(graph.nodes),
         }
@@ -374,4 +397,22 @@ class GraphRuntime:
         # `graph` is intentionally retained in the process registry; save_snapshot
         # persists only execution state.
         self._graphs[graph_run_id] = graph
-        return self.get_graph(graph_run_id)
+
+        updated_states = {state.node_id: state for state in updated.node_states}
+        current = self.get_graph(graph_run_id)
+        return {
+            **current,
+            "decision_outcomes": [
+                {
+                    "node_id": decision.node_id,
+                    "action": decision.action,
+                    "semantic_state": updated_states[decision.node_id].semantic_state,
+                }
+                for decision in decisions
+            ],
+            "replan_required_nodes": [
+                decision.node_id
+                for decision in decisions
+                if decision.action == "replan"
+            ],
+        }
