@@ -81,13 +81,19 @@ Unified installer gọi helper này tự động khi cần. Helper không tạo 
 qiqi_delegate      -> Claude local MCP scope for workspace project
 ```
 
-Claude nested repo có thể discover ancestor coordinator instructions. Vì `claudeMdExcludes` match absolute path, setup generate machine-local entry trong từng registered repo:
+Claude nested repo có thể discover ancestor coordinator instructions. Vì `claudeMdExcludes` match absolute path, setup generate machine-local project-local settings. Ordinary checkout dùng:
 
 ```text
 <repo>/.claude/settings.local.json
 ```
 
-File này chứa exclusion tới exact workspace `.claude/CLAUDE.md` và auto-memory guards, rồi được thêm vào repository Git `info/exclude`. Installer fail nếu path đó đang tracked, tránh commit machine-specific absolute path.
+Linked Git worktree dùng local settings tại **main checkout root** của repository, theo Claude Code settings resolution. Helper resolve `git rev-parse --git-common-dir`, lấy parent directory làm canonical settings root, và ghi:
+
+```text
+<main-checkout>/.claude/settings.local.json
+```
+
+File chứa exclusion tới exact workspace `.claude/CLAUDE.md` và auto-memory guards, rồi được thêm vào repository common Git `info/exclude`. Installer fail nếu `.claude/settings.local.json` đang tracked, tránh commit machine-specific absolute path.
 
 Case Codex coordinator + Claude execution agent dùng:
 
