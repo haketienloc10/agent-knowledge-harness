@@ -1,0 +1,22 @@
+{
+  "version": 37,
+  "from_ref": "5784addaecd1e4e74694e245b3da0cba235c0894",
+  "to_ref": "ad4e8dc999694dfe0c9709e993328fe128fd4786",
+  "description": "execute deterministic conflict-free multi-node TaskGraph waves concurrently while preserving per-node review and selective retry semantics",
+  "workspace": {
+    "merge": [],
+    "replace": [
+      "workspace-template/mcp/qiqi_delegate/task_graph_runtime.py",
+      "workspace-template/mcp/qiqi_delegate/task_graph_mcp.py",
+      "workspace-template/mcp/qiqi_delegate/tests/test_task_graph_parallel_wave.py"
+    ],
+    "delete": [],
+    "manual_review": []
+  },
+  "repo": {
+    "merge": [],
+    "replace": [],
+    "delete": [],
+    "manual_review": []
+  }
+}
