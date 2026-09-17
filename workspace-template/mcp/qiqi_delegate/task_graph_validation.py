@@ -117,6 +117,12 @@ def validate_task_graph(
             raise ValueError(
                 f"node {node.node_id!r} references unknown repository {node.repository!r}"
             )
+        if node.route is not None and (
+            not isinstance(node.route, str) or not node.route.strip()
+        ):
+            raise ValueError(
+                f"node {node.node_id!r} route must be a non-empty string when provided"
+            )
         if not isinstance(node.task_packet, TaskPacket):
             raise ValueError(f"repo_task node {node.node_id!r} must contain a TaskPacket")
         if not isinstance(node.depends_on, tuple):
