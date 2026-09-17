@@ -6,7 +6,14 @@ from typing import Any
 
 from mcp.server.mcpserver.exceptions import ToolError
 
-from server import STATE_DB, _load_repo_registry, mcp
+from server import (
+    STATE_DB,
+    TaskContextInput,
+    _load_repo_registry,
+    delegate_repo_task,
+    mcp,
+)
+from task_graph import GraphNode
 from task_graph_runtime import (
     GraphRuntime,
     decisions_from_payload,
@@ -34,7 +41,10 @@ def _graph_tool_error(exc: ValueError | RuntimeError) -> ToolError:
         action = "use a graph_run_id returned by start_graph"
     elif "restart recovery is not implemented" in lowered or "definition is unavailable" in lowered:
         code = "graph_definition_unavailable"
-        action = "restart the graph from the authored TaskGraph in this Phase-5 runtime"
+        action = "restart the graph from the authored TaskGraph in the current runtime"
+    elif "no route for repository execution" in lowered:
+        code = "graph_execution_invalid"
+        action = "author a non-empty route on the repo-task node before executing the graph"
     elif "not ready for delegation" in lowered or "only accepted while graph_state" in lowered:
         code = "graph_state_conflict"
         action = "follow the returned graph_state outer-loop transition before retrying"
@@ -53,6 +63,35 @@ def _graph_public_errors(func):
             raise _graph_tool_error(exc) from exc
 
     return wrapper
+
+
+def _delegate_context(node: GraphNode) -> TaskContextInput | None:
+    context = node.task_packet.context
+    if context is None:
+        return None
+    return TaskContextInput(**context.as_dict())
+
+
+async def _execute_repo_task(node: GraphNode) -> dict[str, Any]:
+    """Adapt one GraphNode back into the existing direct delegation primitive."""
+
+    if node.route is None:
+        raise RuntimeError(
+            f"runnable node {node.node_id!r} has no route for repository execution"
+        )
+    packet = node.task_packet
+    return await delegate_repo_task(
+        repository=node.repository,
+        route=node.route,
+        objective=packet.objective,
+        scope=list(packet.scope),
+        acceptance_criteria=list(packet.acceptance_criteria),
+        out_of_scope=list(packet.out_of_scope),
+        context=_delegate_context(node),
+        constraints=list(packet.constraints),
+        known_unknowns=list(packet.known_unknowns),
+        session_id=None,
+    )
 
 
 @mcp.tool()
@@ -82,13 +121,16 @@ async def get_graph(graph_run_id: str) -> dict[str, Any]:
 @mcp.tool()
 @_graph_public_errors
 async def delegate_next(graph_run_id: str) -> dict[str, Any]:
-    """Return the next deterministic repo-task dispatch while graph_state is ready.
+    """Execute one deterministic runnable repo-task and return control to QiQi.
 
-    Phase 5 intentionally performs no child-agent or Herdr execution. The returned
-    dispatch has `execution_side_effect=false`; Phase 6 connects this boundary to the
-    existing delegate_repo_task execution primitive.
+    Phase 6 runs exactly one node per wave through the existing `delegate_repo_task`
+    primitive. The child result is persisted as runtime evidence, but runtime settlement
+    does not satisfy the node: the graph returns `awaiting_review` for QiQi review.
     """
-    return _graph_runtime.delegate_next(graph_run_id)
+    return await _graph_runtime.delegate_next(
+        graph_run_id,
+        executor=_execute_repo_task,
+    )
 
 
 @mcp.tool()
@@ -100,9 +142,10 @@ async def submit_decisions(
 ) -> dict[str, Any]:
     """Apply QiQi semantic review decisions and return the recomputed graph snapshot.
 
-    Phase 5 supports the Phase-3 structured actions `accept`, `retry`, and `block`.
-    `replan` remains a later dynamic-graph mutation concern. `expected_revision` is an
-    optimistic-CAS guard against reviewing stale execution state.
+    The current structured actions remain `accept`, `retry`, and `block`. `replan`
+    remains a later dynamic-graph mutation concern. `expected_revision` is an
+    optimistic-CAS guard against reviewing stale execution state. Phase 8 will add the
+    selective START/RESUME retry policy; Phase 6 always executes a fresh START.
     """
     return _graph_runtime.submit_decisions(
         graph_run_id,
