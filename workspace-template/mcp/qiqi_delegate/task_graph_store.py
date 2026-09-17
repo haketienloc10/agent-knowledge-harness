@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 import time
@@ -59,6 +60,30 @@ def _result_json(result: Any) -> str:
         raise ValueError("normalized node result must be JSON-serializable") from exc
 
 
+def _graph_fingerprint(graph: TaskGraph) -> str:
+    if not isinstance(graph, TaskGraph):
+        raise ValueError("graph must be a TaskGraph")
+    payload = [
+        {
+            "node_id": node.node_id,
+            "kind": node.kind,
+            "repository": node.repository,
+            "route": node.route,
+            "depends_on": list(node.depends_on),
+            "task_packet_json": node.task_packet.to_json(),
+        }
+        for node in graph.nodes
+    ]
+    encoded = json.dumps(
+        payload,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+        allow_nan=False,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
 def _validated_states(snapshot: GraphSnapshot) -> dict[str, NodeState]:
     # Reuse the Phase-3 state machine as the canonical NodeState/snapshot validator.
     derive_graph_state(snapshot)
@@ -70,7 +95,8 @@ class GraphRuntimeStore:
 
     This store intentionally does not persist authored TaskGraph/TaskPacket semantics.
     Callers supply the current TaskGraph when reconstructing a GraphSnapshot, while
-    `.qiqi/state` owns run/wave/attempt/session/result execution facts.
+    `.qiqi/state` owns run/wave/attempt/session/result execution facts. A stable graph
+    fingerprint prevents runtime state from being attached to changed authored work.
     """
 
     def __init__(self, path: Path):
@@ -91,6 +117,7 @@ class GraphRuntimeStore:
             """
             CREATE TABLE IF NOT EXISTS graph_runs (
                 graph_run_id TEXT PRIMARY KEY,
+                graph_fingerprint TEXT NOT NULL,
                 current_wave_id TEXT,
                 revision INTEGER NOT NULL CHECK (revision >= 0),
                 created_at_ns INTEGER NOT NULL,
@@ -155,14 +182,16 @@ class GraphRuntimeStore:
             raise ValueError("new graph run must start without active/runtime output state")
 
         run_id = _required_id(graph_run_id or new_graph_run_id(), "graph_run_id")
+        fingerprint = _graph_fingerprint(snapshot.graph)
         now = time.time_ns()
         try:
             with self._connect() as conn:
                 conn.execute(
                     "INSERT INTO graph_runs("
-                    "graph_run_id, current_wave_id, revision, created_at_ns, updated_at_ns"
-                    ") VALUES (?, NULL, 0, ?, ?)",
-                    (run_id, now, now),
+                    "graph_run_id, graph_fingerprint, current_wave_id, revision, "
+                    "created_at_ns, updated_at_ns"
+                    ") VALUES (?, ?, NULL, 0, ?, ?)",
+                    (run_id, fingerprint, now, now),
                 )
                 conn.executemany(
                     "INSERT INTO graph_node_states("
@@ -188,8 +217,8 @@ class GraphRuntimeStore:
         run_id = _required_id(graph_run_id, "graph_run_id")
         with self._connect() as conn:
             row = conn.execute(
-                "SELECT graph_run_id, current_wave_id, revision, created_at_ns, updated_at_ns "
-                "FROM graph_runs WHERE graph_run_id = ?",
+                "SELECT graph_run_id, graph_fingerprint, current_wave_id, revision, "
+                "created_at_ns, updated_at_ns FROM graph_runs WHERE graph_run_id = ?",
                 (run_id,),
             ).fetchone()
         return dict(row) if row is not None else None
@@ -210,16 +239,17 @@ class GraphRuntimeStore:
         graph: TaskGraph,
     ) -> tuple[GraphSnapshot, int]:
         run_id = _required_id(graph_run_id, "graph_run_id")
-        if not isinstance(graph, TaskGraph):
-            raise ValueError("graph must be a TaskGraph")
+        fingerprint = _graph_fingerprint(graph)
 
         with self._connect() as conn:
             run = conn.execute(
-                "SELECT revision FROM graph_runs WHERE graph_run_id = ?",
+                "SELECT graph_fingerprint, revision FROM graph_runs WHERE graph_run_id = ?",
                 (run_id,),
             ).fetchone()
             if run is None:
                 raise RuntimeError(f"unknown graph_run_id: {run_id!r}")
+            if run["graph_fingerprint"] != fingerprint:
+                raise RuntimeError("TaskGraph semantics do not match persisted graph run")
             rows = conn.execute(
                 "SELECT node_id, semantic_state, runtime_state "
                 "FROM graph_node_states WHERE graph_run_id = ?",
@@ -268,16 +298,19 @@ class GraphRuntimeStore:
         run_id = _required_id(graph_run_id, "graph_run_id")
         clean_expected_revision = _required_revision(expected_revision)
         states = _validated_states(snapshot)
+        fingerprint = _graph_fingerprint(snapshot.graph)
         now = time.time_ns()
 
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             run = conn.execute(
-                "SELECT revision FROM graph_runs WHERE graph_run_id = ?",
+                "SELECT graph_fingerprint, revision FROM graph_runs WHERE graph_run_id = ?",
                 (run_id,),
             ).fetchone()
             if run is None:
                 raise RuntimeError(f"unknown graph_run_id: {run_id!r}")
+            if run["graph_fingerprint"] != fingerprint:
+                raise RuntimeError("TaskGraph semantics do not match persisted graph run")
             current_revision = int(run["revision"])
             if current_revision != clean_expected_revision:
                 raise RuntimeError(
@@ -373,7 +406,16 @@ class GraphRuntimeStore:
             ).fetchone()
             if run is None:
                 raise RuntimeError(f"unknown graph_run_id: {run_id!r}")
-            if run["current_wave_id"] not in {None, clean_wave_id}:
+            if run["current_wave_id"] is None:
+                reused_wave = conn.execute(
+                    "SELECT 1 FROM graph_attempts WHERE graph_run_id = ? AND wave_id = ? LIMIT 1",
+                    (run_id, clean_wave_id),
+                ).fetchone()
+                if reused_wave is not None:
+                    raise RuntimeError(
+                        f"wave_id {clean_wave_id!r} has already been used and closed"
+                    )
+            elif run["current_wave_id"] != clean_wave_id:
                 raise RuntimeError(
                     "graph run already has a different active wave: "
                     f"{run['current_wave_id']!r}"
