@@ -98,6 +98,36 @@ class TaskGraphValidationTests(unittest.TestCase):
                 repository_names={"backend", "frontend"},
             )
 
+    def test_dependency_container_must_be_tuple(self) -> None:
+        graph = TaskGraph(
+            nodes=(
+                GraphNode("a", "backend", self.packet()),
+                GraphNode("b", "backend", self.packet()),
+                GraphNode("consumer", "backend", self.packet(), depends_on="ab"),
+            )
+        )
+        with self.assertRaisesRegex(ValueError, "depends_on must be a tuple"):
+            validate_task_graph(graph, repository_names={"backend"})
+
+    def test_dependency_entries_must_be_non_empty_strings(self) -> None:
+        for dependency in ("", 1):
+            with self.subTest(dependency=dependency):
+                graph = TaskGraph(
+                    nodes=(
+                        GraphNode(
+                            "backend",
+                            "backend",
+                            self.packet(),
+                            depends_on=(dependency,),
+                        ),
+                    )
+                )
+                with self.assertRaisesRegex(
+                    ValueError,
+                    "dependencies must be non-empty strings",
+                ):
+                    validate_task_graph(graph, repository_names={"backend"})
+
     def test_repository_must_exist_in_canonical_registry_names(self) -> None:
         graph = TaskGraph(
             nodes=(GraphNode("backend", "backend", self.packet()),)
@@ -121,6 +151,42 @@ class TaskGraphValidationTests(unittest.TestCase):
         with self.assertRaisesRegex(
             ValueError,
             "invalid TaskPacket: scope must contain at least one item",
+        ):
+            validate_task_graph(graph, repository_names={"backend"})
+
+    def test_taskpacket_revalidation_preserves_falsy_optional_raw_values(self) -> None:
+        invalid_fields = ("out_of_scope", "constraints", "known_unknowns")
+        for field in invalid_fields:
+            with self.subTest(field=field):
+                kwargs = {
+                    "objective": "Implementation",
+                    "scope": ("repository-local implementation",),
+                    "acceptance_criteria": ("verification passes",),
+                    field: "",
+                }
+                invalid_packet = TaskPacket(**kwargs)
+                graph = TaskGraph(
+                    nodes=(GraphNode("backend", "backend", invalid_packet),)
+                )
+                with self.assertRaisesRegex(
+                    ValueError,
+                    rf"invalid TaskPacket: {field} must be a list of strings",
+                ):
+                    validate_task_graph(graph, repository_names={"backend"})
+
+    def test_taskpacket_revalidation_rejects_invalid_context_via_builder(self) -> None:
+        invalid_packet = TaskPacket(
+            objective="Implementation",
+            scope=("repository-local implementation",),
+            acceptance_criteria=("verification passes",),
+            context="",
+        )
+        graph = TaskGraph(
+            nodes=(GraphNode("backend", "backend", invalid_packet),)
+        )
+        with self.assertRaisesRegex(
+            ValueError,
+            "invalid TaskPacket: context must be an object",
         ):
             validate_task_graph(graph, repository_names={"backend"})
 
