@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from contextlib import ExitStack
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -20,6 +20,9 @@ class DelegateRepoTaskRegressionTests(unittest.IsolatedAsyncioTestCase):
         self.root = Path(self.temp.name)
         self.repo = self.root / "repo-a"
         self.store = SessionStore(self.root / "qiqi_delegate.sqlite3")
+        self.work_item_locator = (
+            "work_item_path=/workspace/work-items/WI-1; id=WI-1; revision=7"
+        )
 
     def tearDown(self) -> None:
         self.temp.cleanup()
@@ -47,7 +50,12 @@ class DelegateRepoTaskRegressionTests(unittest.IsolatedAsyncioTestCase):
                 "server._resolve_route",
                 return_value=(
                     "claude",
-                    {"adapter": "claude", "command": "claude"},
+                    {
+                        "adapter": "claude",
+                        "command": "claude",
+                        "start_args": ["{handoff_args}"],
+                        "resume_args": ["--resume", "{session_id}", "{handoff_args}"],
+                    },
                     {"model": "sonnet", "args": []},
                 ),
             )
@@ -73,17 +81,13 @@ class DelegateRepoTaskRegressionTests(unittest.IsolatedAsyncioTestCase):
         )
         stack.enter_context(patch("server._remove_active_capture"))
         stack.enter_context(patch("server._build_handoff_args", return_value=[]))
-        interactive_args = stack.enter_context(
-            patch("server._build_interactive_args", return_value=[])
-        )
-        mocks["interactive_args"] = interactive_args
         stack.enter_context(
             patch(
                 "server._create_herdr_workspace",
                 new=AsyncMock(return_value=("workspace-1", "pane-1")),
             )
         )
-        stack.enter_context(
+        start_interactive_agent = stack.enter_context(
             patch(
                 "server._start_interactive_agent",
                 new=AsyncMock(
@@ -91,6 +95,7 @@ class DelegateRepoTaskRegressionTests(unittest.IsolatedAsyncioTestCase):
                 ),
             )
         )
+        mocks["start_interactive_agent"] = start_interactive_agent
         stack.enter_context(
             patch("server._validate_reported_session_if_present", return_value=None)
         )
@@ -128,10 +133,7 @@ class DelegateRepoTaskRegressionTests(unittest.IsolatedAsyncioTestCase):
             context=TaskContextInput(
                 trusted_facts=[
                     {
-                        "fact": (
-                            "work_item_path=/workspace/work-items/WI-1; "
-                            "id=WI-1; revision=7"
-                        ),
+                        "fact": self.work_item_locator,
                         "source": "QiQi Work Item locator",
                     }
                 ]
@@ -156,7 +158,7 @@ class DelegateRepoTaskRegressionTests(unittest.IsolatedAsyncioTestCase):
 
         packet = json.loads(turn["task_packet_json"])
         fact = packet["context"]["trusted_facts"][0]["fact"]
-        self.assertIn("id=WI-1; revision=7", fact)
+        self.assertEqual(fact, self.work_item_locator)
         self.store.require_resume("native-session-1", "repo-a", "claude")
 
     async def test_resume_reuses_exact_native_session(self) -> None:
@@ -166,9 +168,12 @@ class DelegateRepoTaskRegressionTests(unittest.IsolatedAsyncioTestCase):
             result = await self._delegate(session_id="native-session-1")
 
         self.assertEqual(result["state"], "settled")
-        interactive_args = mocks["interactive_args"]
-        assert isinstance(interactive_args, MagicMock)
-        self.assertEqual(interactive_args.call_args.args[2], "native-session-1")
+        start_interactive_agent = mocks["start_interactive_agent"]
+        assert isinstance(start_interactive_agent, AsyncMock)
+        self.assertEqual(
+            start_interactive_agent.await_args.args,
+            ("pane-1", "claude", ["--resume", "native-session-1"]),
+        )
         self.store.require_resume("native-session-1", "repo-a", "claude")
 
     async def test_blocked_start_preserves_session_without_fake_turn_result(self) -> None:
