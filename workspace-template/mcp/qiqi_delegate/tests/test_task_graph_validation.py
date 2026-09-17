@@ -135,6 +135,25 @@ class TaskGraphValidationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unknown repository 'backend'"):
             validate_task_graph(graph, repository_names={"frontend"})
 
+    def test_route_must_be_non_empty_string_when_provided(self) -> None:
+        for route in ("", "   ", 1, {}):
+            with self.subTest(route=route):
+                graph = TaskGraph(
+                    nodes=(
+                        GraphNode(
+                            "backend",
+                            "backend",
+                            self.packet(),
+                            route=route,
+                        ),
+                    )
+                )
+                with self.assertRaisesRegex(
+                    ValueError,
+                    "route must be a non-empty string when provided",
+                ):
+                    validate_task_graph(graph, repository_names={"backend"})
+
     def test_empty_graph_has_no_executable_work_path(self) -> None:
         with self.assertRaisesRegex(ValueError, "at least one node"):
             validate_task_graph(TaskGraph(nodes=()), repository_names={"backend"})
