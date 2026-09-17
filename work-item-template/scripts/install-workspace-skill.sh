@@ -4,30 +4,70 @@ set -euo pipefail
 home="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source_skill="$home/skills/work-item"
 marker_name='.agent-knowledge-harness-managed'
+clients="both"
+workspace=""
 
 usage() {
   cat <<'EOF'
-Usage: install-workspace-skill.sh WORKSPACE
+Usage: install-workspace-skill.sh [--clients claude|codex|both] WORKSPACE
 
-Installs the managed `work-item` skill at workspace scope for both supported parent
-agents:
+Installs the managed `work-item` skill at workspace scope for the selected QiQi
+coordinator clients:
 
   WORKSPACE/.agents/skills/work-item   (Codex workspace skill)
   WORKSPACE/.claude/skills/work-item   (Claude workspace skill)
 
+Default: --clients both.
+
 The workspace must contain repos.yaml and identity.md. Repository children do not
 receive their own copy; they use TaskPacket + read-only mounted Work Item context.
 
-After both workspace targets install successfully, old user/global harness-managed
-`work-item` copies are removed. Same-name global entries without the harness managed
-marker are never deleted and cause a fail-closed error to avoid ambiguous discovery.
+After selected workspace targets install successfully, old user/global
+harness-managed `work-item` copies for those same clients are removed. Same-name
+global entries without the harness managed marker are never deleted and cause a
+fail-closed error to avoid ambiguous discovery.
 EOF
 }
 
-if [[ $# -ne 1 ]]; then
-  usage >&2
-  exit 64
-fi
+normalize_clients() {
+  case "$1" in
+    claude|codex|both) printf '%s\n' "$1" ;;
+    *) return 1 ;;
+  esac
+}
+
+while (($#)); do
+  case "$1" in
+    --clients)
+      [[ $# -ge 2 ]] || { usage >&2; exit 64; }
+      clients="$(normalize_clients "$2")" || {
+        printf 'ERROR: invalid --clients value: %s\n' "$2" >&2
+        exit 64
+      }
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    -*)
+      printf 'ERROR: unknown argument: %s\n' "$1" >&2
+      usage >&2
+      exit 64
+      ;;
+    *)
+      if [[ -n "$workspace" ]]; then
+        printf 'ERROR: unexpected extra workspace argument: %s\n' "$1" >&2
+        usage >&2
+        exit 64
+      fi
+      workspace="$1"
+      shift
+      ;;
+  esac
+done
+
+[[ -n "$workspace" ]] || { usage >&2; exit 64; }
 
 command -v python3 >/dev/null 2>&1 || {
   printf 'ERROR: missing command: python3\n' >&2
@@ -38,7 +78,7 @@ normalize_path() {
   python3 -c 'import os,sys; print(os.path.abspath(os.path.expanduser(sys.argv[1])))' "$1"
 }
 
-workspace="$(normalize_path "$1")"
+workspace="$(normalize_path "$workspace")"
 [[ -d "$workspace" ]] || {
   printf 'ERROR: workspace does not exist: %s\n' "$workspace" >&2
   exit 66
@@ -50,6 +90,11 @@ workspace="$(normalize_path "$1")"
 [[ -f "$source_skill/SKILL.md" ]] || {
   printf 'ERROR: missing source skill: %s/SKILL.md\n' "$source_skill" >&2
   exit 66
+}
+
+client_enabled() {
+  local client="$1"
+  [[ "$clients" == "both" || "$clients" == "$client" ]]
 }
 
 skill_tree_matches() {
@@ -89,7 +134,9 @@ codex_root="$workspace/.agents/skills"
 claude_root="$workspace/.claude/skills"
 codex_target="$codex_root/work-item"
 claude_target="$claude_root/work-item"
-workspace_targets=("$codex_target" "$claude_target")
+workspace_targets=()
+client_enabled codex && workspace_targets+=("$codex_target")
+client_enabled claude && workspace_targets+=("$claude_target")
 
 preflight_workspace_target() {
   local client="$1"
@@ -128,8 +175,7 @@ add_legacy_target() {
     fi
   done
   local existing
-  for existing in "${legacy_global_targets[@]:-}"; do
-    [[ -n "$existing" ]] || continue
+  for existing in "${legacy_global_targets[@]}"; do
     if same_path "$target" "$existing"; then
       return 0
     fi
@@ -137,11 +183,15 @@ add_legacy_target() {
   legacy_global_targets+=("$target")
 }
 
-# Historical harness releases used user/global skill roots. Keep these only as
-# cleanup candidates; the runtime installation is workspace-scoped.
-add_legacy_target "$HOME/.agents/skills/work-item"
-add_legacy_target "${CODEX_HOME:-$HOME/.codex}/skills/work-item"
-add_legacy_target "$HOME/.claude/skills/work-item"
+# Historical harness releases used user/global skill roots. Only selected clients
+# are cleanup candidates; reconfiguring Codex must not mutate Claude state or vice versa.
+if client_enabled codex; then
+  add_legacy_target "$HOME/.agents/skills/work-item"
+  add_legacy_target "${CODEX_HOME:-$HOME/.codex}/skills/work-item"
+fi
+if client_enabled claude; then
+  add_legacy_target "$HOME/.claude/skills/work-item"
+fi
 
 preflight_legacy_global() {
   local target="$1"
@@ -159,11 +209,13 @@ preflight_legacy_global() {
   fi
 }
 
-# Preflight all workspace and legacy-global surfaces before the first mutation.
-preflight_workspace_target 'Codex' "$codex_target"
-preflight_workspace_target 'Claude' "$claude_target"
-for target in "${legacy_global_targets[@]:-}"; do
-  [[ -n "$target" ]] || continue
+if client_enabled codex; then
+  preflight_workspace_target 'Codex' "$codex_target"
+fi
+if client_enabled claude; then
+  preflight_workspace_target 'Claude' "$claude_target"
+fi
+for target in "${legacy_global_targets[@]}"; do
   preflight_legacy_global "$target"
 done
 
@@ -177,7 +229,6 @@ install_target() {
   mkdir -p "$root"
 
   if [[ -d "$target" && ! -f "$marker" ]]; then
-    # Preflight proved this unmanaged workspace tree is byte-identical to source.
     printf 'Adopting existing identical %s workspace skill tree: %s\n' "$client" "$target"
     : > "$marker"
     return 0
@@ -197,17 +248,19 @@ install_target() {
   printf '%s workspace skill installed: %s/SKILL.md\n' "$client" "$target"
 }
 
-install_target 'Codex' "$codex_target"
-install_target 'Claude' "$claude_target"
+if client_enabled codex; then
+  install_target 'Codex' "$codex_target"
+fi
+if client_enabled claude; then
+  install_target 'Claude' "$claude_target"
+fi
 
-# Cleanup happens only after both workspace installs succeed, and only for copies
-# explicitly marked as harness-managed.
-for target in "${legacy_global_targets[@]:-}"; do
-  [[ -n "$target" ]] || continue
+for target in "${legacy_global_targets[@]}"; do
   if [[ -d "$target" && -f "$target/$marker_name" ]]; then
     rm -rf "$target"
     printf 'Removed legacy global harness-managed Work Item skill: %s\n' "$target"
   fi
 done
 
+printf 'Work Item workspace skill configured for: %s\n' "$clients"
 printf 'Open a fresh QiQi parent session from the workspace root so workspace skill discovery refreshes.\n'
