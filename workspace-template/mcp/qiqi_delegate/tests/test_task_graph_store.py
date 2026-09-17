@@ -94,12 +94,14 @@ class TaskGraphRuntimeStoreTests(unittest.TestCase):
         self.assertIsNotNone(run)
         self.assertEqual(run["graph_run_id"], run_id)
         self.assertIsNone(run["current_wave_id"])
+        self.assertEqual(run["revision"], 0)
         self.assertNotIn("graph_json", run)
         self.assertNotIn("task_packet_json", run)
 
-        loaded = self.store.load_snapshot(run_id, graph)
+        loaded, revision = self.store.load_snapshot_with_revision(run_id, graph)
         self.assertIs(loaded.graph, graph)
         self.assertEqual(loaded, initial_graph_snapshot(graph))
+        self.assertEqual(revision, 0)
         self.assertEqual(derive_graph_state(loaded), "ready")
 
     def test_runtime_store_can_share_the_existing_qiqi_delegate_sqlite_database(self) -> None:
@@ -170,12 +172,12 @@ class TaskGraphRuntimeStoreTests(unittest.TestCase):
         attempt_id = self.finish_contracts_attempt(run_id)
         self.store.close_wave(run_id, "wave-1")
 
-        reviewable = self.store.load_snapshot(run_id, graph)
+        reviewable, revision = self.store.load_snapshot_with_revision(run_id, graph)
         accepted = apply_decisions(
             reviewable,
             (NodeDecision(node_id="contracts", action="accept"),),
         )
-        self.store.save_snapshot(run_id, accepted)
+        self.store.save_snapshot(run_id, accepted, expected_revision=revision)
 
         loaded = self.store.load_snapshot(run_id, graph)
         contracts = next(state for state in loaded.node_states if state.node_id == "contracts")
@@ -198,12 +200,12 @@ class TaskGraphRuntimeStoreTests(unittest.TestCase):
         )
         self.store.close_wave(run_id, "wave-1")
 
-        reviewable = self.store.load_snapshot(run_id, graph)
+        reviewable, revision = self.store.load_snapshot_with_revision(run_id, graph)
         retried = apply_decisions(
             reviewable,
             (NodeDecision(node_id="contracts", action="retry"),),
         )
-        self.store.save_snapshot(run_id, retried)
+        self.store.save_snapshot(run_id, retried, expected_revision=revision)
 
         second_attempt = self.store.start_attempt(
             run_id,
@@ -222,8 +224,8 @@ class TaskGraphRuntimeStoreTests(unittest.TestCase):
         self.assertEqual(attempts[0]["result"]["state"], "failed")
         self.assertIsNone(attempts[1]["result"])
 
-    def test_resume_requires_explicit_session_and_session_identity_cannot_change(self) -> None:
-        run_id, _ = self.create_run()
+    def test_resume_requires_exact_previous_node_session(self) -> None:
+        run_id, graph = self.create_run()
 
         with self.assertRaisesRegex(ValueError, "resume_session requires"):
             self.store.start_attempt(
@@ -232,7 +234,47 @@ class TaskGraphRuntimeStoreTests(unittest.TestCase):
                 "wave-1",
                 resume_session=True,
             )
+        with self.assertRaisesRegex(ValueError, "fresh START must not pre-bind"):
+            self.store.start_attempt(
+                run_id,
+                "contracts",
+                "wave-1",
+                session_id="unbound-session",
+            )
 
+        first_attempt = self.finish_contracts_attempt(
+            run_id,
+            runtime_state="failed",
+        )
+        self.assertIsNotNone(first_attempt)
+        self.store.close_wave(run_id, "wave-1")
+        reviewable, revision = self.store.load_snapshot_with_revision(run_id, graph)
+        retried = apply_decisions(
+            reviewable,
+            (NodeDecision(node_id="contracts", action="retry"),),
+        )
+        self.store.save_snapshot(run_id, retried, expected_revision=revision)
+
+        with self.assertRaisesRegex(RuntimeError, "resume session does not match"):
+            self.store.start_attempt(
+                run_id,
+                "contracts",
+                "wave-2",
+                resume_session=True,
+                session_id="session-2",
+            )
+
+        resumed = self.store.start_attempt(
+            run_id,
+            "contracts",
+            "wave-2",
+            resume_session=True,
+            session_id="session-1",
+        )
+        self.assertEqual(self.store.get_attempt(resumed)["session_id"], "session-1")
+
+    def test_bound_session_identity_cannot_change(self) -> None:
+        run_id, _ = self.create_run()
         attempt_id = self.store.start_attempt(run_id, "contracts", "wave-1")
         self.store.bind_attempt_session(attempt_id, "session-1")
         with self.assertRaisesRegex(RuntimeError, "session identity cannot change"):
@@ -245,9 +287,29 @@ class TaskGraphRuntimeStoreTests(unittest.TestCase):
                 result={"state": "settled"},
             )
 
+    def test_stale_snapshot_cannot_erase_completed_attempt_state(self) -> None:
+        run_id, graph = self.create_run()
+        stale_snapshot, stale_revision = self.store.load_snapshot_with_revision(run_id, graph)
+
+        self.finish_contracts_attempt(run_id)
+        self.store.close_wave(run_id, "wave-1")
+
+        with self.assertRaisesRegex(RuntimeError, "stale graph snapshot revision"):
+            self.store.save_snapshot(
+                run_id,
+                stale_snapshot,
+                expected_revision=stale_revision,
+            )
+
+        persisted = self.store.load_snapshot(run_id, graph)
+        contracts = next(state for state in persisted.node_states if state.node_id == "contracts")
+        self.assertEqual(contracts, NodeState("contracts", "pending", "settled"))
+        self.assertEqual(derive_graph_state(persisted), "awaiting_review")
+
     def test_store_rejects_state_that_would_desynchronize_an_active_attempt(self) -> None:
         run_id, graph = self.create_run()
         self.store.start_attempt(run_id, "contracts", "wave-1")
+        revision = self.store.get_run(run_id)["revision"]
 
         inconsistent = GraphSnapshot(
             graph=graph,
@@ -257,7 +319,11 @@ class TaskGraphRuntimeStoreTests(unittest.TestCase):
             ),
         )
         with self.assertRaisesRegex(RuntimeError, "has a running attempt"):
-            self.store.save_snapshot(run_id, inconsistent)
+            self.store.save_snapshot(
+                run_id,
+                inconsistent,
+                expected_revision=revision,
+            )
 
     def test_load_snapshot_requires_the_same_authored_node_set(self) -> None:
         run_id, _ = self.create_run()
