@@ -1,0 +1,25 @@
+{
+  "version": 35,
+  "from_ref": "e161acbdbfaa4ae15c479a8a3f7bd2521199cce7",
+  "to_ref": "56d9e1a1b23f5158141e9bd130ef611a388c3795",
+  "description": "expose QiQi per-node review envelopes and structured accept/retry/replan/block semantic transitions while deferring graph mutation and selective RESUME",
+  "workspace": {
+    "merge": [],
+    "replace": [
+      "workspace-template/mcp/qiqi_delegate/task_graph_scheduler.py",
+      "workspace-template/mcp/qiqi_delegate/task_graph_runtime.py",
+      "workspace-template/mcp/qiqi_delegate/task_graph_mcp.py",
+      "workspace-template/mcp/qiqi_delegate/tests/test_task_graph_scheduler.py",
+      "workspace-template/mcp/qiqi_delegate/tests/test_task_graph_runtime.py",
+      "workspace-template/mcp/qiqi_delegate/tests/test_task_graph_mcp.py"
+    ],
+    "delete": [],
+    "manual_review": []
+  },
+  "repo": {
+    "merge": [],
+    "replace": [],
+    "delete": [],
+    "manual_review": []
+  }
+}
