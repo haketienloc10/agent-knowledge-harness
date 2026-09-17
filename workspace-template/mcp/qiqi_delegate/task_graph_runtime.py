@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Awaitable, Callable, Collection
 from typing import Any
 
@@ -277,6 +278,21 @@ class GraphRuntime:
 
         try:
             result = _validated_execution_result(await executor(node))
+        except asyncio.CancelledError:
+            # Cancellation bypasses `except Exception` on supported Python versions.
+            # Persist a terminal runtime fact and close the wave before propagating the
+            # cancellation so the graph cannot be stranded permanently in `running`.
+            self.store.finish_attempt(
+                attempt_id,
+                runtime_state="failed",
+                result={
+                    "state": "failed",
+                    "agent_response": None,
+                    "failure_type": "execution_cancelled",
+                },
+            )
+            self.store.close_wave(graph_run_id, wave_id)
+            raise
         except Exception:
             # Do not strand deterministic runtime state when the synchronous execution
             # primitive fails before producing its normalized terminal result. Preserve
