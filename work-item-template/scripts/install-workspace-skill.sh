@@ -209,6 +209,7 @@ preflight_legacy_global() {
   fi
 }
 
+# Preflight all workspace and legacy-global surfaces before the first mutation.
 if client_enabled codex; then
   preflight_workspace_target 'Codex' "$codex_target"
 fi
