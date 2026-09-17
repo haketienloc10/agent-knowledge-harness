@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import tempfile
 import unittest
 from pathlib import Path
@@ -162,6 +163,25 @@ class TaskGraphRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(attempts[0]["runtime_state"], "failed")
         self.assertEqual(attempts[0]["result"]["failure_type"], "executor_exception")
         self.assertNotIn("executor exploded", str(attempts[0]["result"]))
+
+    async def test_executor_cancellation_terminalizes_attempt_and_closes_wave(self) -> None:
+        started = self.start()
+        run_id = started["graph_run_id"]
+
+        async def executor(_: GraphNode) -> dict:
+            raise asyncio.CancelledError()
+
+        with self.assertRaises(asyncio.CancelledError):
+            await self.runtime.delegate_next(run_id, executor=executor)
+
+        current = self.runtime.get_graph(run_id)
+        attempts = self.store.list_attempts(run_id, "contracts")
+        self.assertEqual(current["graph_state"], "awaiting_review")
+        self.assertIsNone(current["current_wave_id"])
+        self.assertEqual(current["nodes"][0]["runtime_state"], "failed")
+        self.assertEqual(len(attempts), 1)
+        self.assertEqual(attempts[0]["runtime_state"], "failed")
+        self.assertEqual(attempts[0]["result"]["failure_type"], "execution_cancelled")
 
     async def test_delegate_next_requires_route_before_starting_attempt(self) -> None:
         graph = TaskGraph(
