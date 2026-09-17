@@ -67,10 +67,16 @@ Hai guard giữ hidden Claude auto-memory ngoài Sources of Truth của QiQi. Ex
 
 Claude launched từ nested repository có thể discover ancestor workspace coordinator instructions. Vì `claudeMdExcludes` match absolute path, không commit exclusion vào repo source.
 
-`setup-claude.sh` đọc every concrete `repos.yaml` path và generate:
+`setup-claude.sh` đọc every concrete `repos.yaml` path và generate machine-local project settings. Với ordinary checkout, path là:
 
 ```text
 <repo>/.claude/settings.local.json
+```
+
+Với linked Git worktree, Claude Code đọc project-local settings tại **main checkout root** của repository, nên helper resolve `git rev-parse --git-common-dir` và ghi:
+
+```text
+<main-checkout>/.claude/settings.local.json
 ```
 
 Ví dụ runtime value:
@@ -87,7 +93,7 @@ Ví dụ runtime value:
 }
 ```
 
-Machine-local file được thêm vào repository Git `info/exclude`. Helper dùng `git rev-parse --git-path info/exclude`, nên linked worktree cũng dùng đúng Git metadata path. Nếu `.claude/settings.local.json` đang tracked, installer fail thay vì ghi absolute machine path vào source control.
+Machine-local file được thêm vào repository common Git `info/exclude`. Nếu `.claude/settings.local.json` đang tracked, installer fail thay vì ghi absolute machine path vào source control.
 
 ## Codex coordinator + Claude execution agent
 
@@ -116,9 +122,9 @@ Claude QiQi @ workspace root
 ├── Knowledge           user scope when selected
 └── Work Item           workspace filesystem + workspace skill
 
-Claude child @ exact repository Git root
+Claude child @ exact repository Git root/worktree
 ├── repo-local CLAUDE.md / AGENTS.md
-├── .claude/settings.local.json (machine-local)
+├── canonical .claude/settings.local.json (machine-local; main checkout for worktrees)
 ├── workspace coordinator CLAUDE.md excluded
 ├── auto-memory disabled
 ├── no workspace-local qiqi_delegate registration
@@ -145,6 +151,6 @@ cd /absolute/path/to/workspace/path/from/repos.yaml
 claude
 ```
 
-`/memory` không được load workspace `.claude/CLAUDE.md`/QiQi coordinator policy và auto-memory phải off.
+`/memory` không được load workspace `.claude/CLAUDE.md`/QiQi coordinator policy và auto-memory phải off. Với linked worktree, verify canonical local settings file nằm ở main checkout root như Claude Code settings resolution quy định.
 
 Cuối cùng delegate một read-only task từ QiQi qua route Claude để verify Herdr integration, exact repo root, Work Item additional-dir mount và native final-response capture vẫn hoạt động trên current qiqi_delegate implementation.
