@@ -84,7 +84,7 @@ class TaskGraphMcpTests(unittest.IsolatedAsyncioTestCase):
             }.issubset(names)
         )
 
-    async def test_outer_loop_executes_one_node_through_existing_delegate_primitive(self) -> None:
+    async def test_outer_loop_executes_reviews_and_accepts_one_node(self) -> None:
         delegate = AsyncMock(
             return_value={
                 "session_id": "native-session-contracts",
@@ -101,6 +101,7 @@ class TaskGraphMcpTests(unittest.IsolatedAsyncioTestCase):
                 run_id = started["graph_run_id"]
                 self.assertEqual(started["graph_state"], "ready")
                 self.assertEqual(started["runnable_nodes"], ["contracts"])
+                self.assertEqual(started["review_required"], [])
 
                 delegated_result = await client.call_tool(
                     "delegate_next", {"graph_run_id": run_id}
@@ -113,8 +114,12 @@ class TaskGraphMcpTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(delegated["results"][0]["node_id"], "contracts")
                 self.assertEqual(delegated["results"][0]["runtime_state"], "settled")
                 self.assertEqual(
-                    delegated["results"][0]["session_id"],
-                    "native-session-contracts",
+                    delegated["review_required"][0]["acceptance_criteria"],
+                    ["contract verification passes"],
+                )
+                self.assertEqual(
+                    delegated["review_required"][0]["result"]["agent_response"],
+                    "native final response",
                 )
 
                 current_result = await client.call_tool(
@@ -123,10 +128,7 @@ class TaskGraphMcpTests(unittest.IsolatedAsyncioTestCase):
                 current = current_result.structured_content
                 self.assertEqual(current["graph_state"], "awaiting_review")
                 self.assertEqual(current["nodes"][0]["runtime_state"], "settled")
-                self.assertEqual(
-                    current["nodes"][0]["result"]["agent_response"],
-                    "native final response",
-                )
+                self.assertEqual([item["node_id"] for item in current["review_required"]], ["contracts"])
 
                 decided_result = await client.call_tool(
                     "submit_decisions",
@@ -140,6 +142,17 @@ class TaskGraphMcpTests(unittest.IsolatedAsyncioTestCase):
                 decided = decided_result.structured_content
                 self.assertEqual(decided["graph_state"], "ready")
                 self.assertEqual(decided["runnable_nodes"], ["backend"])
+                self.assertEqual(decided["review_required"], [])
+                self.assertEqual(
+                    decided["decision_outcomes"],
+                    [
+                        {
+                            "node_id": "contracts",
+                            "action": "accept",
+                            "semantic_state": "satisfied",
+                        }
+                    ],
+                )
 
         delegate.assert_awaited_once_with(
             repository="contracts",
@@ -153,6 +166,41 @@ class TaskGraphMcpTests(unittest.IsolatedAsyncioTestCase):
             known_unknowns=[],
             session_id=None,
         )
+
+    async def test_replan_decision_blocks_current_graph_and_returns_handoff_signal(self) -> None:
+        delegate = AsyncMock(
+            return_value={
+                "session_id": "native-session-contracts",
+                "turn_id": "qiqi-turn-contracts",
+                "state": "settled",
+                "agent_response": "discovered a new authoritative dependency",
+            }
+        )
+        with patch("task_graph_mcp.delegate_repo_task", delegate):
+            async with Client(mcp) as client:
+                started = (
+                    await client.call_tool("start_graph", {"graph": graph_payload()})
+                ).structured_content
+                reviewable = (
+                    await client.call_tool(
+                        "delegate_next", {"graph_run_id": started["graph_run_id"]}
+                    )
+                ).structured_content
+                result = await client.call_tool(
+                    "submit_decisions",
+                    {
+                        "graph_run_id": started["graph_run_id"],
+                        "decisions": [{"node_id": "contracts", "action": "replan"}],
+                        "expected_revision": reviewable["revision"],
+                    },
+                )
+
+        self.assertFalse(result.is_error)
+        payload = result.structured_content
+        self.assertEqual(payload["graph_state"], "blocked")
+        self.assertEqual(payload["replan_required_nodes"], ["contracts"])
+        self.assertEqual(payload["nodes"][0]["semantic_state"], "blocked")
+        self.assertEqual(payload["review_required"], [])
 
     async def test_blocked_direct_result_is_persisted_for_qiqi_review(self) -> None:
         delegate = AsyncMock(
@@ -178,6 +226,7 @@ class TaskGraphMcpTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload["graph_state"], "awaiting_review")
         self.assertEqual(payload["results"][0]["runtime_state"], "blocked")
         self.assertEqual(payload["results"][0]["blocker_type"], "agent_blocked")
+        self.assertEqual(payload["review_required"][0]["runtime_state"], "blocked")
 
     async def test_missing_execution_route_is_model_visible_and_starts_no_attempt(self) -> None:
         graph = graph_payload()
