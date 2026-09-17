@@ -1,0 +1,25 @@
+{
+  "version": 33,
+  "from_ref": "01d2d066915795ac0003f7c9e8899990fdbb704f",
+  "to_ref": "052d5d79671ee3a65c7d296f247e6391aab2a22c",
+  "description": "expose the Phase-5 TaskGraph outer-loop MCP contract for start/get/next/review while keeping repository execution deferred to Phase 6",
+  "workspace": {
+    "merge": [],
+    "replace": [
+      "workspace-template/.codex/config.toml",
+      "workspace-template/mcp/qiqi_delegate/task_graph_runtime.py",
+      "workspace-template/mcp/qiqi_delegate/task_graph_mcp.py",
+      "workspace-template/mcp/qiqi_delegate/tests/test_task_graph_runtime.py",
+      "workspace-template/mcp/qiqi_delegate/tests/test_task_graph_mcp.py",
+      "workspace-template/scripts/qiqi-mcp-server.sh"
+    ],
+    "delete": [],
+    "manual_review": []
+  },
+  "repo": {
+    "merge": [],
+    "replace": [],
+    "delete": [],
+    "manual_review": []
+  }
+}
