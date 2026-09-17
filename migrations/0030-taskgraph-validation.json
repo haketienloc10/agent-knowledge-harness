@@ -1,7 +1,7 @@
 {
   "version": 30,
   "from_ref": "5fd908b73479d50a6a958377dd272a3b4648c521",
-  "to_ref": "24c402c618ee5374ee68ec40dd767a41680159e0",
+  "to_ref": "bca57fcece7630e053ee7ca3e9bff9b4970172d9",
   "description": "add deterministic TaskGraph validation for graph-specific invariants while reusing the existing TaskPacket validation path",
   "workspace": {
     "merge": [],
