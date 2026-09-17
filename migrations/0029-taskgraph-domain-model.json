@@ -1,0 +1,21 @@
+{
+  "version": 29,
+  "from_ref": "57e016be836f2af762111dbf8ce63575d9335dae",
+  "to_ref": "eb140c097d2b9f369e48cbc5b14aeb89716869ec",
+  "description": "materialize the Phase 1 TaskGraph domain model and its contract tests into upgraded workspaces while preserving the existing TaskPacket as the canonical delegated-task schema",
+  "workspace": {
+    "merge": [],
+    "replace": [
+      "workspace-template/mcp/qiqi_delegate/task_graph.py",
+      "workspace-template/mcp/qiqi_delegate/tests/test_task_graph.py"
+    ],
+    "delete": [],
+    "manual_review": []
+  },
+  "repo": {
+    "merge": [],
+    "replace": [],
+    "delete": [],
+    "manual_review": []
+  }
+}
