@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import tempfile
 import unittest
 from pathlib import Path
@@ -14,7 +15,7 @@ from task_graph_runtime import (
 from task_graph_store import GraphRuntimeStore
 
 
-class TaskGraphRuntimeTests(unittest.TestCase):
+class TaskGraphRuntimeTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
         self.db_path = Path(self.temp.name) / ".qiqi" / "state" / "qiqi_delegate.sqlite3"
@@ -38,12 +39,14 @@ class TaskGraphRuntimeTests(unittest.TestCase):
                     node_id="contracts",
                     repository="contracts",
                     task_packet=self.packet("Update shared contract."),
+                    route="codex-balanced",
                 ),
                 GraphNode(
                     node_id="backend",
                     repository="backend",
                     task_packet=self.packet("Update backend consumer."),
                     depends_on=("contracts",),
+                    route="codex-balanced",
                 ),
             )
         )
@@ -53,6 +56,14 @@ class TaskGraphRuntimeTests(unittest.TestCase):
             self.graph(),
             repository_names={"contracts", "backend"},
         )
+
+    async def settled_executor(self, node: GraphNode) -> dict:
+        return {
+            "session_id": f"session-{node.node_id}",
+            "turn_id": f"turn-{node.node_id}",
+            "state": "settled",
+            "agent_response": f"completed {node.node_id}",
+        }
 
     def test_start_graph_returns_ready_outer_loop_snapshot(self) -> None:
         started = self.start()
@@ -67,38 +78,132 @@ class TaskGraphRuntimeTests(unittest.TestCase):
             ["pending", "pending"],
         )
 
-    def test_delegate_next_is_deterministic_dispatch_only_in_phase_5(self) -> None:
+    async def test_delegate_next_executes_one_node_and_persists_terminal_result(self) -> None:
         started = self.start()
         run_id = started["graph_run_id"]
+        calls: list[str] = []
 
-        dispatch = self.runtime.delegate_next(run_id)
-        after = self.runtime.get_graph(run_id)
+        async def executor(node: GraphNode) -> dict:
+            calls.append(node.node_id)
+            return await self.settled_executor(node)
 
-        self.assertEqual(dispatch["graph_state"], "ready")
-        self.assertEqual(dispatch["revision"], started["revision"])
-        self.assertEqual(dispatch["dispatch"]["node"]["node_id"], "contracts")
-        self.assertEqual(dispatch["dispatch"]["execution_state"], "planned")
-        self.assertFalse(dispatch["dispatch"]["execution_side_effect"])
-        self.assertEqual(after["revision"], started["revision"])
-        self.assertEqual(after["graph_state"], "ready")
-        self.assertIsNone(after["nodes"][0]["current_attempt_id"])
+        result = await self.runtime.delegate_next(run_id, executor=executor)
+        persisted = self.store.get_node(run_id, "contracts")
+        attempts = self.store.list_attempts(run_id, "contracts")
 
-    def test_submit_decisions_returns_control_to_ready_state(self) -> None:
-        started = self.start()
-        run_id = started["graph_run_id"]
+        self.assertEqual(calls, ["contracts"])
+        self.assertEqual(result["graph_state"], "awaiting_review")
+        self.assertIsNone(result["current_wave_id"])
+        self.assertTrue(result["wave_id"])
+        self.assertEqual(len(result["results"]), 1)
+        self.assertEqual(result["results"][0]["node_id"], "contracts")
+        self.assertEqual(result["results"][0]["runtime_state"], "settled")
+        self.assertEqual(result["results"][0]["session_id"], "session-contracts")
+        self.assertEqual(result["results"][0]["turn_id"], "turn-contracts")
+        self.assertEqual(persisted["runtime_state"], "settled")
+        self.assertEqual(persisted["session_id"], "session-contracts")
+        self.assertEqual(persisted["turn_id"], "turn-contracts")
+        self.assertEqual(len(attempts), 1)
+        self.assertEqual(attempts[0]["wave_id"], result["wave_id"])
+        self.assertFalse(attempts[0]["resume_session"])
+        self.assertEqual(attempts[0]["result"]["agent_response"], "completed contracts")
 
-        attempt_id = self.store.start_attempt(run_id, "contracts", "wave-1")
-        self.store.finish_attempt(
-            attempt_id,
-            runtime_state="settled",
-            result={
-                "state": "settled",
-                "agent_response": "native final response",
-            },
+    async def test_delegate_next_executes_only_first_runnable_node_per_wave(self) -> None:
+        graph = TaskGraph(
+            nodes=(
+                GraphNode(
+                    "backend",
+                    "backend",
+                    self.packet("Backend work."),
+                    route="codex-balanced",
+                ),
+                GraphNode(
+                    "frontend",
+                    "frontend",
+                    self.packet("Frontend work."),
+                    route="codex-balanced",
+                ),
+            )
         )
-        self.store.close_wave(run_id, "wave-1")
+        started = self.runtime.start_graph(
+            graph,
+            repository_names={"backend", "frontend"},
+        )
+        run_id = started["graph_run_id"]
+        calls: list[str] = []
 
-        reviewable = self.runtime.get_graph(run_id)
+        async def executor(node: GraphNode) -> dict:
+            calls.append(node.node_id)
+            return await self.settled_executor(node)
+
+        result = await self.runtime.delegate_next(run_id, executor=executor)
+
+        self.assertEqual(calls, ["backend"])
+        self.assertEqual(result["graph_state"], "awaiting_review")
+        self.assertEqual(len(self.store.list_attempts(run_id, "backend")), 1)
+        self.assertEqual(self.store.list_attempts(run_id, "frontend"), [])
+        self.assertEqual(self.store.get_node(run_id, "frontend")["runtime_state"], "idle")
+
+    async def test_executor_exception_terminalizes_attempt_and_closes_wave(self) -> None:
+        started = self.start()
+        run_id = started["graph_run_id"]
+
+        async def executor(_: GraphNode) -> dict:
+            raise RuntimeError("executor exploded")
+
+        with self.assertRaisesRegex(RuntimeError, "executor exploded"):
+            await self.runtime.delegate_next(run_id, executor=executor)
+
+        current = self.runtime.get_graph(run_id)
+        attempts = self.store.list_attempts(run_id, "contracts")
+        self.assertEqual(current["graph_state"], "awaiting_review")
+        self.assertIsNone(current["current_wave_id"])
+        self.assertEqual(current["nodes"][0]["runtime_state"], "failed")
+        self.assertEqual(len(attempts), 1)
+        self.assertEqual(attempts[0]["runtime_state"], "failed")
+        self.assertEqual(attempts[0]["result"]["failure_type"], "executor_exception")
+        self.assertNotIn("executor exploded", str(attempts[0]["result"]))
+
+    async def test_executor_cancellation_terminalizes_attempt_and_closes_wave(self) -> None:
+        started = self.start()
+        run_id = started["graph_run_id"]
+
+        async def executor(_: GraphNode) -> dict:
+            raise asyncio.CancelledError()
+
+        with self.assertRaises(asyncio.CancelledError):
+            await self.runtime.delegate_next(run_id, executor=executor)
+
+        current = self.runtime.get_graph(run_id)
+        attempts = self.store.list_attempts(run_id, "contracts")
+        self.assertEqual(current["graph_state"], "awaiting_review")
+        self.assertIsNone(current["current_wave_id"])
+        self.assertEqual(current["nodes"][0]["runtime_state"], "failed")
+        self.assertEqual(len(attempts), 1)
+        self.assertEqual(attempts[0]["runtime_state"], "failed")
+        self.assertEqual(attempts[0]["result"]["failure_type"], "execution_cancelled")
+
+    async def test_delegate_next_requires_route_before_starting_attempt(self) -> None:
+        graph = TaskGraph(
+            nodes=(GraphNode("backend", "backend", self.packet("Backend work.")),)
+        )
+        started = self.runtime.start_graph(graph, repository_names={"backend"})
+        run_id = started["graph_run_id"]
+
+        with self.assertRaisesRegex(RuntimeError, "has no route"):
+            await self.runtime.delegate_next(run_id, executor=self.settled_executor)
+
+        self.assertEqual(self.store.list_attempts(run_id, "backend"), [])
+        self.assertEqual(self.runtime.get_graph(run_id)["graph_state"], "ready")
+
+    async def test_submit_decisions_returns_control_to_ready_state(self) -> None:
+        started = self.start()
+        run_id = started["graph_run_id"]
+        reviewable = await self.runtime.delegate_next(
+            run_id,
+            executor=self.settled_executor,
+        )
+
         self.assertEqual(reviewable["graph_state"], "awaiting_review")
         self.assertEqual(reviewable["nodes"][0]["result"]["state"], "settled")
 
@@ -115,16 +220,19 @@ class TaskGraphRuntimeTests(unittest.TestCase):
         self.assertEqual(updated["nodes"][0]["semantic_state"], "satisfied")
         self.assertGreater(updated["revision"], reviewable["revision"])
 
-    def test_submit_decisions_rejects_stale_revision(self) -> None:
+    async def test_submit_decisions_rejects_stale_revision(self) -> None:
         started = self.start()
         run_id = started["graph_run_id"]
-        attempt_id = self.store.start_attempt(run_id, "contracts", "wave-1")
-        self.store.finish_attempt(
-            attempt_id,
-            runtime_state="failed",
-            result={"state": "failed", "agent_response": "failed response"},
-        )
-        current = self.runtime.get_graph(run_id)
+
+        async def failed_executor(node: GraphNode) -> dict:
+            return {
+                "session_id": f"session-{node.node_id}",
+                "turn_id": f"turn-{node.node_id}",
+                "state": "failed",
+                "agent_response": "failed response",
+            }
+
+        current = await self.runtime.delegate_next(run_id, executor=failed_executor)
 
         with self.assertRaisesRegex(RuntimeError, "stale graph snapshot revision"):
             self.runtime.submit_decisions(
@@ -135,21 +243,13 @@ class TaskGraphRuntimeTests(unittest.TestCase):
                 expected_revision=current["revision"] - 1,
             )
 
-    def test_delegate_next_requires_ready_state(self) -> None:
+    async def test_delegate_next_requires_ready_state(self) -> None:
         started = self.start()
         run_id = started["graph_run_id"]
-        attempt_id = self.store.start_attempt(run_id, "contracts", "wave-1")
+        await self.runtime.delegate_next(run_id, executor=self.settled_executor)
 
         with self.assertRaisesRegex(RuntimeError, "not ready for delegation"):
-            self.runtime.delegate_next(run_id)
-
-        self.store.finish_attempt(
-            attempt_id,
-            runtime_state="settled",
-            result={"state": "settled", "agent_response": "done"},
-        )
-        with self.assertRaisesRegex(RuntimeError, "not ready for delegation"):
-            self.runtime.delegate_next(run_id)
+            await self.runtime.delegate_next(run_id, executor=self.settled_executor)
 
     def test_persisted_run_without_process_graph_fails_closed(self) -> None:
         started = self.start()
@@ -221,7 +321,7 @@ class TaskGraphRuntimeTests(unittest.TestCase):
                 }
             )
 
-    def test_decision_transport_is_strict_and_replan_remains_unsupported(self) -> None:
+    async def test_decision_transport_is_strict_and_replan_remains_unsupported(self) -> None:
         decisions = decisions_from_payload(
             [{"node_id": "backend", "action": "accept"}]
         )
@@ -234,13 +334,10 @@ class TaskGraphRuntimeTests(unittest.TestCase):
 
         started = self.start()
         run_id = started["graph_run_id"]
-        attempt_id = self.store.start_attempt(run_id, "contracts", "wave-1")
-        self.store.finish_attempt(
-            attempt_id,
-            runtime_state="settled",
-            result={"state": "settled", "agent_response": "done"},
+        reviewable = await self.runtime.delegate_next(
+            run_id,
+            executor=self.settled_executor,
         )
-        reviewable = self.runtime.get_graph(run_id)
         with self.assertRaisesRegex(ValueError, "unsupported decision action 'replan'"):
             self.runtime.submit_decisions(
                 run_id,
