@@ -53,6 +53,14 @@ class RetryPlan:
     feedback: tuple[str, ...]
 
 
+class RecoverableRepoTaskExecutionError(RuntimeError):
+    """Execution failed after native session ownership was already captured."""
+
+    def __init__(self, message: str, *, session_id: str):
+        super().__init__(message)
+        self.session_id = session_id
+
+
 def _require_object(value: Any, label: str) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ValueError(f"graph {label} must be an object")
@@ -115,17 +123,33 @@ def _retry_task_packet(packet: TaskPacket, feedback: tuple[str, ...]) -> TaskPac
     Retry feedback is execution context, not a new Graph schema. It is represented through
     the existing TaskPacket context contract as claims to investigate, while objective,
     scope, acceptance criteria, exclusions, constraints, and known unknowns stay authored.
+    Feedback that repeats an existing trusted fact or claim keeps the existing classification
+    instead of creating a contradictory/duplicate context entry.
     """
 
     payload = packet.as_dict()
     if feedback:
         context = dict(payload.get("context", {}))
+        trusted = list(context.get("trusted_facts", []))
         claims = list(context.get("claims_to_investigate", []))
-        claims.extend(
-            {"claim": item, "source": _RETRY_FEEDBACK_SOURCE}
-            for item in feedback
+        known_propositions = {
+            item["fact"].casefold()
+            for item in trusted
+            if isinstance(item, dict) and isinstance(item.get("fact"), str)
+        }
+        known_propositions.update(
+            item["claim"].casefold()
+            for item in claims
+            if isinstance(item, dict) and isinstance(item.get("claim"), str)
         )
-        context["claims_to_investigate"] = claims
+        for item in feedback:
+            key = item.casefold()
+            if key in known_propositions:
+                continue
+            claims.append({"claim": item, "source": _RETRY_FEEDBACK_SOURCE})
+            known_propositions.add(key)
+        if claims:
+            context["claims_to_investigate"] = claims
         payload["context"] = context
     return build_task_packet(**payload)
 
@@ -431,6 +455,22 @@ class GraphRuntime:
                     "agent_response": None,
                     "failure_type": "execution_cancelled",
                 },
+            )
+            self.store.close_wave(graph_run_id, wave_id)
+            raise
+        except RecoverableRepoTaskExecutionError as exc:
+            # Direct delegation can discover/persist the native session before final-result
+            # capture fails. Keep that exact recovery key on the failed graph attempt so a
+            # later semantic RETRY may RESUME the same native conversation.
+            self.store.finish_attempt(
+                attempt_id,
+                runtime_state="failed",
+                result={
+                    "state": "failed",
+                    "agent_response": None,
+                    "failure_type": "executor_exception",
+                },
+                session_id=exc.session_id,
             )
             self.store.close_wave(graph_run_id, wave_id)
             raise
