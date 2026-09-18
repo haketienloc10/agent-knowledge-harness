@@ -55,7 +55,11 @@ def _graph_tool_error(exc: ValueError | RuntimeError) -> ToolError:
     elif "retry requested resume" in lowered:
         code = "graph_retry_invalid"
         action = "retry with resume_session=false unless the node has a previous native session"
-    elif "not ready for delegation" in lowered or "only accepted while graph_state" in lowered:
+    elif (
+        "not ready for delegation" in lowered
+        or "only accepted while graph_state" in lowered
+        or "reconciliation cannot run while" in lowered
+    ):
         code = "graph_state_conflict"
         action = "follow the returned graph_state outer-loop transition before retrying"
 
@@ -171,6 +175,32 @@ async def get_graph(graph_run_id: str) -> dict[str, Any]:
 
 @mcp.tool()
 @_graph_public_errors
+async def reconcile_graph(
+    graph_run_id: str,
+    graph: dict[str, Any],
+    expected_revision: int,
+) -> dict[str, Any]:
+    """Replace the authored TaskGraph and reconcile existing runtime state.
+
+    QiQi must author the complete next graph explicitly; runtime never infers nodes or
+    dependencies from child prose. Unchanged independent nodes preserve accepted/reviewable
+    state and evidence. New or materially changed nodes reset to pending, and invalidation
+    propagates to descendants that depended on changed work. Removed nodes are retired
+    without deleting attempt/session/result history. A Work Item revision is reconciled by
+    updating only the TaskPackets/topology QiQi judges materially affected.
+    """
+    authored = task_graph_from_payload(graph)
+    registry = _load_repo_registry()
+    return _graph_runtime.reconcile_graph(
+        graph_run_id,
+        authored,
+        repository_names=registry.keys(),
+        expected_revision=expected_revision,
+    )
+
+
+@mcp.tool()
+@_graph_public_errors
 async def delegate_next(graph_run_id: str) -> dict[str, Any]:
     """Execute one deterministic conflict-free runnable wave and return control to QiQi.
 
@@ -202,7 +232,8 @@ async def submit_decisions(
     `feedback=[...]`; feedback is carried into a fresh TaskPacket snapshot through the
     existing context.claims_to_investigate contract. Omit/false `resume_session` for a
     fresh START. Decisions remain per-node even when several nodes settled in one Phase-9
-    wave. `replan` still fails closed until Phase 10 graph mutation/reconciliation.
+    wave. `replan` fails closed until QiQi calls `reconcile_graph` with an explicitly
+    authored replacement graph and the current revision.
     """
     return _graph_runtime.submit_decisions(
         graph_run_id,
