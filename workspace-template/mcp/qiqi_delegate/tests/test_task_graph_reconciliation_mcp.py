@@ -125,7 +125,11 @@ class TaskGraphReconciliationMcpTests(unittest.IsolatedAsyncioTestCase):
                 },
             )
             self.assertTrue(stale_result.is_error)
-            self.assertIn("code=graph_revision_conflict", error_text(stale_result))
+            stale_error = error_text(stale_result)
+            self.assertIn("code=graph_revision_conflict", stale_error)
+            self.assertIn("resubmit reconcile_graph", stale_error)
+            self.assertIn("refreshed expected_revision", stale_error)
+            self.assertNotIn("resubmit decisions", stale_error)
 
     def test_codex_whitelist_exposes_reconcile_graph(self) -> None:
         workspace_root = Path(__file__).resolve().parents[3]
