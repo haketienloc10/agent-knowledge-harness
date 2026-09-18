@@ -312,7 +312,10 @@ class TaskGraphReconciliationTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(reconciled["graph_state"], "blocked")
-        self.assertEqual(reconciled["runnable_nodes"], [])
+        # runnable_nodes is a topology view; graph_state remains the execution gate.
+        self.assertEqual(reconciled["runnable_nodes"], ["contracts"])
+        with self.assertRaisesRegex(RuntimeError, "state='blocked'"):
+            await self.runtime.delegate_next(run_id, executor=self.executor)
         self.assertEqual(reconciled["reconciliation"]["changed_nodes"], ["contracts"])
         self.assertEqual(
             reconciled["reconciliation"]["dependency_invalidated_nodes"],
