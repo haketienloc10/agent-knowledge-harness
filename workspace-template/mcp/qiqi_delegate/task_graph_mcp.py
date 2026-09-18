@@ -191,12 +191,23 @@ async def reconcile_graph(
     """
     authored = task_graph_from_payload(graph)
     registry = _load_repo_registry()
-    return _graph_runtime.reconcile_graph(
-        graph_run_id,
-        authored,
-        repository_names=registry.keys(),
-        expected_revision=expected_revision,
-    )
+    try:
+        return _graph_runtime.reconcile_graph(
+            graph_run_id,
+            authored,
+            repository_names=registry.keys(),
+            expected_revision=expected_revision,
+        )
+    except RuntimeError as exc:
+        if "stale graph snapshot revision" not in str(exc).lower():
+            raise
+        raise ToolError(
+            "code=graph_revision_conflict; "
+            f"{exc}; "
+            "action=call get_graph, review the current revision, then resubmit "
+            "reconcile_graph with the authored replacement graph and refreshed "
+            "expected_revision"
+        ) from exc
 
 
 @mcp.tool()
