@@ -248,6 +248,89 @@ class TaskGraphReconciliationTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(reconciled["nodes"][0]["current_attempt_id"])
         self.assertEqual(len(self.store.list_attempts(run_id, "contracts")), 1)
 
+    async def test_reconcile_preserves_unchanged_blocked_descendant(self) -> None:
+        graph = TaskGraph(
+            nodes=(
+                GraphNode(
+                    "contracts",
+                    "contracts",
+                    self.packet("Update contract.", revision=1),
+                    route="codex-balanced",
+                ),
+                GraphNode(
+                    "backend",
+                    "backend",
+                    self.packet("Update backend consumer."),
+                    depends_on=("contracts",),
+                    route="codex-balanced",
+                ),
+            )
+        )
+        started = self.runtime.start_graph(
+            graph,
+            repository_names={"contracts", "backend"},
+        )
+        run_id = started["graph_run_id"]
+
+        contracts_wave = await self.runtime.delegate_next(run_id, executor=self.executor)
+        accepted = self.runtime.submit_decisions(
+            run_id,
+            decisions_from_payload([{"node_id": "contracts", "action": "accept"}]),
+            expected_revision=contracts_wave["revision"],
+        )
+        backend_wave = await self.runtime.delegate_next(run_id, executor=self.executor)
+        blocked = self.runtime.submit_decisions(
+            run_id,
+            decisions_from_payload([{"node_id": "backend", "action": "block"}]),
+            expected_revision=backend_wave["revision"],
+        )
+        self.assertEqual(blocked["graph_state"], "blocked")
+        backend_before = self.store.get_node(run_id, "backend")
+
+        replacement = TaskGraph(
+            nodes=(
+                GraphNode(
+                    "contracts",
+                    "contracts",
+                    self.packet("Update contract.", revision=2),
+                    route="codex-balanced",
+                ),
+                GraphNode(
+                    "backend",
+                    "backend",
+                    self.packet("Update backend consumer."),
+                    depends_on=("contracts",),
+                    route="codex-balanced",
+                ),
+            )
+        )
+        reconciled = self.runtime.reconcile_graph(
+            run_id,
+            replacement,
+            repository_names={"contracts", "backend"},
+            expected_revision=blocked["revision"],
+        )
+
+        self.assertEqual(reconciled["graph_state"], "blocked")
+        self.assertEqual(reconciled["runnable_nodes"], [])
+        self.assertEqual(reconciled["reconciliation"]["changed_nodes"], ["contracts"])
+        self.assertEqual(
+            reconciled["reconciliation"]["dependency_invalidated_nodes"],
+            [],
+        )
+        self.assertEqual(reconciled["reconciliation"]["reset_nodes"], ["contracts"])
+        self.assertEqual(reconciled["reconciliation"]["preserved_nodes"], ["backend"])
+
+        states = {item["node_id"]: item for item in reconciled["nodes"]}
+        self.assertEqual(states["contracts"]["semantic_state"], "pending")
+        self.assertEqual(states["backend"]["semantic_state"], "blocked")
+        self.assertEqual(states["backend"]["runtime_state"], "idle")
+        self.assertEqual(
+            states["backend"]["current_attempt_id"],
+            backend_before["current_attempt_id"],
+        )
+        self.assertEqual(states["backend"]["session_id"], backend_before["session_id"])
+
     def test_reconcile_rejects_active_wave_even_with_current_revision(self) -> None:
         graph = TaskGraph(
             nodes=(
