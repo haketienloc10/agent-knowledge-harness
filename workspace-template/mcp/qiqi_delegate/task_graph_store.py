@@ -303,6 +303,7 @@ class GraphRuntimeStore:
         snapshot: GraphSnapshot,
         *,
         expected_revision: int,
+        reset_node_ids: set[str],
     ) -> None:
         run_id = _required_id(graph_run_id, "graph_run_id")
         clean_expected_revision = _required_revision(expected_revision)
@@ -401,6 +402,13 @@ class GraphRuntimeStore:
         next_fingerprint = _graph_fingerprint(snapshot.graph)
         previous_ids = {node.node_id for node in previous_graph.nodes}
         next_ids = set(states)
+        reset_ids = set(reset_node_ids)
+        unknown_reset_ids = sorted(reset_ids - next_ids)
+        if unknown_reset_ids:
+            raise ValueError(
+                "reset_node_ids contains nodes outside the next TaskGraph: "
+                + ", ".join(unknown_reset_ids)
+            )
         now = time.time_ns()
 
         with self._connect() as conn:
@@ -456,18 +464,33 @@ class GraphRuntimeStore:
 
             for state in snapshot.node_states:
                 if state.node_id in existing_ids:
-                    conn.execute(
-                        "UPDATE graph_node_states SET active = 1, semantic_state = ?, "
-                        "runtime_state = ?, updated_at_ns = ? "
-                        "WHERE graph_run_id = ? AND node_id = ?",
-                        (
-                            state.semantic_state,
-                            state.runtime_state,
-                            now,
-                            run_id,
-                            state.node_id,
-                        ),
-                    )
+                    if state.node_id in reset_ids:
+                        conn.execute(
+                            "UPDATE graph_node_states SET active = 1, semantic_state = ?, "
+                            "runtime_state = ?, current_attempt_id = NULL, "
+                            "session_id = NULL, turn_id = NULL, updated_at_ns = ? "
+                            "WHERE graph_run_id = ? AND node_id = ?",
+                            (
+                                state.semantic_state,
+                                state.runtime_state,
+                                now,
+                                run_id,
+                                state.node_id,
+                            ),
+                        )
+                    else:
+                        conn.execute(
+                            "UPDATE graph_node_states SET active = 1, semantic_state = ?, "
+                            "runtime_state = ?, updated_at_ns = ? "
+                            "WHERE graph_run_id = ? AND node_id = ?",
+                            (
+                                state.semantic_state,
+                                state.runtime_state,
+                                now,
+                                run_id,
+                                state.node_id,
+                            ),
+                        )
                 else:
                     conn.execute(
                         "INSERT INTO graph_node_states("
