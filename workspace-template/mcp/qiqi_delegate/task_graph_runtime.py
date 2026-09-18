@@ -11,6 +11,7 @@ from task_graph_scheduler import (
     REVIEWABLE_RUNTIME_STATES,
     GraphSnapshot,
     NodeDecision,
+    NodeState,
     apply_decisions,
     derive_graph_state,
     initial_graph_snapshot,
