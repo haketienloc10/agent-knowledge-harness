@@ -225,6 +225,40 @@ def task_graph_from_payload(payload: Any) -> TaskGraph:
     return TaskGraph(nodes=tuple(nodes))
 
 
+def _graph_reconciliation_sets(
+    previous_graph: TaskGraph,
+    next_graph: TaskGraph,
+) -> tuple[set[str], set[str], set[str], set[str]]:
+    """Return added, removed, directly changed, and dependency-invalidated node IDs."""
+
+    previous_nodes = {node.node_id: node for node in previous_graph.nodes}
+    next_nodes = {node.node_id: node for node in next_graph.nodes}
+    previous_ids = set(previous_nodes)
+    next_ids = set(next_nodes)
+    added = next_ids - previous_ids
+    removed = previous_ids - next_ids
+    changed = {
+        node_id
+        for node_id in previous_ids & next_ids
+        if previous_nodes[node_id] != next_nodes[node_id]
+    }
+
+    affected = set(added | changed)
+    dependency_invalidated: set[str] = set()
+    changed_any = True
+    while changed_any:
+        changed_any = False
+        for node in next_graph.nodes:
+            if node.node_id in affected:
+                continue
+            if any(dependency in affected for dependency in node.depends_on):
+                affected.add(node.node_id)
+                dependency_invalidated.add(node.node_id)
+                changed_any = True
+
+    return added, removed, changed, dependency_invalidated
+
+
 def decisions_from_payload(payload: Any) -> tuple[ReviewDecision, ...]:
     if not isinstance(payload, list):
         raise ValueError("graph decisions must be a list")
@@ -270,8 +304,9 @@ class GraphRuntime:
     Authored TaskGraph semantics remain process-owned and are not copied into SQLite.
     Phase 6 established sequential execution, Phase 7 per-node semantic review, and Phase 8
     selective START/RESUME retry. Phase 9 executes independent runnable nodes concurrently
-    in one wave while preserving per-node attempts and review. Graph mutation/reconciliation
-    and durable authored-graph recovery remain later phases.
+    in one wave while preserving per-node attempts and review. Phase 10 reconciles explicit
+    QiQi-authored graph revisions without deleting execution history. Durable authored-graph
+    restart recovery remains a later phase.
     """
 
     def __init__(self, store: GraphRuntimeStore):
@@ -380,6 +415,96 @@ class GraphRuntime:
             "review_required": review_required,
             "nodes": execution_nodes,
             "authored_node_count": len(graph.nodes),
+        }
+
+    def reconcile_graph(
+        self,
+        graph_run_id: str,
+        graph: TaskGraph,
+        *,
+        repository_names: Collection[str],
+        expected_revision: int,
+    ) -> dict[str, Any]:
+        """Replace the authored graph and reconcile runtime state by explicit materiality.
+
+        QiQi authors the complete next TaskGraph. Unchanged independent nodes preserve their
+        semantic/runtime state and current evidence. New or directly changed nodes reset to
+        pending+idle, and that invalidation propagates through descendants that depended on
+        changed work. Removed nodes are retired by the store without deleting attempt history.
+        """
+
+        previous_graph, snapshot, revision = self._snapshot(graph_run_id)
+        if isinstance(expected_revision, bool) or not isinstance(expected_revision, int):
+            raise ValueError("expected_revision must be a non-negative integer")
+        if expected_revision < 0:
+            raise ValueError("expected_revision must be a non-negative integer")
+        if revision != expected_revision:
+            raise RuntimeError(
+                "stale graph snapshot revision: "
+                f"expected {expected_revision}, current {revision}"
+            )
+
+        validate_task_graph(graph, repository_names=repository_names)
+        added, removed, changed, dependency_invalidated = _graph_reconciliation_sets(
+            previous_graph,
+            graph,
+        )
+        reset_ids = added | changed | dependency_invalidated
+        previous_states = {state.node_id: state for state in snapshot.node_states}
+        next_states = tuple(
+            (
+                previous_states[node.node_id]
+                if node.node_id in previous_states and node.node_id not in reset_ids
+                else NodeState(node_id=node.node_id)
+            )
+            for node in graph.nodes
+        )
+        next_snapshot = GraphSnapshot(graph=graph, node_states=next_states)
+
+        self.store.reconcile_graph(
+            graph_run_id,
+            previous_graph,
+            next_snapshot,
+            expected_revision=expected_revision,
+            reset_node_ids=reset_ids,
+        )
+        self._graphs[graph_run_id] = graph
+
+        next_ids = {node.node_id for node in graph.nodes}
+        for key in list(self._retry_plans):
+            run_id, node_id = key
+            if run_id == graph_run_id and (
+                node_id not in next_ids or node_id in reset_ids
+            ):
+                self._retry_plans.pop(key, None)
+
+        current = self.get_graph(graph_run_id)
+        previous_order = [node.node_id for node in previous_graph.nodes]
+        next_order = [node.node_id for node in graph.nodes]
+        reset_existing = changed | dependency_invalidated
+        preserved = [
+            node_id
+            for node_id in next_order
+            if node_id in previous_states and node_id not in reset_ids
+        ]
+        return {
+            **current,
+            "reconciliation": {
+                "preserved_nodes": preserved,
+                "added_nodes": [node_id for node_id in next_order if node_id in added],
+                "removed_nodes": [
+                    node_id for node_id in previous_order if node_id in removed
+                ],
+                "changed_nodes": [node_id for node_id in next_order if node_id in changed],
+                "dependency_invalidated_nodes": [
+                    node_id
+                    for node_id in next_order
+                    if node_id in dependency_invalidated
+                ],
+                "reset_nodes": [
+                    node_id for node_id in next_order if node_id in reset_existing
+                ],
+            },
         }
 
     def _select_wave_nodes(
