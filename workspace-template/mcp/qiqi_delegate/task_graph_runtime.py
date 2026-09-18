@@ -229,8 +229,15 @@ def task_graph_from_payload(payload: Any) -> TaskGraph:
 def _graph_reconciliation_sets(
     previous_graph: TaskGraph,
     next_graph: TaskGraph,
+    *,
+    preserved_blocked_node_ids: Collection[str] = (),
 ) -> tuple[set[str], set[str], set[str], set[str]]:
-    """Return added, removed, directly changed, and dependency-invalidated node IDs."""
+    """Return added, removed, directly changed, and dependency-invalidated node IDs.
+
+    An unchanged semantically blocked node is an explicit QiQi stop condition, so upstream
+    material changes do not silently release it. Changing that node explicitly still resets
+    it and allows invalidation to propagate through its descendants.
+    """
 
     previous_nodes = {node.node_id: node for node in previous_graph.nodes}
     next_nodes = {node.node_id: node for node in next_graph.nodes}
@@ -244,13 +251,14 @@ def _graph_reconciliation_sets(
         if previous_nodes[node_id] != next_nodes[node_id]
     }
 
+    blocked_barriers = set(preserved_blocked_node_ids) - changed
     affected = set(added | changed)
     dependency_invalidated: set[str] = set()
     changed_any = True
     while changed_any:
         changed_any = False
         for node in next_graph.nodes:
-            if node.node_id in affected:
+            if node.node_id in affected or node.node_id in blocked_barriers:
                 continue
             if any(dependency in affected for dependency in node.depends_on):
                 affected.add(node.node_id)
@@ -431,7 +439,8 @@ class GraphRuntime:
         QiQi authors the complete next TaskGraph. Unchanged independent nodes preserve their
         semantic/runtime state and current evidence. New or directly changed nodes reset to
         pending+idle, and that invalidation propagates through descendants that depended on
-        changed work. Removed nodes are retired by the store without deleting attempt history.
+        changed work. Unchanged blocked nodes remain blocked unless QiQi explicitly changes
+        their authored semantics. Removed nodes are retired without deleting attempt history.
         """
 
         previous_graph, snapshot, revision = self._snapshot(graph_run_id)
@@ -446,12 +455,18 @@ class GraphRuntime:
             )
 
         validate_task_graph(graph, repository_names=repository_names)
+        previous_states = {state.node_id: state for state in snapshot.node_states}
+        blocked_node_ids = {
+            node_id
+            for node_id, state in previous_states.items()
+            if state.semantic_state == "blocked"
+        }
         added, removed, changed, dependency_invalidated = _graph_reconciliation_sets(
             previous_graph,
             graph,
+            preserved_blocked_node_ids=blocked_node_ids,
         )
         reset_ids = added | changed | dependency_invalidated
-        previous_states = {state.node_id: state for state in snapshot.node_states}
         next_states = tuple(
             (
                 previous_states[node.node_id]
