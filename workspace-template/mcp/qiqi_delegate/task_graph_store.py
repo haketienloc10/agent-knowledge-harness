@@ -303,7 +303,6 @@ class GraphRuntimeStore:
         snapshot: GraphSnapshot,
         *,
         expected_revision: int,
-        reset_node_ids: set[str],
     ) -> None:
         run_id = _required_id(graph_run_id, "graph_run_id")
         clean_expected_revision = _required_revision(expected_revision)
@@ -392,6 +391,7 @@ class GraphRuntimeStore:
         snapshot: GraphSnapshot,
         *,
         expected_revision: int,
+        reset_node_ids: set[str],
     ) -> None:
         """Atomically replace the active semantic graph while retaining execution history."""
 
