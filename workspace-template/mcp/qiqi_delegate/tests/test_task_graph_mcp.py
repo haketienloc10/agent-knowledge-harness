@@ -25,6 +25,45 @@ def _resolve_ref(schema: dict, node: dict) -> dict:
 
 
 
+def _literal_values(node: dict) -> list[str]:
+    if "const" in node:
+        return [node["const"]]
+    return list(node.get("enum", []))
+
+
+def _assert_no_open_object_schema(test: unittest.TestCase, schema: dict) -> None:
+    seen_refs: set[str] = set()
+
+    def walk(node):
+        if isinstance(node, list):
+            for item in node:
+                walk(item)
+            return
+        if not isinstance(node, dict):
+            return
+        ref = node.get("$ref")
+        if isinstance(ref, str):
+            if ref in seen_refs:
+                return
+            seen_refs.add(ref)
+            walk(_resolve_ref(schema, node))
+            return
+        if node.get("type") == "object" or "properties" in node:
+            test.assertFalse(
+                node.get("additionalProperties", True),
+                f"open object schema remains: {node!r}",
+            )
+        for key in ("properties", "items", "oneOf", "anyOf", "allOf"):
+            value = node.get(key)
+            if key == "properties" and isinstance(value, dict):
+                walk(list(value.values()))
+            else:
+                walk(value)
+
+    walk(schema)
+
+
+
 def graph_payload() -> dict:
     return {
         "nodes": [
@@ -112,6 +151,105 @@ class TaskGraphMcpTests(unittest.IsolatedAsyncioTestCase):
                 description = kind_schema.get("description", "")
                 self.assertIn("omit this field", description)
                 self.assertIn("Do not invent", description)
+
+    async def test_graph_task_packet_public_schema_matches_canonical_fields(self) -> None:
+        tools = {tool.name: tool for tool in await mcp.list_tools()}
+        canonical_fields = {
+            "objective",
+            "scope",
+            "acceptance_criteria",
+            "out_of_scope",
+            "context",
+            "constraints",
+            "known_unknowns",
+        }
+        for tool_name in ("start_graph", "reconcile_graph"):
+            with self.subTest(tool=tool_name):
+                schema = tools[tool_name].input_schema
+                graph_schema = _resolve_ref(schema, schema["properties"]["graph"])
+                node_schema = _resolve_ref(schema, graph_schema["properties"]["nodes"]["items"])
+                packet_schema = _resolve_ref(schema, node_schema["properties"]["task_packet"])
+                self.assertEqual(set(packet_schema["properties"]), canonical_fields)
+                self.assertEqual(
+                    set(packet_schema["required"]),
+                    {"objective", "scope", "acceptance_criteria"},
+                )
+                self.assertFalse(packet_schema.get("additionalProperties", True))
+                self.assertEqual(packet_schema["properties"]["scope"].get("minItems"), 1)
+                self.assertEqual(
+                    packet_schema["properties"]["acceptance_criteria"].get("minItems"),
+                    1,
+                )
+
+    async def test_submit_decisions_public_schema_constrains_actions_and_retry_metadata(self) -> None:
+        tools = {tool.name: tool for tool in await mcp.list_tools()}
+        schema = tools["submit_decisions"].input_schema
+        decisions = schema["properties"]["decisions"]
+        self.assertEqual(decisions.get("minItems"), 1)
+        item = decisions["items"]
+        self.assertEqual(item.get("discriminator", {}).get("propertyName"), "action")
+        variants = [_resolve_ref(schema, option) for option in item["oneOf"]]
+        by_action = {
+            _literal_values(variant["properties"]["action"])[0]: variant
+            for variant in variants
+        }
+        self.assertEqual(set(by_action), {"accept", "retry", "replan", "block"})
+        for action in ("accept", "replan", "block"):
+            self.assertEqual(set(by_action[action]["properties"]), {"node_id", "action"})
+            self.assertFalse(by_action[action].get("additionalProperties", True))
+        retry = by_action["retry"]
+        self.assertEqual(
+            set(retry["properties"]),
+            {"node_id", "action", "resume_session", "feedback"},
+        )
+        self.assertFalse(retry.get("additionalProperties", True))
+        self.assertEqual(retry["properties"]["resume_session"].get("default"), False)
+        self.assertEqual(
+            schema["properties"]["expected_revision"].get("minimum"),
+            0,
+        )
+
+    async def test_graph_public_input_schemas_have_no_open_object_payloads(self) -> None:
+        tools = {tool.name: tool for tool in await mcp.list_tools()}
+        for tool_name in (
+            "start_graph",
+            "get_graph",
+            "reconcile_graph",
+            "delegate_next",
+            "submit_decisions",
+        ):
+            with self.subTest(tool=tool_name):
+                _assert_no_open_object_schema(self, tools[tool_name].input_schema)
+
+    async def test_submit_decisions_rejects_reason_at_public_schema_boundary(self) -> None:
+        async with Client(mcp) as client:
+            result = await client.call_tool(
+                "submit_decisions",
+                {
+                    "graph_run_id": "not-reached",
+                    "expected_revision": 0,
+                    "decisions": [
+                        {
+                            "node_id": "backend_e2e",
+                            "action": "accept",
+                            "reason": "review evidence",
+                        }
+                    ],
+                },
+            )
+
+        self.assertTrue(result.is_error)
+        self.assertIn("reason", error_text(result))
+
+    async def test_start_graph_rejects_unknown_task_packet_field_at_public_schema_boundary(self) -> None:
+        payload = graph_payload()
+        payload["nodes"][0]["task_packet"]["reason"] = "invented semantic field"
+
+        async with Client(mcp) as client:
+            result = await client.call_tool("start_graph", {"graph": payload})
+
+        self.assertTrue(result.is_error)
+        self.assertIn("reason", error_text(result))
 
     async def test_start_graph_rejects_invented_kind_at_public_schema_boundary(self) -> None:
         payload = graph_payload()
