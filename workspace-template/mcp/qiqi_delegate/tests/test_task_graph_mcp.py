@@ -14,6 +14,17 @@ from task_graph_runtime import GraphRuntime  # noqa: E402
 from task_graph_store import GraphRuntimeStore  # noqa: E402
 
 
+def _resolve_ref(schema: dict, node: dict) -> dict:
+    ref = node.get("$ref")
+    if not ref:
+        return node
+    prefix = "#/$defs/"
+    if not isinstance(ref, str) or not ref.startswith(prefix):
+        raise AssertionError(f"unsupported schema ref: {ref!r}")
+    return schema["$defs"][ref[len(prefix) :]]
+
+
+
 def graph_payload() -> dict:
     return {
         "nodes": [
@@ -83,6 +94,34 @@ class TaskGraphMcpTests(unittest.IsolatedAsyncioTestCase):
                 "submit_decisions",
             }.issubset(names)
         )
+
+    async def test_graph_tools_expose_repo_task_as_the_only_public_node_kind(self) -> None:
+        tools = {tool.name: tool for tool in await mcp.list_tools()}
+        for tool_name in ("start_graph", "reconcile_graph"):
+            with self.subTest(tool=tool_name):
+                schema = tools[tool_name].input_schema
+                graph_schema = _resolve_ref(schema, schema["properties"]["graph"])
+                node_schema = _resolve_ref(schema, graph_schema["properties"]["nodes"]["items"])
+                kind_schema = node_schema["properties"]["kind"]
+
+                allowed = kind_schema.get("enum")
+                if allowed is None and "const" in kind_schema:
+                    allowed = [kind_schema["const"]]
+                self.assertEqual(allowed, ["repo_task"])
+                self.assertEqual(kind_schema.get("default"), "repo_task")
+                description = kind_schema.get("description", "")
+                self.assertIn("omit this field", description)
+                self.assertIn("Do not invent", description)
+
+    async def test_start_graph_rejects_invented_kind_at_public_schema_boundary(self) -> None:
+        payload = graph_payload()
+        payload["nodes"][0]["kind"] = "task"
+
+        async with Client(mcp) as client:
+            result = await client.call_tool("start_graph", {"graph": payload})
+
+        self.assertTrue(result.is_error)
+        self.assertIn("repo_task", error_text(result))
 
     async def test_outer_loop_executes_reviews_and_accepts_one_node(self) -> None:
         delegate = AsyncMock(
