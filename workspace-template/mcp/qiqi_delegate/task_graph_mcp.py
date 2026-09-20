@@ -4,9 +4,10 @@ from __future__ import annotations
 import ast
 import functools
 import re
-from typing import Any
+from typing import Any, Literal
 
 from mcp.server.mcpserver.exceptions import ToolError
+from pydantic import BaseModel, ConfigDict, Field
 
 from server import (
     STATE_DB,
@@ -29,6 +30,34 @@ _PRESERVED_SESSION_PATTERN = re.compile(
     r"native session ownership was preserved and can be resumed with "
     r"session_id=(?P<literal>'(?:\\.|[^'])*'|\"(?:\\.|[^\"])*\")"
 )
+
+
+class GraphNodeInput(BaseModel):
+    """Public GraphNode transport schema; TaskPacket semantics stay canonical elsewhere."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    node_id: str
+    repository: str
+    task_packet: dict[str, Any]
+    depends_on: list[str] = Field(default_factory=list)
+    route: str | None = None
+    kind: Literal["repo_task"] = Field(
+        default="repo_task",
+        description=(
+            "Execution node kind. Only repo_task is supported; omit this field to use "
+            "the default. Do not invent values such as task or implementation."
+        ),
+    )
+
+
+class TaskGraphInput(BaseModel):
+    """Public TaskGraph transport schema with constrained orchestration metadata."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    nodes: list[GraphNodeInput]
+
 
 
 def _graph_tool_error(exc: ValueError | RuntimeError) -> ToolError:
@@ -151,14 +180,14 @@ async def _resume_repo_task(node: GraphNode, session_id: str) -> dict[str, Any]:
 
 @mcp.tool()
 @_graph_public_errors
-async def start_graph(graph: dict[str, Any]) -> dict[str, Any]:
+async def start_graph(graph: TaskGraphInput) -> dict[str, Any]:
     """Create a validated TaskGraph run and return the initial outer-loop snapshot.
 
     `graph.nodes[*].task_packet` uses the existing canonical TaskPacket fields. Graph
     orchestration metadata (`node_id`, `repository`, `route`, `kind`, `depends_on`) stays
     outside TaskPacket. The repository names are validated against the current repos.yaml.
     """
-    authored = task_graph_from_payload(graph)
+    authored = task_graph_from_payload(graph.model_dump(exclude_none=True))
     registry = _load_repo_registry()
     return _graph_runtime.start_graph(
         authored,
@@ -177,7 +206,7 @@ async def get_graph(graph_run_id: str) -> dict[str, Any]:
 @_graph_public_errors
 async def reconcile_graph(
     graph_run_id: str,
-    graph: dict[str, Any],
+    graph: TaskGraphInput,
     expected_revision: int,
 ) -> dict[str, Any]:
     """Replace the authored TaskGraph and reconcile existing runtime state.
@@ -189,7 +218,7 @@ async def reconcile_graph(
     without deleting attempt/session/result history. A Work Item revision is reconciled by
     updating only the TaskPackets/topology QiQi judges materially affected.
     """
-    authored = task_graph_from_payload(graph)
+    authored = task_graph_from_payload(graph.model_dump(exclude_none=True))
     registry = _load_repo_registry()
     try:
         return _graph_runtime.reconcile_graph(
