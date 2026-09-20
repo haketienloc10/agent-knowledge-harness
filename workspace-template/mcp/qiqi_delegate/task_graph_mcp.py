@@ -4,7 +4,7 @@ from __future__ import annotations
 import ast
 import functools
 import re
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import BaseModel, ConfigDict, Field
@@ -32,16 +32,36 @@ _PRESERVED_SESSION_PATTERN = re.compile(
 )
 
 
-class GraphNodeInput(BaseModel):
-    """Public GraphNode transport schema; TaskPacket semantics stay canonical elsewhere."""
+class TaskPacketInput(BaseModel):
+    """Public transport shape for the existing canonical TaskPacket contract."""
 
     model_config = ConfigDict(extra="forbid")
 
-    node_id: str
-    repository: str
-    task_packet: dict[str, Any]
-    depends_on: list[str] = Field(default_factory=list)
-    route: str | None = None
+    objective: str = Field(min_length=1)
+    scope: list[Annotated[str, Field(min_length=1)]] = Field(min_length=1)
+    acceptance_criteria: list[Annotated[str, Field(min_length=1)]] = Field(min_length=1)
+    out_of_scope: list[Annotated[str, Field(min_length=1)]] = Field(default_factory=list)
+    context: TaskContextInput | None = None
+    constraints: list[Annotated[str, Field(min_length=1)]] = Field(default_factory=list)
+    known_unknowns: list[Annotated[str, Field(min_length=1)]] = Field(default_factory=list)
+
+
+class GraphNodeInput(BaseModel):
+    """Public GraphNode transport schema; TaskPacket remains the semantic contract."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    node_id: str = Field(min_length=1)
+    repository: str = Field(
+        min_length=1,
+        description="Exact repository name from workspace repos.yaml, not a filesystem path.",
+    )
+    task_packet: TaskPacketInput
+    depends_on: list[Annotated[str, Field(min_length=1)]] = Field(default_factory=list)
+    route: str | None = Field(
+        default=None,
+        description="Exact execution route from instructions/agent-routing.yaml when executing this node.",
+    )
     kind: Literal["repo_task"] = Field(
         default="repo_task",
         description=(
@@ -56,8 +76,39 @@ class TaskGraphInput(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    nodes: list[GraphNodeInput]
+    nodes: list[GraphNodeInput] = Field(min_length=1)
 
+
+class _DecisionInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    node_id: str = Field(min_length=1)
+
+
+class AcceptDecisionInput(_DecisionInput):
+    action: Literal["accept"]
+
+
+class RetryDecisionInput(_DecisionInput):
+    action: Literal["retry"]
+    resume_session: bool = False
+    feedback: list[Annotated[str, Field(min_length=1)]] = Field(default_factory=list)
+
+
+class ReplanDecisionInput(_DecisionInput):
+    action: Literal["replan"]
+
+
+class BlockDecisionInput(_DecisionInput):
+    action: Literal["block"]
+
+
+GraphDecisionInput = Annotated[
+    AcceptDecisionInput | RetryDecisionInput | ReplanDecisionInput | BlockDecisionInput,
+    Field(discriminator="action"),
+]
+DecisionListInput = Annotated[list[GraphDecisionInput], Field(min_length=1)]
+RevisionInput = Annotated[int, Field(ge=0)]
 
 
 def _graph_tool_error(exc: ValueError | RuntimeError) -> ToolError:
@@ -207,7 +258,7 @@ async def get_graph(graph_run_id: str) -> dict[str, Any]:
 async def reconcile_graph(
     graph_run_id: str,
     graph: TaskGraphInput,
-    expected_revision: int,
+    expected_revision: RevisionInput,
 ) -> dict[str, Any]:
     """Replace the authored TaskGraph and reconcile existing runtime state.
 
@@ -262,8 +313,8 @@ async def delegate_next(graph_run_id: str) -> dict[str, Any]:
 @_graph_public_errors
 async def submit_decisions(
     graph_run_id: str,
-    decisions: list[dict[str, Any]],
-    expected_revision: int,
+    decisions: DecisionListInput,
+    expected_revision: RevisionInput,
 ) -> dict[str, Any]:
     """Apply QiQi per-node semantic review decisions and recompute graph state.
 
@@ -277,7 +328,9 @@ async def submit_decisions(
     """
     return _graph_runtime.submit_decisions(
         graph_run_id,
-        decisions_from_payload(decisions),
+        decisions_from_payload(
+            [decision.model_dump(exclude_none=True, exclude_defaults=True) for decision in decisions]
+        ),
         expected_revision=expected_revision,
     )
 
