@@ -31,10 +31,10 @@ def _literal_values(node: dict) -> list[str]:
     return list(node.get("enum", []))
 
 
-def _assert_no_open_object_schema(test: unittest.TestCase, schema: dict) -> None:
+def _assert_no_open_nested_object_schema(test: unittest.TestCase, schema: dict) -> None:
     seen_refs: set[str] = set()
 
-    def walk(node):
+    def walk(node, *, is_root: bool = False):
         if isinstance(node, list):
             for item in node:
                 walk(item)
@@ -48,7 +48,7 @@ def _assert_no_open_object_schema(test: unittest.TestCase, schema: dict) -> None
             seen_refs.add(ref)
             walk(_resolve_ref(schema, node))
             return
-        if node.get("type") == "object" or "properties" in node:
+        if not is_root and (node.get("type") == "object" or "properties" in node):
             test.assertFalse(
                 node.get("additionalProperties", True),
                 f"open object schema remains: {node!r}",
@@ -60,7 +60,7 @@ def _assert_no_open_object_schema(test: unittest.TestCase, schema: dict) -> None
             else:
                 walk(value)
 
-    walk(schema)
+    walk(schema, is_root=True)
 
 
 
@@ -209,7 +209,7 @@ class TaskGraphMcpTests(unittest.IsolatedAsyncioTestCase):
             0,
         )
 
-    async def test_graph_public_input_schemas_have_no_open_object_payloads(self) -> None:
+    async def test_graph_public_input_schemas_have_no_open_nested_object_payloads(self) -> None:
         tools = {tool.name: tool for tool in await mcp.list_tools()}
         for tool_name in (
             "start_graph",
@@ -219,7 +219,20 @@ class TaskGraphMcpTests(unittest.IsolatedAsyncioTestCase):
             "submit_decisions",
         ):
             with self.subTest(tool=tool_name):
-                _assert_no_open_object_schema(self, tools[tool_name].input_schema)
+                _assert_no_open_nested_object_schema(self, tools[tool_name].input_schema)
+
+    async def test_graph_tool_signature_rejects_unknown_top_level_argument(self) -> None:
+        async with Client(mcp) as client:
+            result = await client.call_tool(
+                "get_graph",
+                {
+                    "graph_run_id": "not-reached",
+                    "reason": "invented top-level argument",
+                },
+            )
+
+        self.assertTrue(result.is_error)
+        self.assertIn("reason", error_text(result))
 
     async def test_submit_decisions_rejects_reason_at_public_schema_boundary(self) -> None:
         async with Client(mcp) as client:
