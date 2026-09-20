@@ -1,7 +1,7 @@
 {
   "version": 40,
   "from_ref": "6d19771ca4a44cacad4ab35a64586d759ba6f9ba",
-  "to_ref": "18238d2d9f68d5823468bc00dacdc34d8a76d9fd",
+  "to_ref": "0d70f31f77c3c3598fb0c2ef961b98ccead4d406",
   "description": "close public Graph MCP input schemas for TaskPacket and semantic review decisions so unsupported fields are rejected before runtime orchestration",
   "workspace": {
     "merge": [],
