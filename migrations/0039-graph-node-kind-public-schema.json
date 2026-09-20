@@ -1,0 +1,21 @@
+{
+  "version": 39,
+  "from_ref": "df7774a5b23ed6074f6ea32ce4d18bc7fa259c55",
+  "to_ref": "1c221ab0a4790ed359e568e8792514e9c54ab569",
+  "description": "constrain public TaskGraph node kind metadata to repo_task so QiQi cannot invent unsupported kind values during MCP graph authoring",
+  "workspace": {
+    "merge": [],
+    "replace": [
+      "workspace-template/mcp/qiqi_delegate/task_graph_mcp.py",
+      "workspace-template/mcp/qiqi_delegate/tests/test_task_graph_mcp.py"
+    ],
+    "delete": [],
+    "manual_review": []
+  },
+  "repo": {
+    "merge": [],
+    "replace": [],
+    "delete": [],
+    "manual_review": []
+  }
+}
