@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
+import asyncio
 import importlib.util
 import os
 from pathlib import Path
@@ -74,6 +75,55 @@ def _load_delegate_server(workspace_root: Path):
             pass
 
 
+CODEX_TRUST_PROMPT = "Do you trust the contents of this directory?"
+CODEX_TRUST_CONFIRM = "Press enter to continue"
+CODEX_STARTUP_PROBE_SECONDS = 5.0
+
+
+async def _ensure_parent_startup_ready(server: Any, name: str, adapter: str) -> None:
+    """Resolve the known Codex first-run trust gate for eval-created workspaces only.
+
+    Herdr can report an interactive Codex agent as ready while the TUI is still
+    paused on the directory-trust screen. The eval harness owns and materializes
+    this temporary workspace, so it may accept that one startup gate. This reads
+    the live agent surface only during startup; final-result capture remains the
+    native Stop hook.
+    """
+
+    if adapter != "codex":
+        return
+
+    deadline = asyncio.get_running_loop().time() + CODEX_STARTUP_PROBE_SECONDS
+    trust_accepted = False
+    while True:
+        _, surface, _ = await server._run_herdr(
+            "agent",
+            "read",
+            name,
+            "--source",
+            "visible",
+            check=False,
+        )
+        trust_visible = (
+            CODEX_TRUST_PROMPT in surface and CODEX_TRUST_CONFIRM in surface
+        )
+        if trust_visible and not trust_accepted:
+            await server._run_herdr("agent", "send-keys", name, "enter")
+            trust_accepted = True
+        elif trust_accepted and not trust_visible:
+            return
+
+        now = asyncio.get_running_loop().time()
+        if now >= deadline:
+            if trust_accepted:
+                raise RuntimeError(
+                    "Codex directory trust prompt did not clear after automatic "
+                    "acceptance in the eval workspace"
+                )
+            return
+        await asyncio.sleep(0.1)
+
+
 class ParentAgentDriver:
     """Drive a fresh QiQi parent through the same Herdr/native hook path as delegation."""
 
@@ -123,6 +173,7 @@ class ParentAgentDriver:
                     managed_name, started_agent = await server._start_interactive_agent(
                         pane_id, adapter, interactive_args
                     )
+                    await _ensure_parent_startup_ready(server, managed_name, adapter)
                     status, prompted_agent = await server._prompt_and_wait(
                         managed_name, prompt, adapter
                     )
