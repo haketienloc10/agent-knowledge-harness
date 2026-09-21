@@ -90,6 +90,20 @@ graph-qualified
 
 Với graph-qualified task, QiQi **không bypass Graph Runtime bằng cách gọi `delegate_repo_task` trực tiếp**. Runtime có thể dùng primitive này bên trong node execution; đó là implementation detail của qiqi_delegate, không phải parent orchestration surface.
 
+#### Runtime restart recovery
+
+Authored TaskGraph hiện process-owned; nếu MCP process restart, persisted attempt/session/result state có thể còn nhưng authored graph của `graph_run_id` không tự recover. Graph tool sẽ fail closed với `code=graph_definition_unavailable`.
+
+Đây là **runtime continuity failure**, không phải lý do semantic để downgrade graph-qualified work thành direct flow. Khi gặp đúng error này:
+
+1. Không tiếp tục stale `graph_run_id`, không invent node state và không coi persisted runtime state là semantic completion.
+2. Rehydrate current truth từ current Work Item, repo source/test và exact evidence QiQi đã nhận trước restart.
+3. Mặc định author **fresh TaskGraph cho remaining work** rồi gọi `start_graph`; work đã hoàn thành chỉ được loại khỏi graph mới khi QiQi re-verify đủ evidence theo current acceptance.
+4. Chỉ khi exact native continuity của một interrupted node còn material **và** QiQi vẫn có exact prior `session_id` + sufficient TaskPacket/repository/route từ previously returned state, QiQi MAY dùng một direct `delegate_repo_task(..., session_id=<exact>)` như **recovery bridge cho đúng node đó**. Không dùng recovery bridge khi thiếu exact session identity hoặc packet semantics, và không mở rộng exception này thành direct orchestration cho sibling/remaining nodes.
+5. Sau recovery bridge, reconcile result vào current truth rồi author fresh TaskGraph cho remaining graph-qualified work nếu còn; báo rõ new `graph_run_id` thay vì giả vờ old run đã recover.
+
+Exception này tồn tại cho đến khi authored-graph/retry-plan restart recovery được persist đầy đủ trong runtime.
+
 `repos.yaml` là candidate/dependency registry, không tự sinh TaskGraph. QiQi author explicit graph từ user intent/current Work Item; runtime không infer topology từ child prose.
 
 TaskPacket phải là smallest sufficient repo-local assignment contract:
