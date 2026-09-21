@@ -132,10 +132,22 @@ class FixtureManager:
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 destination.write_text(content, encoding="utf-8")
 
-            # Keep fixture materialization compatible with Git versions that predate\n            # `git init -b`. Initialize first, then normalize the unborn branch name.\n            subprocess.run(["git", "init", "-q", str(repo)], check=True)\n            _run_git(repo, "branch", "-M", "main")\n            _run_git(repo, "config", "user.email", "qiqi-eval@example.invalid")
-            _run_git(repo, "config", "user.name", "QiQi Eval")
+            # Keep fixture materialization compatible with Git versions that predate
+            # `git init -b`, and avoid depending on writable repository config.
+            subprocess.run(["git", "init", "-q", str(repo)], check=True)
             _run_git(repo, "add", "-A")
-            _run_git(repo, "commit", "-q", "-m", "eval fixture baseline")
+            _run_git(
+                repo,
+                "-c",
+                "user.email=qiqi-eval@example.invalid",
+                "-c",
+                "user.name=QiQi Eval",
+                "commit",
+                "-q",
+                "-m",
+                "eval fixture baseline",
+            )
+            _run_git(repo, "branch", "-M", "main")
             initial_head = _run_git(repo, "rev-parse", "HEAD")
             repositories[name] = RepositoryFixture(name=name, path=repo, initial_head=initial_head)
             depends_on = spec_raw.get("depends_on", [])
