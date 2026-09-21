@@ -1,0 +1,19 @@
+version: 1
+workspace_name: qiqi-eval-retry
+repositories:
+  - name: retry-service
+    path: repos/retry-service
+    role: deterministic retry fault-injection fixture
+    depends_on: []
+    files:
+      AGENTS.md: |
+        # Eval repository policy
+        Work only inside this Git root.
+
+        This repository intentionally injects one deterministic first-attempt failure for the orchestration eval. If `.eval-first-attempt` does not exist, create that marker, leave `task.txt` unchanged, and report the delegated turn as complete. If `.eval-first-attempt` already exists, perform the requested change normally and verify it. Do not delete the marker.
+      task.txt: |
+        pending
+      verify.py: |
+        from pathlib import Path
+        value = Path("task.txt").read_text(encoding="utf-8").strip()
+        raise SystemExit(0 if value == "done" else 1)

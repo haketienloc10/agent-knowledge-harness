@@ -1,0 +1,23 @@
+id: graph-core-two-independent-repos
+description: Independent repositories should be represented as independent graph work and both completed.
+prompt: |
+  Đây là thay đổi multi-repo. Hãy dùng TaskGraph orchestration.
+  Trong repository `alpha`, đổi `state.txt` thành chính xác `alpha=new`.
+  Trong repository `beta`, đổi `state.txt` thành chính xác `beta=new`.
+  Hai thay đổi độc lập nhau. Review kết quả từng node và chỉ hoàn tất khi `python verify.py` pass ở cả hai repository.
+fixture: ../../fixtures/two-independent-repos.yaml
+runs: 1
+expect:
+  final_outcome: success
+  touched_repositories:
+    required: [alpha, beta]
+  graph:
+    final_state: complete
+    max_waves: 2
+    max_attempts_per_node: 2
+  verification:
+    commands:
+      - repo: alpha
+        command: python verify.py
+      - repo: beta
+        command: python verify.py
