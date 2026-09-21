@@ -1,3 +1,5 @@
+"""Phase-0 direct delegation regression baseline kept in migrated workspaces."""
+
 from __future__ import annotations
 
 import json
