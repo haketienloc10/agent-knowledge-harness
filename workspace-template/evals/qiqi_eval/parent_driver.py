@@ -55,7 +55,17 @@ def _load_delegate_server(workspace_root: Path):
         if spec is None or spec.loader is None:
             raise RuntimeError(f"cannot load qiqi_delegate server: {server_path}")
         module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
+        # Pydantic/FastMCP resolves postponed annotations through the defining
+        # module namespace. importlib does not insert modules created with
+        # module_from_spec() into sys.modules automatically, so register the
+        # unique eval module before executing server.py and keep it registered
+        # for the lifetime of the native parent turn.
+        sys.modules[name] = module
+        try:
+            spec.loader.exec_module(module)
+        except Exception:
+            sys.modules.pop(name, None)
+            raise
         return module
     finally:
         try:
