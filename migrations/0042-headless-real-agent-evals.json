@@ -1,7 +1,7 @@
 {
   "version": 42,
   "from_ref": "57067a3ccbee9af81ec7bdfc2f394c13d3cff5e9",
-  "to_ref": "417180c90add5c2d0faea5f7dec9e759787b2e8e",
+  "to_ref": "10c61347f3da72ee3821f97b857792ab438bdc47",
   "description": "add a headless real-agent evaluation harness for end-to-end QiQi orchestration with isolated fixtures, authoritative native parent result capture, deterministic evidence scoring, and three graph-core MVP scenarios",
   "workspace": {
     "merge": [],
@@ -25,7 +25,8 @@
       "workspace-template/evals/tests/test_capture.py",
       "workspace-template/evals/tests/test_fixture.py",
       "workspace-template/evals/tests/test_scenario.py",
-      "workspace-template/evals/tests/test_scoring.py"
+      "workspace-template/evals/tests/test_scoring.py",
+      "workspace-template/evals/tests/test_parent_driver.py"
     ],
     "delete": [],
     "manual_review": []
