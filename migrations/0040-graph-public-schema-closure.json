@@ -1,0 +1,21 @@
+{
+  "version": 40,
+  "from_ref": "6d19771ca4a44cacad4ab35a64586d759ba6f9ba",
+  "to_ref": "2077a23031de6d239aa93c16441a02ada4e02332",
+  "description": "close public Graph MCP input schemas for TaskPacket and semantic review decisions so unsupported fields are rejected before runtime orchestration",
+  "workspace": {
+    "merge": [],
+    "replace": [
+      "workspace-template/mcp/qiqi_delegate/task_graph_mcp.py",
+      "workspace-template/mcp/qiqi_delegate/tests/test_task_graph_mcp.py"
+    ],
+    "delete": [],
+    "manual_review": []
+  },
+  "repo": {
+    "merge": [],
+    "replace": [],
+    "delete": [],
+    "manual_review": []
+  }
+}

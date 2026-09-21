@@ -1,0 +1,23 @@
+{
+  "version": 36,
+  "from_ref": "68d6724ae22b43a98cea5eeba27fc45bf0cf4607",
+  "to_ref": "b055d1e12554bc94c7353602489fdf15e1e2a0f3",
+  "description": "add selective TaskGraph retry execution with fresh TaskPacket snapshots and exact native session RESUME through the existing delegation path",
+  "workspace": {
+    "merge": [],
+    "replace": [
+      "workspace-template/mcp/qiqi_delegate/task_graph_runtime.py",
+      "workspace-template/mcp/qiqi_delegate/task_graph_mcp.py",
+      "workspace-template/mcp/qiqi_delegate/tests/test_task_graph_retry_resume.py",
+      "workspace-template/mcp/qiqi_delegate/tests/test_task_graph_retry_review_regressions.py"
+    ],
+    "delete": [],
+    "manual_review": []
+  },
+  "repo": {
+    "merge": [],
+    "replace": [],
+    "delete": [],
+    "manual_review": []
+  }
+}

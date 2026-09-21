@@ -1,0 +1,20 @@
+{
+  "version": 41,
+  "from_ref": "d8c8b46b14d70ffe21d745e4c55f5fa806f8bc7b",
+  "to_ref": "b0cb3778d79a076b66dbe22ef6b96117ec185c0e",
+  "description": "repair upgraded workspaces that may have skipped the Phase 0 qiqi_delegate regression baseline before TaskGraph migration 0029 without rewriting historical migration definitions",
+  "workspace": {
+    "merge": [],
+    "replace": [
+      "workspace-template/mcp/qiqi_delegate/tests/test_delegate_repo_task_regression.py"
+    ],
+    "delete": [],
+    "manual_review": []
+  },
+  "repo": {
+    "merge": [],
+    "replace": [],
+    "delete": [],
+    "manual_review": []
+  }
+}

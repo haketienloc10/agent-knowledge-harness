@@ -1,0 +1,23 @@
+{
+  "version": 34,
+  "from_ref": "f8b19a71479e3098cbd48b8c2683ef592366b720",
+  "to_ref": "51107296c45644e4fa9f9c0f54b135373a1af176",
+  "description": "execute one runnable TaskGraph repo-task per wave through the existing delegate_repo_task primitive and return control to QiQi for semantic review",
+  "workspace": {
+    "merge": [],
+    "replace": [
+      "workspace-template/mcp/qiqi_delegate/task_graph_runtime.py",
+      "workspace-template/mcp/qiqi_delegate/task_graph_mcp.py",
+      "workspace-template/mcp/qiqi_delegate/tests/test_task_graph_runtime.py",
+      "workspace-template/mcp/qiqi_delegate/tests/test_task_graph_mcp.py"
+    ],
+    "delete": [],
+    "manual_review": []
+  },
+  "repo": {
+    "merge": [],
+    "replace": [],
+    "delete": [],
+    "manual_review": []
+  }
+}

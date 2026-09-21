@@ -3,7 +3,7 @@ set -euo pipefail
 
 workspace_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 project_dir="$workspace_root/mcp/qiqi_delegate"
-server="$project_dir/server.py"
+server="$project_dir/task_graph_mcp.py"
 work_items_dir="$workspace_root/work-items"
 
 command -v uv >/dev/null 2>&1 || {

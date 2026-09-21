@@ -1,0 +1,21 @@
+{
+  "version": 31,
+  "from_ref": "789cdeb2362d79a82c6424a2abc4e92dbfef8a55",
+  "to_ref": "35ddd0a96cb6f7e570e050c77f4c2d921656a50c",
+  "description": "add pure deterministic TaskGraph runnable calculation, lifecycle-state derivation, and immutable review-decision transitions without execution side effects",
+  "workspace": {
+    "merge": [],
+    "replace": [
+      "workspace-template/mcp/qiqi_delegate/task_graph_scheduler.py",
+      "workspace-template/mcp/qiqi_delegate/tests/test_task_graph_scheduler.py"
+    ],
+    "delete": [],
+    "manual_review": []
+  },
+  "repo": {
+    "merge": [],
+    "replace": [],
+    "delete": [],
+    "manual_review": []
+  }
+}
