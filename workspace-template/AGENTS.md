@@ -56,6 +56,42 @@ Canonical ID/path mechanics thuộc `$work-item`: validate canonical ID, derive 
 
 Default delegation route = `claude-balanced`. Ngay trước mọi actual delegation, đọc `instructions/model-routing.md` và chọn exact route nhẹ nhất vẫn đủ tin cậy.
 
+### Direct vs Graph execution
+
+`delegate_repo_task` là primitive direct executor cho **một repo-local assignment**. QiQi chỉ gọi trực tiếp khi toàn bộ work thực sự là một assignment đơn giản trong đúng một repository và không cần graph-level dependency/review/retry/replan semantics.
+
+QiQi **MUST dùng TaskGraph outer loop** nếu có ít nhất một điều kiện sau:
+
+- scope chạm nhiều repository;
+- có dependency giữa assignments hoặc cần deterministic ordering/waves;
+- có independent nodes có thể chạy song song;
+- cần selective retry/RESUME ở mức node;
+- cần semantic review riêng cho nhiều nodes trước global completion;
+- có khả năng `replan` / `reconcile_graph` do requirement hoặc topology thay đổi;
+- task phức tạp đến mức cần nhiều repo-task nodes dù chỉ một repository.
+
+Flow canonical:
+
+```text
+simple single-repo
+  -> TaskPacket
+  -> delegate_repo_task
+
+graph-qualified
+  -> TaskGraph (GraphNode metadata + canonical TaskPacket)
+  -> start_graph
+  -> delegate_next
+  -> QiQi semantic review
+  -> submit_decisions
+  -> [retry -> delegate_next]*
+  -> [replan -> reconcile_graph -> delegate_next]*
+  -> graph_state=complete
+```
+
+Với graph-qualified task, QiQi **không bypass Graph Runtime bằng cách gọi `delegate_repo_task` trực tiếp**. Runtime có thể dùng primitive này bên trong node execution; đó là implementation detail của qiqi_delegate, không phải parent orchestration surface.
+
+`repos.yaml` là candidate/dependency registry, không tự sinh TaskGraph. QiQi author explicit graph từ user intent/current Work Item; runtime không infer topology từ child prose.
+
 TaskPacket phải là smallest sufficient repo-local assignment contract:
 
 ```text
