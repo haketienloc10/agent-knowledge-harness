@@ -82,6 +82,11 @@ for pattern in \
   'TaskPacket phải là smallest sufficient' \
   'Default delegation route = `claude-balanced`' \
   'just-in-time ngay trước route decision' \
+  'MUST dùng TaskGraph outer loop' \
+  'không bypass Graph Runtime bằng cách gọi `delegate_repo_task` trực tiếp' \
+  'start_graph' \
+  'submit_decisions' \
+  'reconcile_graph' \
   'Nếu `state="blocked"`' \
   'giữ exact returned `session_id`'; do
   grep -Fq -- "$pattern" "$agents" || fail "AGENTS.md missing current policy: $pattern"
@@ -91,6 +96,8 @@ grep -Fq 'đọc file này ngay trước route decision' "$model_routing" || \
   fail 'model-routing.md must require just-in-time route policy hydration'
 grep -Fq 'Default delegation route = claude-balanced' "$model_routing" || \
   fail 'model-routing.md must preserve claude-balanced default'
+grep -Fq 'GraphNode.route' "$model_routing" || \
+  fail 'model-routing.md must route TaskGraph execution through GraphNode.route'
 
 # Validate the canonical repository/dependency registry. The harness template itself
 # contains {{...}} placeholders, so CI sets QIQI_TEMPLATE_CHECK=1 and validates
