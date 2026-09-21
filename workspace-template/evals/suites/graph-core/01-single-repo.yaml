@@ -2,7 +2,7 @@ id: graph-core-single-repo
 description: Basic user request must be delegated to exactly the relevant repository.
 prompt: |
   Hãy sửa repository `service` để file `app.txt` chứa chính xác `feature=enabled`.
-  Thực hiện theo workspace orchestration policy, delegate phần repo-local cho child agent và chỉ kết luận khi `python verify.py` trong repository pass.
+  Thực hiện theo workspace orchestration policy, delegate phần repo-local cho child agent và chỉ kết luận khi `python3 verify.py` trong repository pass.
 fixture: ../../fixtures/single-repo.yaml
 runs: 1
 expect:
@@ -12,4 +12,4 @@ expect:
   verification:
     commands:
       - repo: service
-        command: python verify.py
+        command: python3 verify.py
