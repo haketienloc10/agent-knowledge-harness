@@ -1,7 +1,6 @@
 # Route Selection Policy cho QiQi
 
-Tệp này chỉ giúp QiQi **chọn exact `route`** để truyền vào
-`delegate_repo_task`. Nó không mô tả cách MCP chạy agent.
+Tệp này chỉ giúp QiQi **chọn exact `route`** cho một repo-task execution. Với TaskGraph, route đi vào `GraphNode.route`; với direct single-repo flow, route đi vào `delegate_repo_task`. File này không quyết định direct-vs-Graph orchestration và không mô tả cách MCP chạy agent.
 
 `instructions/agent-routing.yaml` là machine source of truth duy nhất cho route
 đang tồn tại và cho executable, adapter, model, START/RESUME argv cùng native CLI
@@ -99,7 +98,7 @@ Không chọn Codex chỉ để retry một environment/runtime failure của ro
 2. Chọn route nhẹ nhất vẫn đủ tin cậy để hoàn thành task.
 3. Ưu tiên `claude-balanced` khi không có tín hiệu rõ cho fast/deep/verifier hoặc
    Codex.
-4. Truyền **exact route name** vào `delegate_repo_task`; không truyền profile name.
+4. Truyền **exact route name** vào active execution surface: `GraphNode.route` cho TaskGraph hoặc `delegate_repo_task` cho direct single-repo flow; không truyền profile name.
 5. Không đặt executable, model ID, permission mode, effort, hook config hoặc raw CLI
    flags vào TaskPacket hay public MCP arguments.
 6. Nếu route không tồn tại trong `agent-routing.yaml`, route đó không khả dụng dù
@@ -118,7 +117,7 @@ QiQi nên chọn route nào cho task này?
 Các concern sau **không thuộc route-selection policy** và được mô tả ở artifact
 sở hữu tương ứng:
 
-- TaskPacket/prompt semantics → `AGENTS.md` + `identity.md`;
+- direct-vs-Graph orchestration + TaskPacket/prompt semantics → `AGENTS.md` + `identity.md`;
 - semantic START/RESUME rollover decision → `AGENTS.md`;
 - agent/model/native argv + `{handoff_args}` insertion point → `agent-routing.yaml`;
 - Herdr lifecycle, native session identity, Stop-hook capture và SQLite runtime state → MCP;

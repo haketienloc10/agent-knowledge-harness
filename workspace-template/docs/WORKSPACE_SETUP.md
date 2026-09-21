@@ -142,7 +142,28 @@ uv sync --project mcp/qiqi_delegate
 
 TaskPacket vẫn chứa objective/scope/acceptance đầy đủ. Child được đọc exact mounted dossier từ `work_item_path`, bắt đầu ở `00_WORK_ITEM.md`, nhưng không mutate canonical dossier và không chạy Work Item lifecycle thay QiQi.
 
-`instructions/model-routing.md` không phải mandatory startup material. Default delegation route là `claude-balanced`; khi một turn thực sự delegate, QiQi đọc route policy just-in-time ngay trước route decision.
+Direct `delegate_repo_task` chỉ dành cho một repo-local assignment đơn giản trong đúng một repository. Multi-repo work, dependency/wave orchestration, parallel nodes, selective retry/RESUME, per-node semantic review hoặc replan/reconciliation phải đi TaskGraph:
+
+```text
+start_graph -> delegate_next -> review -> submit_decisions
+                                   | retry -> delegate_next
+                                   | replan -> reconcile_graph -> delegate_next
+                                   -> graph_state=complete
+```
+
+`instructions/model-routing.md` không phải mandatory startup material. Default delegation route là `claude-balanced`; khi một turn thực sự delegate, QiQi đọc route policy just-in-time ngay trước route decision. Route được author vào `GraphNode.route` cho TaskGraph hoặc truyền trực tiếp vào `delegate_repo_task` cho direct single-repo flow.
+
+### Graph runtime restart recovery
+
+Authored graph/retry plan hiện chưa durable qua MCP process restart. Nếu Graph API trả `code=graph_definition_unavailable`, old `graph_run_id` không còn usable dù attempt/session/result runtime evidence có thể vẫn persisted.
+
+Recovery contract:
+
+1. không invent node state hoặc tiếp tục stale run;
+2. rehydrate current semantic truth từ Work Item + repo evidence;
+3. mặc định author fresh TaskGraph cho remaining work và lấy new `graph_run_id`;
+4. direct `delegate_repo_task(..., session_id=<exact>)` chỉ được dùng như one-node recovery bridge khi exact prior session + sufficient TaskPacket/repository/route vẫn còn trong QiQi-held returned state và exact native continuity còn material;
+5. sibling/remaining graph-qualified work quay lại TaskGraph, không chuyển toàn task về direct flow.
 
 ## Verification
 

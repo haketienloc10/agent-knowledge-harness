@@ -35,7 +35,23 @@ QiQi dùng `$work-item` để quản lý lifecycle request → investigation/pla
 
 ## Delegation
 
-QiQi delegate repo-local work qua `delegate_repo_task`. Supported agents nhận shared Work Items directory bằng native `--add-dir` arguments do qiqi_delegate inject. TaskPacket vẫn phải semantically sufficient; Work Item locator/revision cung cấp durable continuity cho tracked task.
+QiQi có hai orchestration surfaces:
+
+- direct `delegate_repo_task`: chỉ cho một repo-local assignment đơn giản trong đúng một repository;
+- TaskGraph: bắt buộc cho multi-repo, dependency/wave, parallel nodes, selective retry/RESUME, per-node semantic review hoặc replan/reconciliation.
+
+TaskGraph outer loop:
+
+```text
+start_graph -> delegate_next -> review -> submit_decisions
+                                   | retry -> delegate_next
+                                   | replan -> reconcile_graph -> delegate_next
+                                   -> graph_state=complete
+```
+
+Supported agents nhận shared Work Items directory bằng native `--add-dir` arguments do qiqi_delegate inject. TaskPacket vẫn phải semantically sufficient; Work Item locator/revision cung cấp durable continuity cho tracked task.
+
+Authored graph hiện process-owned. Nếu Graph API trả `code=graph_definition_unavailable` sau MCP restart, QiQi không tiếp tục stale run: mặc định re-author fresh TaskGraph cho remaining verified work. Direct RESUME chỉ là recovery bridge hẹp cho đúng interrupted node khi QiQi còn exact prior `session_id` và sufficient TaskPacket/repository/route; exception này không cho phép bypass Graph cho sibling/remaining work.
 
 ## Verification
 
