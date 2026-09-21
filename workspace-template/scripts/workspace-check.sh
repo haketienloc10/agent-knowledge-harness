@@ -8,6 +8,7 @@ fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 
 required=(
   AGENTS.md
+  README.md
   identity.md
   repos.yaml
   work-items/.gitkeep
@@ -87,6 +88,8 @@ for pattern in \
   'start_graph' \
   'submit_decisions' \
   'reconcile_graph' \
+  'code=graph_definition_unavailable' \
+  'recovery bridge cho đúng node đó' \
   'Nếu `state="blocked"`' \
   'giữ exact returned `session_id`'; do
   grep -Fq -- "$pattern" "$agents" || fail "AGENTS.md missing current policy: $pattern"
@@ -98,6 +101,10 @@ grep -Fq 'Default delegation route = claude-balanced' "$model_routing" || \
   fail 'model-routing.md must preserve claude-balanced default'
 grep -Fq 'GraphNode.route' "$model_routing" || \
   fail 'model-routing.md must route TaskGraph execution through GraphNode.route'
+grep -Fq 'TaskGraph: bắt buộc' "$workspace_root/README.md" || \
+  fail 'README.md must describe TaskGraph as required for graph-qualified work'
+grep -Fq 'code=graph_definition_unavailable' "$workspace_root/README.md" || \
+  fail 'README.md must document Graph runtime restart recovery'
 
 # Validate the canonical repository/dependency registry. The harness template itself
 # contains {{...}} placeholders, so CI sets QIQI_TEMPLATE_CHECK=1 and validates
