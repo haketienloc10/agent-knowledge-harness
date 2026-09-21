@@ -142,7 +142,16 @@ uv sync --project mcp/qiqi_delegate
 
 TaskPacket vẫn chứa objective/scope/acceptance đầy đủ. Child được đọc exact mounted dossier từ `work_item_path`, bắt đầu ở `00_WORK_ITEM.md`, nhưng không mutate canonical dossier và không chạy Work Item lifecycle thay QiQi.
 
-`instructions/model-routing.md` không phải mandatory startup material. Default delegation route là `claude-balanced`; khi một turn thực sự delegate, QiQi đọc route policy just-in-time ngay trước route decision.
+Direct `delegate_repo_task` chỉ dành cho một repo-local assignment đơn giản trong đúng một repository. Multi-repo work, dependency/wave orchestration, parallel nodes, selective retry/RESUME, per-node semantic review hoặc replan/reconciliation phải đi TaskGraph:
+
+```text
+start_graph -> delegate_next -> review -> submit_decisions
+                                   | retry -> delegate_next
+                                   | replan -> reconcile_graph -> delegate_next
+                                   -> graph_state=complete
+```
+
+`instructions/model-routing.md` không phải mandatory startup material. Default delegation route là `claude-balanced`; khi một turn thực sự delegate, QiQi đọc route policy just-in-time ngay trước route decision. Route được author vào `GraphNode.route` cho TaskGraph hoặc truyền trực tiếp vào `delegate_repo_task` cho direct single-repo flow.
 
 ## Verification
 
