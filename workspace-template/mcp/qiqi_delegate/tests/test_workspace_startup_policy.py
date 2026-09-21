@@ -43,6 +43,28 @@ class WorkspaceStartupPolicyTests(unittest.TestCase):
         self.assertIn("Default delegation route = `claude-balanced`", orchestration)
         self.assertIn("đọc `instructions/model-routing.md`", orchestration)
 
+    def test_graph_qualified_work_cannot_bypass_graph_runtime(self) -> None:
+        orchestration = markdown_section(self.agents, "## Orchestration + delegation")
+        self.assertIn("### Direct vs Graph execution", orchestration)
+        self.assertIn("MUST dùng TaskGraph outer loop", orchestration)
+        self.assertIn("scope chạm nhiều repository", orchestration)
+        self.assertIn("start_graph", orchestration)
+        self.assertIn("delegate_next", orchestration)
+        self.assertIn("submit_decisions", orchestration)
+        self.assertIn("reconcile_graph", orchestration)
+        self.assertIn(
+            "không bypass Graph Runtime bằng cách gọi `delegate_repo_task` trực tiếp",
+            orchestration,
+        )
+
+    def test_route_policy_targets_graph_node_for_graph_execution(self) -> None:
+        self.assertIn("GraphNode.route", self.model_routing)
+        self.assertIn("direct-vs-Graph orchestration", self.model_routing)
+        self.assertIn(
+            "GraphNode.route` cho TaskGraph hoặc `delegate_repo_task` cho direct single-repo flow",
+            self.model_routing,
+        )
+
     def test_blocked_delegation_preserves_resume_identity_before_semantic_read(self) -> None:
         after = markdown_section(self.agents, "## Sau delegation")
         inspect_state = after.index('Inspect runtime `state`')
