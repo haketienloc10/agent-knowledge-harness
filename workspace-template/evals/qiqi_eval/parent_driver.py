@@ -80,6 +80,77 @@ CODEX_TRUST_CONFIRM = "Press enter to continue"
 CODEX_STARTUP_PROBE_SECONDS = 5.0
 
 
+async def _start_eval_parent_agent(
+    server: Any,
+    pane_id: str,
+    adapter: str,
+    agent_args: list[str],
+) -> tuple[str, dict[str, Any]]:
+    """Start an eval parent and tolerate Codex's startup-block race.
+
+    Herdr may create the Codex agent successfully but return agent_not_ready
+    because the TUI is paused on a startup gate such as directory trust. In
+    that case the agent is already addressable by name, so return it to the
+    eval-only startup recovery path instead of treating startup as fatal.
+    """
+
+    name = f"qiqi-{uuid.uuid4().hex[:12]}"
+    command = [
+        "agent",
+        "start",
+        name,
+        "--kind",
+        adapter,
+        "--pane",
+        pane_id,
+        "--timeout",
+        str(server.HERDR_AGENT_START_TIMEOUT_MS),
+    ]
+    if agent_args:
+        command.extend(["--", *agent_args])
+
+    deadline = asyncio.get_running_loop().time() + server.HERDR_SHELL_READY_TIMEOUT_SECONDS
+    last_detail = ""
+    while True:
+        returncode, stdout, stderr = await server._run_herdr(*command, check=False)
+        detail = (stderr or stdout).strip()
+        last_detail = detail or last_detail
+        payload = server._herdr_json_payload(stdout, stderr)
+
+        if returncode == 0:
+            if payload is None:
+                raise RuntimeError(
+                    f"Herdr agent start returned invalid JSON: {' '.join(command)}"
+                )
+            return name, server._agent_from_payload(payload, "agent start")
+
+        error_code = server._herdr_error_code(payload)
+        if error_code == "agent_not_ready" and adapter == "codex":
+            try:
+                return name, await server._get_agent(name)
+            except Exception:
+                if asyncio.get_running_loop().time() >= deadline:
+                    raise
+
+        if error_code != "agent_pane_busy":
+            if len(detail) > 3000:
+                detail = detail[-3000:]
+            raise RuntimeError(
+                f"Herdr command failed (exit={returncode}): {' '.join(command)}"
+                f"{f'; {detail}' if detail else ''}"
+            )
+
+        if asyncio.get_running_loop().time() >= deadline:
+            if len(last_detail) > 2000:
+                last_detail = last_detail[-2000:]
+            raise RuntimeError(
+                f"Herdr root pane {pane_id} did not become an available shell within "
+                f"{server.HERDR_SHELL_READY_TIMEOUT_SECONDS:g}s"
+                f"{f'; last error: {last_detail}' if last_detail else ''}"
+            )
+        await asyncio.sleep(0.1)
+
+
 async def _ensure_parent_startup_ready(server: Any, name: str, adapter: str) -> None:
     """Resolve the known Codex first-run trust gate for eval-created workspaces only.
 
@@ -170,8 +241,8 @@ class ParentAgentDriver:
                     interactive_args = server._build_interactive_args(
                         agent, route_config, None, handoff_args
                     )
-                    managed_name, started_agent = await server._start_interactive_agent(
-                        pane_id, adapter, interactive_args
+                    managed_name, started_agent = await _start_eval_parent_agent(
+                        server, pane_id, adapter, interactive_args
                     )
                     await _ensure_parent_startup_ready(server, managed_name, adapter)
                     status, prompted_agent = await server._prompt_and_wait(
