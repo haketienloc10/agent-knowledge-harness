@@ -4,7 +4,7 @@ prompt: |
   Đây là thay đổi multi-repo. Hãy dùng TaskGraph orchestration.
   Trong repository `alpha`, đổi `state.txt` thành chính xác `alpha=new`.
   Trong repository `beta`, đổi `state.txt` thành chính xác `beta=new`.
-  Hai thay đổi độc lập nhau. Review kết quả từng node và chỉ hoàn tất khi `python verify.py` pass ở cả hai repository.
+  Hai thay đổi độc lập nhau. Review kết quả từng node và chỉ hoàn tất khi `python3 verify.py` pass ở cả hai repository.
 fixture: ../../fixtures/two-independent-repos.yaml
 runs: 1
 expect:
@@ -18,6 +18,6 @@ expect:
   verification:
     commands:
       - repo: alpha
-        command: python verify.py
+        command: python3 verify.py
       - repo: beta
-        command: python verify.py
+        command: python3 verify.py
