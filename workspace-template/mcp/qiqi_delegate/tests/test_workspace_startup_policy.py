@@ -20,6 +20,7 @@ class WorkspaceStartupPolicyTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.agents = read_workspace_file("AGENTS.md")
+        cls.readme = read_workspace_file("README.md")
         cls.model_routing = read_workspace_file("instructions/model-routing.md")
 
     def test_model_routing_is_lazy_but_mandatory_before_actual_delegation(self) -> None:
@@ -64,6 +65,24 @@ class WorkspaceStartupPolicyTests(unittest.TestCase):
             "GraphNode.route` cho TaskGraph hoặc `delegate_repo_task` cho direct single-repo flow",
             self.model_routing,
         )
+
+    def test_graph_restart_recovery_is_fail_closed_and_narrow(self) -> None:
+        orchestration = markdown_section(self.agents, "## Orchestration + delegation")
+        self.assertIn("#### Runtime restart recovery", orchestration)
+        self.assertIn("code=graph_definition_unavailable", orchestration)
+        self.assertIn("fresh TaskGraph cho remaining work", orchestration)
+        self.assertIn("recovery bridge cho đúng node đó", orchestration)
+        self.assertIn("exact prior `session_id`", orchestration)
+        self.assertIn("không mở rộng exception này thành direct orchestration", orchestration)
+
+    def test_workspace_readme_matches_graph_boundary_and_recovery_contract(self) -> None:
+        delegation = markdown_section(self.readme, "## Delegation")
+        self.assertIn("direct `delegate_repo_task`", delegation)
+        self.assertIn("TaskGraph: bắt buộc", delegation)
+        self.assertIn("start_graph", delegation)
+        self.assertIn("submit_decisions", delegation)
+        self.assertIn("code=graph_definition_unavailable", delegation)
+        self.assertIn("re-author fresh TaskGraph", delegation)
 
     def test_blocked_delegation_preserves_resume_identity_before_semantic_read(self) -> None:
         after = markdown_section(self.agents, "## Sau delegation")
