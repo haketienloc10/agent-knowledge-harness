@@ -48,6 +48,18 @@ def _write_json(path: Path, value: Any) -> None:
     path.write_text(json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
 
 
+def _retain_failed_workspace(source: Path, destination: Path) -> None:
+    # Re-running the same scenario/run index intentionally reuses its artifact
+    # directory. Replace a previous retained debug workspace atomically enough
+    # for local eval usage instead of failing with FileExistsError.
+    if destination.exists():
+        if destination.is_dir():
+            shutil.rmtree(destination)
+        else:
+            destination.unlink()
+    shutil.copytree(source, destination, dirs_exist_ok=False)
+
+
 def _summary_markdown(result: dict[str, Any]) -> str:
     lines = [
         f"# Eval: {result['scenario_id']} / run {result['run_index']}",
@@ -134,7 +146,7 @@ async def run_one(
         (run_dir / "summary.md").write_text(_summary_markdown(result), encoding="utf-8")
         if result["status"] == "fail" and options.keep_workspace_on_failure:
             retained = run_dir / "workspace"
-            shutil.copytree(workspace.root, retained, dirs_exist_ok=False)
+            _retain_failed_workspace(workspace.root, retained)
         return result
     finally:
         workspace.cleanup()
