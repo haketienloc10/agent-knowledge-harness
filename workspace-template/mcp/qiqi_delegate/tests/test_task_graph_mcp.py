@@ -397,6 +397,71 @@ class TaskGraphMcpTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("stale review attempt", error_text(result))
         self.assertTrue(reviewable["review_required"][0]["attempt_id"])
 
+    async def test_get_node_review_hydrates_accepted_upstream_evidence_for_replan(self) -> None:
+        delegate = AsyncMock(
+            side_effect=[
+                {
+                    "session_id": "native-session-contracts",
+                    "turn_id": "qiqi-turn-contracts",
+                    "state": "settled",
+                    "agent_response": "accepted contract evidence",
+                },
+                {
+                    "session_id": "native-session-backend",
+                    "turn_id": "qiqi-turn-backend",
+                    "state": "settled",
+                    "agent_response": "backend found a replan dependency",
+                },
+            ]
+        )
+        with patch("task_graph_mcp.delegate_repo_task", delegate):
+            async with Client(mcp) as client:
+                started = (
+                    await client.call_tool("start_graph", {"graph": graph_payload()})
+                ).structured_content
+                contracts_review = (
+                    await client.call_tool(
+                        "delegate_next", {"graph_run_id": started["graph_run_id"]}
+                    )
+                ).structured_content
+                accepted = (
+                    await client.call_tool(
+                        "submit_decisions",
+                        {
+                            "graph_run_id": started["graph_run_id"],
+                            "decisions": [
+                                {"node_id": "contracts", "action": "accept"}
+                            ],
+                            "expected_revision": contracts_review["revision"],
+                        },
+                    )
+                ).structured_content
+                accepted_attempt_id = accepted["nodes"][0]["current_attempt_id"]
+
+                backend_review = (
+                    await client.call_tool(
+                        "delegate_next", {"graph_run_id": started["graph_run_id"]}
+                    )
+                ).structured_content
+                self.assertEqual(backend_review["graph_state"], "awaiting_review")
+
+                evidence_result = await client.call_tool(
+                    "get_node_review",
+                    {
+                        "graph_run_id": started["graph_run_id"],
+                        "node_id": "contracts",
+                        "attempt_id": accepted_attempt_id,
+                    },
+                )
+
+        self.assertFalse(evidence_result.is_error)
+        evidence = evidence_result.structured_content
+        self.assertEqual(evidence["semantic_state"], "satisfied")
+        self.assertEqual(
+            evidence["result"]["agent_response"],
+            "accepted contract evidence",
+        )
+
     async def test_replan_decision_blocks_current_graph_and_returns_handoff_signal(self) -> None:
         delegate = AsyncMock(
             return_value={
