@@ -1,0 +1,23 @@
+{
+  "version": 42,
+  "from_ref": "57067a3ccbee9af81ec7bdfc2f394c13d3cff5e9",
+  "to_ref": "fd15db971216a3181040e3564a91861db3577f21",
+  "description": "restore the QiQi control-plane boundary so repo-local discovery/investigation defaults to delegated child work while preserving exact bounded source reads for orchestration reconciliation",
+  "workspace": {
+    "merge": [
+      "workspace-template/AGENTS.md",
+      "workspace-template/identity.md"
+    ],
+    "replace": [
+      "workspace-template/mcp/qiqi_delegate/tests/test_workspace_startup_policy.py"
+    ],
+    "delete": [],
+    "manual_review": []
+  },
+  "repo": {
+    "merge": [],
+    "replace": [],
+    "delete": [],
+    "manual_review": []
+  }
+}
