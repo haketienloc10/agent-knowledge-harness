@@ -277,6 +277,40 @@ class TaskGraphRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(updated["replan_required_nodes"], [])
         self.assertGreater(updated["revision"], reviewable["revision"])
 
+        accepted_attempt_id = updated["nodes"][0]["current_attempt_id"]
+        backend_review = await self.runtime.delegate_next(
+            run_id,
+            executor=self.settled_executor,
+        )
+        accepted_evidence = self.runtime.get_node_review(
+            run_id,
+            "contracts",
+            accepted_attempt_id,
+        )
+        self.assertEqual(accepted_evidence["semantic_state"], "satisfied")
+        self.assertEqual(
+            accepted_evidence["result"]["agent_response"],
+            "completed contracts",
+        )
+
+        replanning = self.runtime.submit_decisions(
+            run_id,
+            decisions_from_payload(
+                [{"node_id": "backend", "action": "replan"}]
+            ),
+            expected_revision=backend_review["revision"],
+        )
+        self.assertEqual(replanning["graph_state"], "blocked")
+        accepted_evidence_after_replan = self.runtime.get_node_review(
+            run_id,
+            "contracts",
+            accepted_attempt_id,
+        )
+        self.assertEqual(
+            accepted_evidence_after_replan["result"]["agent_response"],
+            "completed contracts",
+        )
+
     async def test_retry_block_and_replan_have_distinct_outer_loop_outcomes(self) -> None:
         expected = {
             "retry": ("ready", "pending", []),
