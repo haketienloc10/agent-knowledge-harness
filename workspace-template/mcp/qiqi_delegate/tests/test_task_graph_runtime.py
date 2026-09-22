@@ -101,6 +101,9 @@ class TaskGraphRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["results"][0]["runtime_state"], "settled")
         self.assertEqual(result["results"][0]["session_id"], "session-contracts")
         self.assertEqual(result["results"][0]["turn_id"], "turn-contracts")
+        self.assertNotIn("agent_response", result["results"][0])
+        self.assertNotIn("result", result["nodes"][0])
+        attempt_id = result["results"][0]["attempt_id"]
         self.assertEqual(
             result["review_required"],
             [
@@ -108,16 +111,15 @@ class TaskGraphRuntimeTests(unittest.IsolatedAsyncioTestCase):
                     "node_id": "contracts",
                     "repository": "contracts",
                     "runtime_state": "settled",
+                    "attempt_id": attempt_id,
                     "acceptance_criteria": ["focused verification passes"],
-                    "result": {
-                        "session_id": "session-contracts",
-                        "turn_id": "turn-contracts",
-                        "state": "settled",
-                        "agent_response": "completed contracts",
-                    },
                 }
             ],
         )
+        review = self.runtime.get_node_review(run_id, "contracts", attempt_id)
+        self.assertEqual(review["revision"], result["revision"])
+        self.assertEqual(review["attempt_id"], attempt_id)
+        self.assertEqual(review["result"]["agent_response"], "completed contracts")
         self.assertEqual(persisted["runtime_state"], "settled")
         self.assertEqual(persisted["session_id"], "session-contracts")
         self.assertEqual(persisted["turn_id"], "turn-contracts")
@@ -125,6 +127,22 @@ class TaskGraphRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(attempts[0]["wave_id"], result["wave_id"])
         self.assertFalse(attempts[0]["resume_session"])
         self.assertEqual(attempts[0]["result"]["agent_response"], "completed contracts")
+
+    async def test_get_node_review_rejects_stale_attempt_locator(self) -> None:
+        started = self.start()
+        run_id = started["graph_run_id"]
+        reviewable = await self.runtime.delegate_next(
+            run_id,
+            executor=self.settled_executor,
+        )
+        attempt_id = reviewable["review_required"][0]["attempt_id"]
+
+        with self.assertRaisesRegex(RuntimeError, "stale review attempt"):
+            self.runtime.get_node_review(run_id, "contracts", "attempt-stale")
+
+        hydrated = self.runtime.get_node_review(run_id, "contracts", attempt_id)
+        self.assertEqual(hydrated["node_id"], "contracts")
+        self.assertEqual(hydrated["result"]["agent_response"], "completed contracts")
 
     async def test_delegate_next_executes_all_conflict_free_runnable_nodes_per_wave(self) -> None:
         graph = TaskGraph(
