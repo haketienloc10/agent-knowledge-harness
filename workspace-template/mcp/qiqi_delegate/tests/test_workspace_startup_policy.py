@@ -66,6 +66,8 @@ class WorkspaceStartupPolicyTests(unittest.TestCase):
         self.assertIn("smallest sufficient current surface", orchestration)
         self.assertIn("get_node_review", orchestration)
         self.assertIn("just-in-time", orchestration)
+        self.assertIn("upstream đã accepted", orchestration)
+        self.assertIn("không hydrate accepted nodes như routine context", orchestration)
         self.assertIn("không xóa execution evidence khỏi store", orchestration)
 
     def test_blocked_delegation_preserves_resume_identity_before_semantic_read(self) -> None:
