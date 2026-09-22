@@ -139,7 +139,7 @@ def _graph_tool_error(exc: ValueError | RuntimeError) -> ToolError:
         "not ready for delegation" in lowered
         or "only accepted while graph_state" in lowered
         or "reconciliation cannot run while" in lowered
-        or "not awaiting semantic review" in lowered
+        or "not available for jit evidence hydration" in lowered
         or "stale review attempt" in lowered
     ):
         code = "graph_state_conflict"
@@ -262,11 +262,12 @@ async def get_node_review(
     node_id: str,
     attempt_id: str,
 ) -> dict[str, Any]:
-    """Hydrate exactly one current review attempt just in time.
+    """Hydrate exactly one current attempt just in time for review or replan evidence.
 
-    Use the node_id/attempt_id pair returned by review_required. Rich native result content
-    is intentionally absent from get_graph/delegate_next snapshots so accepted or unrelated
-    node responses do not repeatedly re-enter QiQi context.
+    For a pending review, use the node_id/attempt_id pair returned by review_required.
+    An accepted node may also be hydrated explicitly by its current attempt_id when a
+    downstream review/replan materially needs that prior evidence. Rich native result
+    content remains absent from get_graph/delegate_next snapshots.
     """
     return _graph_runtime.get_node_review(graph_run_id, node_id, attempt_id)
 
