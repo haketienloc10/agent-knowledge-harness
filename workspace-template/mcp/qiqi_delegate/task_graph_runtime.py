@@ -425,7 +425,7 @@ class GraphRuntime:
         node_id: str,
         attempt_id: str,
     ) -> dict[str, Any]:
-        """Hydrate one current review attempt without expanding the whole graph snapshot."""
+        """Hydrate one exact current attempt for semantic review or replan evidence."""
 
         graph, snapshot, revision = self._snapshot(graph_run_id)
         if not isinstance(node_id, str) or not node_id.strip():
@@ -441,12 +441,14 @@ class GraphRuntime:
             raise RuntimeError(
                 f"unknown active graph node for review: {clean_node_id!r}"
             )
-        if (
-            state.semantic_state != "pending"
-            or state.runtime_state not in REVIEWABLE_RUNTIME_STATES
-        ):
+        is_current_review = (
+            state.semantic_state == "pending"
+            and state.runtime_state in REVIEWABLE_RUNTIME_STATES
+        )
+        is_accepted_evidence = state.semantic_state == "satisfied"
+        if not (is_current_review or is_accepted_evidence):
             raise RuntimeError(
-                f"node {clean_node_id!r} is not awaiting semantic review"
+                f"node {clean_node_id!r} is not available for JIT evidence hydration"
             )
 
         persisted = self.store.get_node(graph_run_id, clean_node_id)
@@ -484,6 +486,7 @@ class GraphRuntime:
             "node_id": clean_node_id,
             "repository": authored.repository,
             "attempt_id": clean_attempt_id,
+            "semantic_state": state.semantic_state,
             "runtime_state": state.runtime_state,
             "acceptance_criteria": list(authored.task_packet.acceptance_criteria),
             "result": result,
