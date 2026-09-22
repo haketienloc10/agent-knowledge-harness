@@ -1,8 +1,8 @@
 {
   "version": 43,
   "from_ref": "7309d381028f9542e51d0816a756358edd16d9cb",
-  "to_ref": "89af9dfd1dfd88628df8cd13de4ffd704ee86799",
-  "description": "make TaskGraph parent responses progressively disclosed by removing rich native results from compact graph snapshots, adding exact per-attempt get_node_review hydration, and enabling the new review tool for QiQi",
+  "to_ref": "2eac8735e15c956ceac2fd550e9c99d7cfa42c37",
+  "description": "make TaskGraph parent responses progressively disclosed by removing rich native results from compact graph snapshots, adding exact per-attempt get_node_review hydration for current review or accepted evidence needed by replanning, and enabling the new review tool for QiQi",
   "workspace": {
     "merge": [
       "workspace-template/AGENTS.md"
