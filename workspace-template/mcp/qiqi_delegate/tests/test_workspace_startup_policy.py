@@ -20,6 +20,7 @@ class WorkspaceStartupPolicyTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.agents = read_workspace_file("AGENTS.md")
+        cls.identity = read_workspace_file("identity.md")
         cls.model_routing = read_workspace_file("instructions/model-routing.md")
 
     def test_model_routing_is_lazy_but_mandatory_before_actual_delegation(self) -> None:
@@ -42,6 +43,22 @@ class WorkspaceStartupPolicyTests(unittest.TestCase):
         orchestration = markdown_section(self.agents, "## Orchestration + delegation")
         self.assertIn("Default delegation route = `claude-balanced`", orchestration)
         self.assertIn("đọc `instructions/model-routing.md`", orchestration)
+
+    def test_qiqi_delegates_repo_discovery_but_allows_exact_bounded_reconciliation_read(self) -> None:
+        boundary = markdown_section(self.agents, "## Repository discovery boundary")
+
+        self.assertIn("control plane", boundary)
+        self.assertIn("Repository child sở hữu discovery/investigation/implementation/verification", boundary)
+        self.assertIn("MUST NOT mặc định chạy `rg`/`grep`/`find`", boundary)
+        self.assertIn("broad code search", boundary)
+        self.assertIn("exact bounded source locator", boundary)
+        self.assertIn("smallest exact range", boundary)
+        self.assertIn("không từ bounded read mở rộng sang search", boundary)
+        self.assertIn("delegate question đó", boundary)
+        self.assertIn("direct delegation và TaskGraph", boundary)
+
+        self.assertIn("delegate discovery cho repository child", self.identity)
+        self.assertIn("không mở rộng bounded read thành grep/search/call-chain investigation", self.identity)
 
     def test_blocked_delegation_preserves_resume_identity_before_semantic_read(self) -> None:
         after = markdown_section(self.agents, "## Sau delegation")
