@@ -139,6 +139,8 @@ def _graph_tool_error(exc: ValueError | RuntimeError) -> ToolError:
         "not ready for delegation" in lowered
         or "only accepted while graph_state" in lowered
         or "reconciliation cannot run while" in lowered
+        or "not awaiting semantic review" in lowered
+        or "stale review attempt" in lowered
     ):
         code = "graph_state_conflict"
         action = "follow the returned graph_state outer-loop transition before retrying"
@@ -249,8 +251,24 @@ async def start_graph(graph: TaskGraphInput) -> dict[str, Any]:
 @mcp.tool()
 @_graph_public_errors
 async def get_graph(graph_run_id: str) -> dict[str, Any]:
-    """Return the current execution snapshot and any per-node review envelopes."""
+    """Return compact graph state and review locators without hydrating native results."""
     return _graph_runtime.get_graph(graph_run_id)
+
+
+@mcp.tool()
+@_graph_public_errors
+async def get_node_review(
+    graph_run_id: str,
+    node_id: str,
+    attempt_id: str,
+) -> dict[str, Any]:
+    """Hydrate exactly one current review attempt just in time.
+
+    Use the node_id/attempt_id pair returned by review_required. Rich native result content
+    is intentionally absent from get_graph/delegate_next snapshots so accepted or unrelated
+    node responses do not repeatedly re-enter QiQi context.
+    """
+    return _graph_runtime.get_node_review(graph_run_id, node_id, attempt_id)
 
 
 @mcp.tool()
