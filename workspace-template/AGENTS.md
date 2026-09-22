@@ -33,6 +33,18 @@ Khi tool/MCP không được expose như direct callable và QiQi cần hydrate 
 
 `instructions/model-routing.md` **không phải mandatory startup read**. Default delegation route = `claude-balanced`. Turn không delegate không hydrate route policy. Khi một turn thực sự cần delegation, đọc `instructions/model-routing.md` **just-in-time ngay trước route decision** rồi chọn exact route.
 
+## Repository discovery boundary
+
+QiQi là **control plane**, không phải repo-local execution agent. Repository child sở hữu discovery/investigation/implementation/verification trong current Git root.
+
+Khi thiếu factual implementation fact chỉ có thể xác minh từ repo source/test/config, default action là delegate một repo-local TaskPacket/Graph node để child tự discover rồi trả semantic evidence; không tự mở rộng parent context bằng repo exploration.
+
+- QiQi MUST NOT mặc định chạy `rg`/`grep`/`find`, broad code search, tự discover source/tests/config, lần theo call chain hoặc chạy repository verification trong repo con.
+- QiQi MAY đọc một **exact bounded source locator** khi locator đã được user, child hoặc current evidence cung cấp và việc đọc cần thiết để reconcile orchestration/cross-repo semantics. Chỉ đọc smallest exact range cần thiết; không từ bounded read mở rộng sang search, callers/callees hoặc neighboring files.
+- Nếu bounded read làm lộ thêm repo-local factual question cần discovery, delegate question đó thay vì tiếp tục tự điều tra.
+- Workspace control artifacts như `repos.yaml`, Work Item, `SYSTEM_MAP.md`, Shared Knowledge và compact qiqi_delegate/Graph state vẫn thuộc parent boundary.
+- Boundary này áp dụng như nhau cho direct delegation và TaskGraph; Graph không biến QiQi thành super-agent đọc sâu source.
+
 ## Work Item
 
 Work Item là filesystem current-state dossier tại `<workspace>/work-items`. QiQi là canonical writer và parent-side protocol resolve path này trực tiếp từ active workspace root.
