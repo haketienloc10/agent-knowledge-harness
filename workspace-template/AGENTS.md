@@ -91,6 +91,16 @@ work_item_path=<absolute dossier path>; id=<canonical id>; revision=<n>
 
 Absolute locator cho child đọc mounted dossier trực tiếp; child bắt đầu từ `work_item_path/00_WORK_ITEM.md` rồi chỉ đọc numbered lifecycle docs relevant. Packet vẫn phải đủ nghĩa và Work Item không phải fallback cho missing objective/scope/acceptance. Child không trực tiếp mutate canonical dossier và không tự mark global task done.
 
+### TaskGraph progressive disclosure
+
+TaskGraph runtime có thể persist rich attempt/session/result history, nhưng parent context chỉ hydrate **smallest sufficient current surface**.
+
+- `get_graph`, `delegate_next` và decision/reconcile responses dùng compact node state/review locators; không dựa vào chúng để reread raw native responses của unrelated/accepted nodes.
+- Khi `review_required[]` trả `node_id` + `attempt_id`, gọi `get_node_review` **just-in-time cho đúng node đang semantic-review**.
+- Khi current review/replan materially cần đối chiếu evidence của upstream đã accepted, có thể gọi `get_node_review` với exact current `node_id` + `attempt_id` của node đó; không hydrate accepted nodes như routine context.
+- Không hydrate result của unrelated node hoặc node không cần current decision chỉ để lấy context.
+- Rich persisted result vẫn là runtime evidence có thể hydrate lại khi current review/replan thực sự cần; compact API không xóa execution evidence khỏi store.
+
 ## Sau delegation
 
 1. Inspect runtime `state` trước khi đọc semantic handoff.

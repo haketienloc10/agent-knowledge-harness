@@ -1,0 +1,27 @@
+{
+  "version": 43,
+  "from_ref": "7309d381028f9542e51d0816a756358edd16d9cb",
+  "to_ref": "2eac8735e15c956ceac2fd550e9c99d7cfa42c37",
+  "description": "make TaskGraph parent responses progressively disclosed by removing rich native results from compact graph snapshots, adding exact per-attempt get_node_review hydration for current review or accepted evidence needed by replanning, and enabling the new review tool for QiQi",
+  "workspace": {
+    "merge": [
+      "workspace-template/AGENTS.md"
+    ],
+    "replace": [
+      "workspace-template/.codex/config.toml",
+      "workspace-template/mcp/qiqi_delegate/task_graph_mcp.py",
+      "workspace-template/mcp/qiqi_delegate/task_graph_runtime.py",
+      "workspace-template/mcp/qiqi_delegate/tests/test_task_graph_mcp.py",
+      "workspace-template/mcp/qiqi_delegate/tests/test_task_graph_runtime.py",
+      "workspace-template/mcp/qiqi_delegate/tests/test_workspace_startup_policy.py"
+    ],
+    "delete": [],
+    "manual_review": []
+  },
+  "repo": {
+    "merge": [],
+    "replace": [],
+    "delete": [],
+    "manual_review": []
+  }
+}

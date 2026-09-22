@@ -370,12 +370,6 @@ class GraphRuntime:
                     f"persisted graph run is missing node state for {state.node_id!r}"
                 )
             current_attempt_id = persisted.get("current_attempt_id")
-            attempt = (
-                self.store.get_attempt(current_attempt_id)
-                if isinstance(current_attempt_id, str) and current_attempt_id
-                else None
-            )
-            result = attempt.get("result") if attempt is not None else None
             retry_plan = self._retry_plans.get((graph_run_id, state.node_id))
             execution_nodes.append(
                 {
@@ -385,7 +379,6 @@ class GraphRuntime:
                     "current_attempt_id": current_attempt_id,
                     "session_id": persisted.get("session_id"),
                     "turn_id": persisted.get("turn_id"),
-                    "result": result,
                     "retry_pending": (
                         {
                             "resume_session": retry_plan.resume_session,
@@ -408,10 +401,10 @@ class GraphRuntime:
                         "node_id": state.node_id,
                         "repository": authored.repository,
                         "runtime_state": state.runtime_state,
+                        "attempt_id": current_attempt_id,
                         "acceptance_criteria": list(
                             authored.task_packet.acceptance_criteria
                         ),
-                        "result": result,
                     }
                 )
 
@@ -424,6 +417,79 @@ class GraphRuntime:
             "review_required": review_required,
             "nodes": execution_nodes,
             "authored_node_count": len(graph.nodes),
+        }
+
+    def get_node_review(
+        self,
+        graph_run_id: str,
+        node_id: str,
+        attempt_id: str,
+    ) -> dict[str, Any]:
+        """Hydrate one exact current attempt for semantic review or replan evidence."""
+
+        graph, snapshot, revision = self._snapshot(graph_run_id)
+        if not isinstance(node_id, str) or not node_id.strip():
+            raise ValueError("node_id must be a non-empty string")
+        if not isinstance(attempt_id, str) or not attempt_id.strip():
+            raise ValueError("attempt_id must be a non-empty string")
+        clean_node_id = node_id.strip()
+        clean_attempt_id = attempt_id.strip()
+
+        states = {state.node_id: state for state in snapshot.node_states}
+        state = states.get(clean_node_id)
+        if state is None:
+            raise RuntimeError(
+                f"unknown active graph node for review: {clean_node_id!r}"
+            )
+        is_current_review = (
+            state.semantic_state == "pending"
+            and state.runtime_state in REVIEWABLE_RUNTIME_STATES
+        )
+        is_accepted_evidence = state.semantic_state == "satisfied"
+        if not (is_current_review or is_accepted_evidence):
+            raise RuntimeError(
+                f"node {clean_node_id!r} is not available for JIT evidence hydration"
+            )
+
+        persisted = self.store.get_node(graph_run_id, clean_node_id)
+        if persisted is None:
+            raise RuntimeError(
+                f"persisted graph run is missing node state for {clean_node_id!r}"
+            )
+        if persisted.get("current_attempt_id") != clean_attempt_id:
+            raise RuntimeError(
+                f"stale review attempt for node {clean_node_id!r}: "
+                f"current={persisted.get('current_attempt_id')!r}, "
+                f"requested={clean_attempt_id!r}"
+            )
+
+        attempt = self.store.get_attempt(clean_attempt_id)
+        if (
+            attempt is None
+            or attempt.get("graph_run_id") != graph_run_id
+            or attempt.get("node_id") != clean_node_id
+        ):
+            raise RuntimeError(
+                f"review attempt {clean_attempt_id!r} does not belong to "
+                f"node {clean_node_id!r} in this graph run"
+            )
+        result = attempt.get("result")
+        if not isinstance(result, dict):
+            raise RuntimeError(
+                f"review attempt {clean_attempt_id!r} has no persisted result"
+            )
+
+        authored = next(node for node in graph.nodes if node.node_id == clean_node_id)
+        return {
+            "graph_run_id": graph_run_id,
+            "revision": revision,
+            "node_id": clean_node_id,
+            "repository": authored.repository,
+            "attempt_id": clean_attempt_id,
+            "semantic_state": state.semantic_state,
+            "runtime_state": state.runtime_state,
+            "acceptance_criteria": list(authored.task_packet.acceptance_criteria),
+            "result": result,
         }
 
     def reconcile_graph(
@@ -787,7 +853,6 @@ class GraphRuntime:
                     "runtime_state": outcome["state"],
                     "session_id": outcome["session_id"],
                     "turn_id": outcome["turn_id"],
-                    "agent_response": outcome["agent_response"],
                     "resume_session": bool(
                         item.retry_plan is not None
                         and item.retry_plan.resume_session
