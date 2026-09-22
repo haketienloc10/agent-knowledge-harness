@@ -129,6 +129,7 @@ class TaskGraphMcpTests(unittest.IsolatedAsyncioTestCase):
                 "delegate_repo_task",
                 "start_graph",
                 "get_graph",
+                "get_node_review",
                 "delegate_next",
                 "submit_decisions",
             }.issubset(names)
@@ -214,6 +215,7 @@ class TaskGraphMcpTests(unittest.IsolatedAsyncioTestCase):
         for tool_name in (
             "start_graph",
             "get_graph",
+            "get_node_review",
             "reconcile_graph",
             "delegate_next",
             "submit_decisions",
@@ -294,8 +296,24 @@ class TaskGraphMcpTests(unittest.IsolatedAsyncioTestCase):
                     delegated["review_required"][0]["acceptance_criteria"],
                     ["contract verification passes"],
                 )
+                self.assertNotIn("agent_response", delegated["results"][0])
+                self.assertNotIn("result", delegated["nodes"][0])
+                self.assertNotIn("result", delegated["review_required"][0])
+                attempt_id = delegated["review_required"][0]["attempt_id"]
+
+                review_result = await client.call_tool(
+                    "get_node_review",
+                    {
+                        "graph_run_id": run_id,
+                        "node_id": "contracts",
+                        "attempt_id": attempt_id,
+                    },
+                )
+                self.assertFalse(review_result.is_error)
+                review = review_result.structured_content
+                self.assertEqual(review["attempt_id"], attempt_id)
                 self.assertEqual(
-                    delegated["review_required"][0]["result"]["agent_response"],
+                    review["result"]["agent_response"],
                     "native final response",
                 )
 
@@ -305,7 +323,9 @@ class TaskGraphMcpTests(unittest.IsolatedAsyncioTestCase):
                 current = current_result.structured_content
                 self.assertEqual(current["graph_state"], "awaiting_review")
                 self.assertEqual(current["nodes"][0]["runtime_state"], "settled")
+                self.assertNotIn("result", current["nodes"][0])
                 self.assertEqual([item["node_id"] for item in current["review_required"]], ["contracts"])
+                self.assertNotIn("result", current["review_required"][0])
 
                 decided_result = await client.call_tool(
                     "submit_decisions",
@@ -343,6 +363,39 @@ class TaskGraphMcpTests(unittest.IsolatedAsyncioTestCase):
             known_unknowns=[],
             session_id=None,
         )
+
+    async def test_get_node_review_rejects_stale_review_locator(self) -> None:
+        delegate = AsyncMock(
+            return_value={
+                "session_id": "native-session-contracts",
+                "turn_id": "qiqi-turn-contracts",
+                "state": "settled",
+                "agent_response": "native final response",
+            }
+        )
+        with patch("task_graph_mcp.delegate_repo_task", delegate):
+            async with Client(mcp) as client:
+                started = (
+                    await client.call_tool("start_graph", {"graph": graph_payload()})
+                ).structured_content
+                reviewable = (
+                    await client.call_tool(
+                        "delegate_next", {"graph_run_id": started["graph_run_id"]}
+                    )
+                ).structured_content
+                result = await client.call_tool(
+                    "get_node_review",
+                    {
+                        "graph_run_id": started["graph_run_id"],
+                        "node_id": "contracts",
+                        "attempt_id": "attempt-stale",
+                    },
+                )
+
+        self.assertTrue(result.is_error)
+        self.assertIn("code=graph_state_conflict", error_text(result))
+        self.assertIn("stale review attempt", error_text(result))
+        self.assertTrue(reviewable["review_required"][0]["attempt_id"])
 
     async def test_replan_decision_blocks_current_graph_and_returns_handoff_signal(self) -> None:
         delegate = AsyncMock(
