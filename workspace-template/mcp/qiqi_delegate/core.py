@@ -14,6 +14,7 @@ from typing import Any, Iterable
 # packet keeps the same aggregate ceiling while semantic completeness/minimality
 # remain the design criteria for normal operation.
 TASK_PACKET_MAX_CHARS = 100_000
+SEMANTIC_HANDOFF_MARKER = "<!-- qiqi-semantic-handoff:v1 -->"
 SUPPORTED_HOOK_ADAPTERS = {"claude", "codex"}
 
 
@@ -279,7 +280,11 @@ def _bullet_lines(items: Iterable[str]) -> str:
     return "\n".join(f"- {item}" for item in items)
 
 
-def render_task_prompt(packet: TaskPacket) -> str:
+def render_task_prompt(
+    packet: TaskPacket,
+    *,
+    require_semantic_handoff_marker: bool = False,
+) -> str:
     sections = [
         "Repository task delegated by QiQi",
         f"## Repository objective\n\n{packet.objective}",
@@ -313,7 +318,31 @@ def render_task_prompt(packet: TaskPacket) -> str:
     if packet.known_unknowns:
         sections.append(f"## Known unknowns\n\n{_bullet_lines(packet.known_unknowns)}")
 
+    if require_semantic_handoff_marker:
+        sections.append(
+            "## Native semantic handoff\n\n"
+            "When your response itself is the self-contained handoff QiQi should review "
+            "against the acceptance criteria, append the exact marker below on its own "
+            "final line:\n\n"
+            f"{SEMANTIC_HANDOFF_MARKER}\n\n"
+            "Use the marker only on a response that contains the material evidence, "
+            "conclusion, or blocker needed for semantic review. Do not mark waiting, "
+            "progress, notification, housekeeping, or \"see previous response\" messages. "
+            "Async/background work may wake this session again after a marked handoff; "
+            "those later unmarked messages must not replace the marked handoff."
+        )
+
     return "\n\n".join(sections).strip()
+
+
+def _extract_semantic_handoff(response: str) -> tuple[str, bool]:
+    trimmed = response.rstrip()
+    if not trimmed.endswith(SEMANTIC_HANDOFF_MARKER):
+        return response, False
+    body = trimmed[: -len(SEMANTIC_HANDOFF_MARKER)].rstrip()
+    if not body:
+        return response, False
+    return body, True
 
 
 def normalize_hook_payload(
@@ -342,10 +371,12 @@ def normalize_hook_payload(
     if response is not None and not isinstance(response, str):
         raise ValueError("last_assistant_message must be a string or null")
 
+    semantic_handoff_ready = False
     background_task_count = 0
     if event == "Stop":
         if not isinstance(response, str) or not response.strip():
             raise ValueError("Stop hook is missing the native final assistant message")
+        response, semantic_handoff_ready = _extract_semantic_handoff(response)
         if adapter == "claude":
             background_tasks = payload.get("background_tasks")
             if not isinstance(background_tasks, list):
@@ -397,6 +428,7 @@ def normalize_hook_payload(
         "error": error,
         "cwd": cwd,
         "background_task_count": background_task_count,
+        "semantic_handoff_ready": semantic_handoff_ready,
         "captured_at_ns": (
             captured_at_ns if captured_at_ns is not None else time.time_ns()
         ),
@@ -418,12 +450,12 @@ def load_capture_events(sink_dir: Path, nonce: str) -> list[dict[str, Any]]:
     return events
 
 
-def select_capture_event(
+def select_capture_events(
     events: Iterable[dict[str, Any]],
     *,
     adapter: str,
     session_id: str,
-) -> dict[str, Any]:
+) -> list[dict[str, Any]]:
     matching = [
         event
         for event in events
@@ -439,7 +471,20 @@ def select_capture_event(
             "native result hook produced no valid response capture for the Herdr session"
         )
     matching.sort(key=lambda item: int(item.get("captured_at_ns") or 0))
-    return matching[-1]
+    return matching
+
+
+def select_capture_event(
+    events: Iterable[dict[str, Any]],
+    *,
+    adapter: str,
+    session_id: str,
+) -> dict[str, Any]:
+    return select_capture_events(
+        events,
+        adapter=adapter,
+        session_id=session_id,
+    )[-1]
 
 
 class SessionStore:
