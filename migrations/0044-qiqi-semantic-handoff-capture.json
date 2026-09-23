@@ -1,0 +1,24 @@
+{
+  "version": 44,
+  "from_ref": "2b8f595239e38d0557b1c3b8fac6420d9c744608",
+  "to_ref": "3c4bee76ffd007bc09da89cd475fc7c32d9fa1cd",
+  "description": "preserve explicit Claude semantic handoff candidates across async Stop events so later unmarked completion or housekeeping responses cannot overwrite the self-contained native handoff returned to QiQi, while preserving exact StopFailure evidence and leaving Codex native responses untouched by the Claude-only marker protocol",
+  "workspace": {
+    "merge": [],
+    "replace": [
+      "workspace-template/mcp/qiqi_delegate/core.py",
+      "workspace-template/mcp/qiqi_delegate/server.py",
+      "workspace-template/mcp/qiqi_delegate/tests/test_core.py",
+      "workspace-template/mcp/qiqi_delegate/tests/test_result_capture_wait.py",
+      "workspace-template/mcp/qiqi_delegate/tests/test_result_hook.py"
+    ],
+    "delete": [],
+    "manual_review": []
+  },
+  "repo": {
+    "merge": [],
+    "replace": [],
+    "delete": [],
+    "manual_review": []
+  }
+}
