@@ -29,7 +29,7 @@ from core import (
     load_capture_events,
     new_turn_id,
     render_task_prompt,
-    select_capture_event,
+    select_capture_events,
 )
 
 _workspace_root_env = os.environ.get("QIQI_WORKSPACE_ROOT")
@@ -122,11 +122,13 @@ mcp = MCPServer(
         "omitted assignment semantics. Allowed repository/runtime/Knowledge tools may still "
         "be used for execution evidence or reusable implementation knowledge under stable "
         "policy. The MCP launches/resumes the native Codex or Claude session through Herdr "
-        "and captures the native final assistant message through a static result-hook command "
+        "and captures native assistant Stop responses through a static result-hook command "
         "routed to MCP-owned active-capture state; it never scrapes terminal scrollback or "
-        "parses agent transcripts. Claude Stop captures with in-flight background work stay "
-        "internal and pending until a later Stop reports no background tasks; pending capture "
-        "waits are bounded so a lost final hook cannot hold the workspace indefinitely. Codex "
+        "parses agent transcripts. Claude receives an explicit semantic-handoff marker contract; "
+        "the hook strips that marker and preserves the latest marked handoff candidate while "
+        "background work remains pending, so a later unmarked completion/housekeeping Stop cannot "
+        "overwrite the self-contained handoff. Unmarked async captures still wait for a later "
+        "Stop with no background tasks, and pending waits remain bounded. Codex "
         "trusts only the exact QiQi session hook by matching its computed trusted_hash; global "
         "hook-trust bypass is forbidden. Settled/failed/blocked are runtime lifecycle states, "
         "not semantic completion. Runtime session ownership is persisted in MCP-owned SQLite "
@@ -1020,15 +1022,39 @@ async def _wait_for_result_capture(
     while True:
         events = load_capture_events(sink, nonce)
         try:
-            event = select_capture_event(
+            matching = select_capture_events(
                 events, adapter=adapter, session_id=native_session_id
             )
         except RuntimeError as exc:
             last_error = exc
         else:
+            event = matching[-1]
+            semantic_candidates = [
+                candidate
+                for candidate in matching
+                if candidate.get("semantic_handoff_ready") is True
+                and candidate.get("hook_event") == "Stop"
+                and candidate.get("state") in {"pending_async", "settled"}
+            ]
+            semantic_candidate = (
+                semantic_candidates[-1] if semantic_candidates else None
+            )
+
             state = event.get("state")
             if state in {"settled", "failed"}:
-                return event
+                if semantic_candidate is None:
+                    return event
+                selected = dict(event)
+                selected["agent_response"] = semantic_candidate["agent_response"]
+                selected["native_turn_id"] = (
+                    semantic_candidate.get("native_turn_id")
+                    or event.get("native_turn_id")
+                )
+                selected["semantic_handoff_ready"] = True
+                selected["semantic_handoff_captured_at_ns"] = semantic_candidate.get(
+                    "captured_at_ns"
+                )
+                return selected
             if state == "capture_error":
                 detail = event.get("error")
                 raise RuntimeError(
@@ -1111,7 +1137,10 @@ async def delegate_repo_task(
     native conversation. Session ownership is stored in `.qiqi/state/qiqi_delegate.sqlite3`.
 
     Settled/failed native turns return `session_id`, QiQi-owned `turn_id`, `state`,
-    and exact native `agent_response`. If Herdr reaches `blocked` before the agent
+    and one native semantic `agent_response`. Claude responses explicitly marked as the
+    self-contained handoff survive later unmarked async-completion/housekeeping Stops;
+    the internal marker is stripped before persistence/return. If Herdr reaches `blocked`
+    before the agent
     emits a native final response, the MCP first persists native session ownership,
     then returns `state="blocked"`, `agent_response=None`, and
     `blocker_type="agent_blocked"`. Runtime state is lifecycle truth only; QiQi owns
@@ -1136,10 +1165,13 @@ async def delegate_repo_task(
         constraints=constraints,
         known_unknowns=known_unknowns,
     )
-    prompt = render_task_prompt(packet)
     repo = _resolve_repo(repository)
     agent_name, agent, route_config = _resolve_route(route)
     adapter = agent["adapter"]
+    prompt = render_task_prompt(
+        packet,
+        require_semantic_handoff_marker=(adapter == "claude"),
+    )
     command_name = agent["command"]
     if shutil.which(command_name) is None:
         raise RuntimeError(f"missing execution agent CLI: {command_name}")
