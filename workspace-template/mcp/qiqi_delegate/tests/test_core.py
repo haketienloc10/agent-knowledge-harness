@@ -8,6 +8,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from core import (
+    SEMANTIC_HANDOFF_MARKER,
     TASK_PACKET_MAX_CHARS,
     SessionStore,
     active_capture_filename,
@@ -17,6 +18,7 @@ from core import (
     normalize_hook_payload,
     render_task_prompt,
     select_capture_event,
+    select_capture_events,
 )
 
 
@@ -56,6 +58,17 @@ class TaskPacketTests(unittest.TestCase):
         self.assertNotIn("Required verification", prompt)
         self.assertNotIn("Context boundary", prompt)
         self.assertNotIn("Handoff contract", prompt)
+        self.assertNotIn(SEMANTIC_HANDOFF_MARKER, prompt)
+
+    def test_prompt_can_require_explicit_semantic_handoff_marker(self):
+        prompt = render_task_prompt(
+            self.packet(),
+            require_semantic_handoff_marker=True,
+        )
+        self.assertIn("Native semantic handoff", prompt)
+        self.assertIn(SEMANTIC_HANDOFF_MARKER, prompt)
+        self.assertIn("Do not mark waiting", prompt)
+        self.assertIn("see previous response", prompt)
 
     def test_optional_empty_sections_are_omitted(self):
         packet = build_task_packet(
@@ -187,6 +200,34 @@ class HookPayloadTests(unittest.TestCase):
         self.assertTrue(event["agent_response"].endswith("END"))
         self.assertEqual(event["state"], "settled")
         self.assertEqual(event["background_task_count"], 0)
+        self.assertFalse(event["semantic_handoff_ready"])
+
+    def test_marked_claude_stop_strips_marker_and_preserves_pending_state(self):
+        event = normalize_hook_payload(
+            adapter="claude",
+            nonce="n",
+            payload={
+                "hook_event_name": "Stop",
+                "session_id": "session-1",
+                "cwd": "/repo",
+                "last_assistant_message": (
+                    "FULL SELF-CONTAINED REPORT\n\n" + SEMANTIC_HANDOFF_MARKER
+                ),
+                "background_tasks": [
+                    {
+                        "id": "shell-1",
+                        "type": "shell",
+                        "status": "running",
+                        "description": "non-blocking diagnostic",
+                    }
+                ],
+            },
+            captured_at_ns=2,
+        )
+        self.assertEqual(event["state"], "pending_async")
+        self.assertEqual(event["agent_response"], "FULL SELF-CONTAINED REPORT")
+        self.assertTrue(event["semantic_handoff_ready"])
+        self.assertEqual(event["background_task_count"], 1)
 
     def test_claude_stop_with_background_work_is_pending_async(self):
         event = normalize_hook_payload(
@@ -268,6 +309,15 @@ class HookPayloadTests(unittest.TestCase):
                 "captured_at_ns": 20,
             },
         ]
+        matching = select_capture_events(
+            events,
+            adapter="claude",
+            session_id="root",
+        )
+        self.assertEqual(
+            [event["agent_response"] for event in matching],
+            ["intermediate", "final"],
+        )
         chosen = select_capture_event(events, adapter="claude", session_id="root")
         self.assertEqual(chosen["agent_response"], "final")
 
