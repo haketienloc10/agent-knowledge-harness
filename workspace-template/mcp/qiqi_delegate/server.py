@@ -1041,7 +1041,9 @@ async def _wait_for_result_capture(
             )
 
             state = event.get("state")
-            if state in {"settled", "failed"}:
+            if state == "failed":
+                return event
+            if state == "settled":
                 if semantic_candidate is None:
                     return event
                 selected = dict(event)
