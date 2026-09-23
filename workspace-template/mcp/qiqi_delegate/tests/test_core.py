@@ -282,6 +282,23 @@ class HookPayloadTests(unittest.TestCase):
         )
         self.assertEqual(event["native_turn_id"], "turn-native")
 
+    def test_codex_literal_handoff_marker_is_preserved_as_native_content(self):
+        response = "Protocol example\n\n" + SEMANTIC_HANDOFF_MARKER
+        event = normalize_hook_payload(
+            adapter="codex",
+            nonce="n",
+            payload={
+                "hook_event_name": "Stop",
+                "session_id": "thread-1",
+                "turn_id": "turn-native",
+                "cwd": "/repo",
+                "last_assistant_message": response,
+            },
+            captured_at_ns=5,
+        )
+        self.assertEqual(event["agent_response"], response)
+        self.assertFalse(event["semantic_handoff_ready"])
+
     def test_latest_matching_root_event_wins(self):
         events = [
             {
