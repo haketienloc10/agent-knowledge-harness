@@ -376,8 +376,8 @@ def normalize_hook_payload(
     if event == "Stop":
         if not isinstance(response, str) or not response.strip():
             raise ValueError("Stop hook is missing the native final assistant message")
-        response, semantic_handoff_ready = _extract_semantic_handoff(response)
         if adapter == "claude":
+            response, semantic_handoff_ready = _extract_semantic_handoff(response)
             background_tasks = payload.get("background_tasks")
             if not isinstance(background_tasks, list):
                 state = "capture_error"
