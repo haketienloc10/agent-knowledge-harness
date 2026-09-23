@@ -187,6 +187,55 @@ class ResultCaptureWaitTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertTrue(result["semantic_handoff_ready"])
 
+    async def test_stop_failure_keeps_exact_failure_response_after_marked_handoff(self):
+        self.write_event(
+            1,
+            normalize_hook_payload(
+                adapter="claude",
+                nonce="nonce-1",
+                payload={
+                    "hook_event_name": "Stop",
+                    "session_id": "session-1",
+                    "last_assistant_message": (
+                        "FULL SELF-CONTAINED REPORT\n\n"
+                        + SEMANTIC_HANDOFF_MARKER
+                    ),
+                    "background_tasks": [
+                        {
+                            "id": "agent-1",
+                            "type": "subagent",
+                            "status": "running",
+                            "description": "cleanup",
+                        }
+                    ],
+                },
+                captured_at_ns=10,
+            ),
+        )
+        self.write_event(
+            2,
+            normalize_hook_payload(
+                adapter="claude",
+                nonce="nonce-1",
+                payload={
+                    "hook_event_name": "StopFailure",
+                    "session_id": "session-1",
+                    "last_assistant_message": "Native failure evidence",
+                    "error": "background task failed",
+                },
+                captured_at_ns=20,
+            ),
+        )
+
+        result = await server._wait_for_result_capture(
+            self.sink, "nonce-1", "claude", "session-1"
+        )
+
+        self.assertEqual(result["state"], "failed")
+        self.assertEqual(result["agent_response"], "Native failure evidence")
+        self.assertEqual(result["error"], "background task failed")
+        self.assertFalse(result["semantic_handoff_ready"])
+
     async def test_pending_background_stop_has_bounded_failure_path(self):
         server.NATIVE_PENDING_RESULT_WAIT_SECONDS = 0.05
         self.write_event(
