@@ -10,7 +10,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import server
-from core import normalize_hook_payload
+from core import SEMANTIC_HANDOFF_MARKER, normalize_hook_payload
 
 
 class ResultCaptureWaitTests(unittest.IsolatedAsyncioTestCase):
@@ -82,6 +82,110 @@ class ResultCaptureWaitTests(unittest.IsolatedAsyncioTestCase):
         result = await asyncio.wait_for(waiter, timeout=1)
         self.assertEqual(result["state"], "settled")
         self.assertEqual(result["agent_response"], "DONE — OK")
+
+    async def test_marked_pending_handoff_survives_later_housekeeping_stop(self):
+        self.write_event(
+            1,
+            normalize_hook_payload(
+                adapter="claude",
+                nonce="nonce-1",
+                payload={
+                    "hook_event_name": "Stop",
+                    "session_id": "session-1",
+                    "last_assistant_message": (
+                        "FULL SELF-CONTAINED REPORT\n\n"
+                        + SEMANTIC_HANDOFF_MARKER
+                    ),
+                    "background_tasks": [
+                        {
+                            "id": "agent-1",
+                            "type": "subagent",
+                            "status": "running",
+                            "description": "trace source",
+                        }
+                    ],
+                },
+                captured_at_ns=10,
+            ),
+        )
+        self.write_event(
+            2,
+            normalize_hook_payload(
+                adapter="claude",
+                nonce="nonce-1",
+                payload={
+                    "hook_event_name": "Stop",
+                    "session_id": "session-1",
+                    "last_assistant_message": "Báo cáo đã gửi ở lượt trước.",
+                    "background_tasks": [],
+                },
+                captured_at_ns=20,
+            ),
+        )
+
+        result = await server._wait_for_result_capture(
+            self.sink, "nonce-1", "claude", "session-1"
+        )
+
+        self.assertEqual(result["state"], "settled")
+        self.assertEqual(
+            result["agent_response"],
+            "FULL SELF-CONTAINED REPORT",
+        )
+        self.assertTrue(result["semantic_handoff_ready"])
+        self.assertEqual(result["semantic_handoff_captured_at_ns"], 10)
+
+    async def test_marked_pending_handoff_is_generic_for_background_shell(self):
+        self.write_event(
+            1,
+            normalize_hook_payload(
+                adapter="claude",
+                nonce="nonce-1",
+                payload={
+                    "hook_event_name": "Stop",
+                    "session_id": "session-1",
+                    "last_assistant_message": (
+                        "Result is complete; diagnostic tail is still running.\n\n"
+                        + SEMANTIC_HANDOFF_MARKER
+                    ),
+                    "background_tasks": [
+                        {
+                            "id": "shell-1",
+                            "type": "shell",
+                            "status": "running",
+                            "description": "tail diagnostic log",
+                            "command": "tail -f /tmp/diagnostic.log",
+                        }
+                    ],
+                },
+                captured_at_ns=10,
+            ),
+        )
+        self.write_event(
+            2,
+            normalize_hook_payload(
+                adapter="claude",
+                nonce="nonce-1",
+                payload={
+                    "hook_event_name": "Stop",
+                    "session_id": "session-1",
+                    "last_assistant_message": "Background diagnostic finished.",
+                    "background_tasks": [],
+                },
+                captured_at_ns=20,
+            ),
+        )
+
+        result = await server._wait_for_result_capture(
+            self.sink, "nonce-1", "claude", "session-1"
+        )
+
+        self.assertEqual(result["state"], "settled")
+        self.assertEqual(
+            result["agent_response"],
+            "Result is complete; diagnostic tail is still running.",
+        )
+        self.assertTrue(result["semantic_handoff_ready"])
 
     async def test_pending_background_stop_has_bounded_failure_path(self):
         server.NATIVE_PENDING_RESULT_WAIT_SECONDS = 0.05
