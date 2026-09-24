@@ -101,6 +101,18 @@ jobs:
           uv run --project workspace-template/mcp/qiqi_delegate
           python -m unittest discover
           -s workspace-template/mcp/qiqi_delegate/tests -v
+      - name: Run QiQi eval harness unit tests
+        env:
+          PYTHONPATH: workspace-template/evals
+        run: >-
+          uv run --project workspace-template/mcp/qiqi_delegate
+          python -m unittest discover
+          -s workspace-template/evals/tests -v
+      - name: Validate QiQi eval scenarios
+        run: >-
+          uv run --project workspace-template/mcp/qiqi_delegate
+          python workspace-template/evals/run.py
+          --suite graph-core --validate-only
       - name: Check Work Item filesystem template
         run: bash work-item-template/scripts/work-item-template-check.sh
       - name: Check workspace/repo contracts
@@ -110,6 +122,7 @@ jobs:
       - name: Check managed shell syntax
         run: |
           bash -n workspace-template/scripts/qiqi-mcp-server.sh
+          bash -n workspace-template/evals/run.sh
           bash -n work-item-template/scripts/install-workspace-skill.sh
           bash -n work-item-template/scripts/install-user-skill.sh
           bash -n work-item-template/scripts/remove-legacy-user-mcp.sh

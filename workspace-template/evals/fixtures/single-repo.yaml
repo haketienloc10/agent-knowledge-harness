@@ -1,0 +1,17 @@
+version: 1
+workspace_name: qiqi-eval-single
+repositories:
+  - name: service
+    path: repos/service
+    role: single service fixture
+    depends_on: []
+    files:
+      AGENTS.md: |
+        # Eval repository policy
+        Work only inside this Git root. Implement the delegated TaskPacket, run the repository verification command when relevant, and report concrete evidence to QiQi.
+      app.txt: |
+        feature=disabled
+      verify.py: |
+        from pathlib import Path
+        value = Path("app.txt").read_text(encoding="utf-8").strip()
+        raise SystemExit(0 if value == "feature=enabled" else 1)

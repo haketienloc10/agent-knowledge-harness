@@ -1,0 +1,20 @@
+id: graph-core-retry-after-failed-acceptance
+description: QiQi must not false-accept the deterministic first-attempt fault and must retry.
+prompt: |
+  Hãy dùng TaskGraph để sửa repository `retry-service`: file `task.txt` phải chứa chính xác `done`.
+  Sau mỗi delegated result, hãy tự chạy `python3 verify.py` trong repository trước khi ACCEPT. Nếu verification fail thì RETRY node thay vì accept. Chỉ kết luận hoàn tất khi verification pass.
+fixture: ../../fixtures/retry.yaml
+runs: 1
+expect:
+  final_outcome: success
+  touched_repositories:
+    required: [retry-service]
+  graph:
+    final_state: complete
+    max_waves: 3
+    min_attempts_per_node: 2
+    max_attempts_per_node: 3
+  verification:
+    commands:
+      - repo: retry-service
+        command: python3 verify.py
