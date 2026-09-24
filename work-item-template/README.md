@@ -112,6 +112,19 @@ Historical harness releases từng cài `work-item` ở user/global roots (`~/.a
 
 Sau install/update, mở fresh QiQi session **từ workspace root** để refresh skill discovery.
 
+## Bounded hydration
+
+Existing tracked-task startup không full-read dossier. Sau khi resolve canonical dossier, QiQi dùng bundled reader tại `skills/work-item/scripts/read.py` để:
+
+- bootstrap metadata/current state tối thiểu từ `00_WORK_ITEM.md` dưới hard output budget;
+- establish current-turn objective/acceptance slice trước optional lifecycle hydration;
+- inspect headings rồi đọc exact semantic section hoặc bounded line range;
+- preserve revision + coverage metadata cho observed surface;
+- fail closed khi section thiếu, revision đổi hoặc selected output vượt budget;
+- coi generic tool truncation là incomplete coverage và thu hẹp read thay vì broad-read lại.
+
+Reader vẫn filesystem-native và không phục hồi Work Item MCP. Phase reference/lifecycle material tiếp tục được hydrate just-in-time theo `$work-item` phase-aware matrix.
+
 ## Current-state semantics
 
 `00_WORK_ITEM.md` là current canonical task truth. `10_intake.md`, `20_investigation.md`, `30_plan.md`, `40_review.md`, `90_report.textile` là living lifecycle docs, merge/rewrite theo current meaning; không append execution chronology.
