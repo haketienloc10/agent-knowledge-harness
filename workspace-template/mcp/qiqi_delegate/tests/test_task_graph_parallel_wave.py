@@ -349,6 +349,8 @@ class ParallelWaveMcpTests(unittest.IsolatedAsyncioTestCase):
             return_value={
                 "backend": Path("/tmp/backend"),
                 "frontend": Path("/tmp/frontend"),
+                "mobile": Path("/tmp/mobile"),
+                "worker": Path("/tmp/worker"),
             },
         )
         self.runtime_patch.start()
@@ -419,6 +421,91 @@ class ParallelWaveMcpTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(payload["graph_state"], "awaiting_review")
         self.assertEqual(delegate.await_count, 2)
+
+    async def test_four_node_wave_uses_one_batch_review_hydration_call(self) -> None:
+        repositories = ("backend", "frontend", "mobile", "worker")
+        graph = {
+            "nodes": [
+                {
+                    "node_id": repository,
+                    "repository": repository,
+                    "route": "codex-balanced",
+                    "task_packet": {
+                        "objective": f"Update {repository}.",
+                        "scope": [repository],
+                        "acceptance_criteria": [f"{repository} verification passes"],
+                    },
+                }
+                for repository in repositories
+            ]
+        }
+
+        async def delegated(**kwargs):
+            repository = kwargs["repository"]
+            return {
+                "session_id": f"session-{repository}",
+                "turn_id": f"turn-{repository}",
+                "state": "settled",
+                "agent_response": f"result-{repository}",
+            }
+
+        delegate = AsyncMock(side_effect=delegated)
+        with patch("task_graph_mcp.delegate_repo_task", delegate):
+            async with Client(mcp) as client:
+                started = (
+                    await client.call_tool("start_graph", {"graph": graph})
+                ).structured_content
+                delegated_wave = (
+                    await client.call_tool(
+                        "delegate_next",
+                        {"graph_run_id": started["graph_run_id"]},
+                    )
+                ).structured_content
+                self.assertEqual(
+                    [item["node_id"] for item in delegated_wave["review_required"]],
+                    list(repositories),
+                )
+
+                review_call = await client.call_tool(
+                    "get_node_reviews",
+                    {
+                        "graph_run_id": started["graph_run_id"],
+                        "expected_revision": delegated_wave["revision"],
+                        "reviews": [
+                            {
+                                "node_id": item["node_id"],
+                                "attempt_id": item["attempt_id"],
+                            }
+                            for item in delegated_wave["review_required"]
+                        ],
+                    },
+                )
+                self.assertFalse(review_call.is_error)
+                hydrated = review_call.structured_content
+                self.assertEqual(
+                    [item["node_id"] for item in hydrated["reviews"]],
+                    list(repositories),
+                )
+                self.assertEqual(
+                    [item["result"]["agent_response"] for item in hydrated["reviews"]],
+                    [f"result-{repository}" for repository in repositories],
+                )
+
+                decided = await client.call_tool(
+                    "submit_decisions",
+                    {
+                        "graph_run_id": started["graph_run_id"],
+                        "expected_revision": delegated_wave["revision"],
+                        "decisions": [
+                            {"node_id": repository, "action": "accept"}
+                            for repository in repositories
+                        ],
+                    },
+                )
+
+        self.assertFalse(decided.is_error)
+        self.assertEqual(decided.structured_content["graph_state"], "complete")
+        self.assertEqual(delegate.await_count, 4)
 
 
 if __name__ == "__main__":
