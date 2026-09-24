@@ -319,94 +319,330 @@ def render_task_prompt(packet: TaskPacket) -> str:
     return "\n\n".join(sections).strip()
 
 
-def normalize_hook_payload(
+def _background_task_snapshot(payload: dict[str, Any]) -> list[dict[str, str]]:
+    raw = payload.get("background_tasks")
+    if not isinstance(raw, list):
+        return []
+    result: list[dict[str, str]] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        task_id = item.get("id")
+        if not isinstance(task_id, str) or not task_id:
+            continue
+        entry = {"id": task_id}
+        for key in ("type", "status", "agent_type"):
+            value = item.get(key)
+            if isinstance(value, str) and value:
+                entry[key] = value
+        result.append(entry)
+    return result
+
+
+def _first_string(mapping: Any, *keys: str) -> str | None:
+    if not isinstance(mapping, dict):
+        return None
+    for key in keys:
+        value = mapping.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
+def _nested_mapping(mapping: Any, *keys: str) -> dict[str, Any] | None:
+    if not isinstance(mapping, dict):
+        return None
+    for key in keys:
+        value = mapping.get(key)
+        if isinstance(value, dict):
+            return value
+    return None
+
+
+def _operation_id(*mappings: Any) -> str | None:
+    keys = (
+        "task_id",
+        "taskId",
+        "agent_id",
+        "agentId",
+        "workflow_id",
+        "workflowId",
+        "monitor_id",
+        "monitorId",
+        "operation_id",
+        "operationId",
+    )
+    for mapping in mappings:
+        value = _first_string(mapping, *keys)
+        if value:
+            return value
+        nested = _nested_mapping(mapping, "task", "data", "result")
+        value = _first_string(nested, *keys)
+        if value:
+            return value
+    return None
+
+
+def _status_value(mapping: Any) -> str | None:
+    value = _first_string(mapping, "retrieval_status", "status", "state")
+    if value:
+        return value
+    nested = _nested_mapping(mapping, "task", "data", "result")
+    return _first_string(nested, "retrieval_status", "status", "state")
+
+
+def _lifecycle_event(
     *,
     adapter: str,
     nonce: str,
-    payload: Any,
-    captured_at_ns: int | None = None,
+    session_id: str,
+    hook_event: str,
+    lifecycle_kind: str,
+    source: str,
+    operation_id: str | None,
+    captured_at_ns: int | None,
+    payload: dict[str, Any],
+    detail: str | None = None,
 ) -> dict[str, Any]:
-    if adapter not in SUPPORTED_HOOK_ADAPTERS:
-        raise ValueError(f"unsupported adapter: {adapter}")
-    if not isinstance(payload, dict):
-        raise ValueError("hook input must be a JSON object")
-
-    event = payload.get("hook_event_name")
-    if event not in {"Stop", "StopFailure"}:
-        raise ValueError(f"unsupported hook event: {event!r}")
-    if adapter == "codex" and event != "Stop":
-        raise ValueError("Codex result capture only supports Stop")
-
-    session_id = payload.get("session_id")
-    if not isinstance(session_id, str) or not session_id.strip():
-        raise ValueError("hook payload is missing session_id")
-
-    response = payload.get("last_assistant_message")
-    if response is not None and not isinstance(response, str):
-        raise ValueError("last_assistant_message must be a string or null")
-
-    background_task_count = 0
-    if event == "Stop":
-        if not isinstance(response, str) or not response.strip():
-            raise ValueError("Stop hook is missing the native final assistant message")
-        if adapter == "claude":
-            background_tasks = payload.get("background_tasks")
-            if not isinstance(background_tasks, list):
-                state = "capture_error"
-                error = (
-                    "Claude Stop hook is missing background_tasks; "
-                    "upgrade Claude Code to a version that reports background task state"
-                )
-            else:
-                background_task_count = len(background_tasks)
-                state = "pending_async" if background_tasks else "settled"
-                error = None
-        else:
-            state = "settled"
-            error = None
-    else:
-        state = "failed"
-        error_value = payload.get("error")
-        error = (
-            error_value
-            if isinstance(error_value, str) and error_value
-            else "unknown"
-        )
-        if not response:
-            details = payload.get("error_details")
-            response = (
-                details
-                if isinstance(details, str) and details
-                else f"Claude turn failed: {error}"
-            )
-
-    native_turn_id = payload.get("turn_id")
-    if native_turn_id is not None and not isinstance(native_turn_id, str):
-        raise ValueError("turn_id must be a string when present")
-
-    cwd = payload.get("cwd")
-    if cwd is not None and not isinstance(cwd, str):
-        raise ValueError("cwd must be a string when present")
-
     return {
         "version": 1,
         "adapter": adapter,
         "nonce": nonce,
-        "hook_event": event,
-        "state": state,
+        "hook_event": hook_event,
+        "state": "lifecycle",
         "session_id": session_id,
-        "native_turn_id": native_turn_id,
-        "agent_response": response,
-        "error": error,
-        "cwd": cwd,
-        "background_task_count": background_task_count,
+        "lifecycle_kind": lifecycle_kind,
+        "lifecycle_source": source,
+        "operation_id": operation_id,
+        "detail": detail,
+        "cwd": payload.get("cwd") if isinstance(payload.get("cwd"), str) else None,
         "captured_at_ns": (
             captured_at_ns if captured_at_ns is not None else time.time_ns()
         ),
     }
 
 
-def load_capture_events(sink_dir: Path, nonce: str) -> list[dict[str, Any]]:
+def normalize_hook_payload(
+    *,
+    adapter: str,
+    nonce: str,
+    payload: Any,
+    captured_at_ns: int | None = None,
+) -> dict[str, Any] | None:
+    if adapter not in SUPPORTED_HOOK_ADAPTERS:
+        raise ValueError(f"unsupported adapter: {adapter}")
+    if not isinstance(payload, dict):
+        raise ValueError("hook input must be a JSON object")
+
+    event = payload.get("hook_event_name")
+    if not isinstance(event, str):
+        raise ValueError("hook payload is missing hook_event_name")
+    if adapter == "codex" and event != "Stop":
+        raise ValueError("Codex result capture only supports Stop")
+    if adapter == "claude" and event not in {
+        "Stop",
+        "StopFailure",
+        "SubagentStop",
+        "PostToolUse",
+        "PostToolUseFailure",
+    }:
+        raise ValueError(f"unsupported hook event: {event!r}")
+
+    session_id = payload.get("session_id")
+    if not isinstance(session_id, str) or not session_id.strip():
+        raise ValueError("hook payload is missing session_id")
+
+    if event in {"Stop", "StopFailure"}:
+        response = payload.get("last_assistant_message")
+        if response is not None and not isinstance(response, str):
+            raise ValueError("last_assistant_message must be a string or null")
+
+        background_task_count = 0
+        background_tasks: list[dict[str, str]] = []
+        if event == "Stop":
+            if not isinstance(response, str) or not response.strip():
+                raise ValueError("Stop hook is missing the native final assistant message")
+            if adapter == "claude":
+                raw_background_tasks = payload.get("background_tasks")
+                if not isinstance(raw_background_tasks, list):
+                    state = "capture_error"
+                    error = (
+                        "Claude Stop hook is missing background_tasks; "
+                        "upgrade Claude Code to a version that reports background task state"
+                    )
+                else:
+                    background_tasks = _background_task_snapshot(payload)
+                    background_task_count = len(raw_background_tasks)
+                    state = "pending_async" if raw_background_tasks else "settled"
+                    error = None
+            else:
+                state = "settled"
+                error = None
+        else:
+            state = "failed"
+            error_value = payload.get("error")
+            error = (
+                error_value
+                if isinstance(error_value, str) and error_value
+                else "unknown"
+            )
+            if not response:
+                details = payload.get("error_details")
+                response = (
+                    details
+                    if isinstance(details, str) and details
+                    else f"Claude turn failed: {error}"
+                )
+
+        native_turn_id = payload.get("turn_id")
+        if native_turn_id is not None and not isinstance(native_turn_id, str):
+            raise ValueError("turn_id must be a string when present")
+
+        cwd = payload.get("cwd")
+        if cwd is not None and not isinstance(cwd, str):
+            raise ValueError("cwd must be a string when present")
+
+        return {
+            "version": 1,
+            "adapter": adapter,
+            "nonce": nonce,
+            "hook_event": event,
+            "state": state,
+            "session_id": session_id,
+            "native_turn_id": native_turn_id,
+            "agent_response": response,
+            "error": error,
+            "cwd": cwd,
+            "background_task_count": background_task_count,
+            "background_tasks": background_tasks,
+            "background_task_ids": [item["id"] for item in background_tasks],
+            "captured_at_ns": (
+                captured_at_ns if captured_at_ns is not None else time.time_ns()
+            ),
+        }
+
+    if adapter != "claude":
+        return None
+
+    if event == "SubagentStop":
+        operation_id = _first_string(payload, "agent_id")
+        detail = payload.get("last_assistant_message")
+        return _lifecycle_event(
+            adapter=adapter,
+            nonce=nonce,
+            session_id=session_id,
+            hook_event=event,
+            lifecycle_kind="operation_completed",
+            source="subagent_stop",
+            operation_id=operation_id,
+            captured_at_ns=captured_at_ns,
+            payload=payload,
+            detail=detail if isinstance(detail, str) and detail else None,
+        )
+
+    tool_name = payload.get("tool_name")
+    if not isinstance(tool_name, str) or not tool_name:
+        raise ValueError(f"{event} hook is missing tool_name")
+    tool_input = payload.get("tool_input")
+    tool_response = payload.get("tool_response")
+    if not isinstance(tool_input, dict):
+        tool_input = {}
+    if not isinstance(tool_response, dict):
+        tool_response = {}
+
+    if event == "PostToolUseFailure":
+        if tool_name != "TaskOutput":
+            return None
+        operation_id = _operation_id(tool_input)
+        if not operation_id:
+            return None
+        error = payload.get("error")
+        return _lifecycle_event(
+            adapter=adapter,
+            nonce=nonce,
+            session_id=session_id,
+            hook_event=event,
+            lifecycle_kind="result_delivery_failed",
+            source="task_output_failure",
+            operation_id=operation_id,
+            captured_at_ns=captured_at_ns,
+            payload=payload,
+            detail=error if isinstance(error, str) and error else None,
+        )
+
+    if tool_name == "SubagentHandback":
+        message = tool_input.get("message")
+        if not isinstance(message, str) or not message.strip():
+            return None
+        return _lifecycle_event(
+            adapter=adapter,
+            nonce=nonce,
+            session_id=session_id,
+            hook_event=event,
+            lifecycle_kind="result_delivered",
+            source="subagent_handback",
+            operation_id=_operation_id(payload, tool_input, tool_response),
+            captured_at_ns=captured_at_ns,
+            payload=payload,
+            detail=message,
+        )
+
+    if tool_name == "TaskOutput":
+        operation_id = _operation_id(tool_input, tool_response)
+        if not operation_id:
+            return None
+        status = (_status_value(tool_response) or "").casefold()
+        if status != "success":
+            return None
+        return _lifecycle_event(
+            adapter=adapter,
+            nonce=nonce,
+            session_id=session_id,
+            hook_event=event,
+            lifecycle_kind="result_delivered",
+            source="task_output",
+            operation_id=operation_id,
+            captured_at_ns=captured_at_ns,
+            payload=payload,
+        )
+
+    operation_id = _operation_id(tool_response, tool_input)
+    status = (_status_value(tool_response) or "").casefold()
+    if tool_name == "Agent":
+        if status in {"async_launched", "teammate_spawned"}:
+            kind = "operation_started"
+        elif status in {"completed", "success", "succeeded", "done"}:
+            kind = "result_delivered"
+        else:
+            return None
+    elif tool_name == "Bash":
+        if not tool_input.get("run_in_background") or not operation_id:
+            return None
+        kind = "operation_started"
+    else:
+        if not operation_id:
+            return None
+        if status in {"async_launched", "running", "pending", "started"}:
+            kind = "operation_started"
+        elif status in {"completed", "success", "succeeded", "done", "failed", "error"}:
+            kind = "result_delivered"
+        else:
+            return None
+
+    return _lifecycle_event(
+        adapter=adapter,
+        nonce=nonce,
+        session_id=session_id,
+        hook_event=event,
+        lifecycle_kind=kind,
+        source=f"post_tool_use:{tool_name}",
+        operation_id=operation_id,
+        captured_at_ns=captured_at_ns,
+        payload=payload,
+    )
+
+
+def load_capture_events(def load_capture_events(sink_dir: Path, nonce: str) -> list[dict[str, Any]]:
     events: list[dict[str, Any]] = []
     if not sink_dir.is_dir():
         return events
@@ -470,14 +706,65 @@ def select_capture_event(
     )[-1]
 
 
+def select_lifecycle_events(
+    events: Iterable[dict[str, Any]],
+    *,
+    adapter: str,
+) -> list[dict[str, Any]]:
+    matching = [
+        event
+        for event in events
+        if event.get("version") == 1
+        and event.get("adapter") == adapter
+        and event.get("state") == "lifecycle"
+        and isinstance(event.get("lifecycle_kind"), str)
+    ]
+    matching.sort(key=lambda item: int(item.get("captured_at_ns") or 0))
+    return matching
+
+
+def _background_ids(event: dict[str, Any]) -> set[str]:
+    raw = event.get("background_task_ids")
+    if not isinstance(raw, list):
+        return set()
+    return {item for item in raw if isinstance(item, str) and item}
+
+
+def _delivery_is_relevant(
+    delivery: dict[str, Any],
+    *,
+    candidate_stop: dict[str, Any],
+    stops: list[dict[str, Any]],
+    lifecycle: list[dict[str, Any]],
+) -> bool:
+    operation_id = delivery.get("operation_id")
+    if isinstance(operation_id, str) and operation_id:
+        if any(operation_id in _background_ids(stop) for stop in stops):
+            return True
+        return any(
+            item.get("lifecycle_kind") == "operation_started"
+            and item.get("operation_id") == operation_id
+            for item in lifecycle
+        )
+
+    if delivery.get("lifecycle_source") != "subagent_handback":
+        return False
+    tasks = candidate_stop.get("background_tasks")
+    if not isinstance(tasks, list) or len(tasks) != 1:
+        return False
+    task = tasks[0]
+    return isinstance(task, dict) and task.get("type") == "subagent"
+
+
 def resolve_capture_events(
     events: Iterable[dict[str, Any]],
     *,
     adapter: str,
     session_id: str,
 ) -> dict[str, Any]:
+    all_events = list(events)
     matching = select_capture_events(
-        events,
+        all_events,
         adapter=adapter,
         session_id=session_id,
     )
@@ -503,6 +790,41 @@ def resolve_capture_events(
     if len(distinct_responses) == 1:
         return dict(latest)
 
+    lifecycle = select_lifecycle_events(all_events, adapter=adapter)
+    deliveries = [
+        event
+        for event in lifecycle
+        if event.get("lifecycle_kind") == "result_delivered"
+    ]
+    for delivery in reversed(deliveries):
+        delivered_at = int(delivery.get("captured_at_ns") or 0)
+        candidate = next(
+            (
+                stop
+                for stop in stops
+                if int(stop.get("captured_at_ns") or 0) > delivered_at
+            ),
+            None,
+        )
+        if candidate is None:
+            continue
+        if not _delivery_is_relevant(
+            delivery,
+            candidate_stop=candidate,
+            stops=stops,
+            lifecycle=lifecycle,
+        ):
+            continue
+        selected = dict(candidate)
+        selected["capture_source_state"] = candidate.get("state")
+        selected["state"] = "settled"
+        selected["causal_resolution"] = {
+            "source": delivery.get("lifecycle_source"),
+            "operation_id": delivery.get("operation_id"),
+            "delivered_at_ns": delivery.get("captured_at_ns"),
+        }
+        return selected
+
     return {
         "version": 1,
         "adapter": adapter,
@@ -516,7 +838,7 @@ def resolve_capture_events(
     }
 
 
-class SessionStore:
+class SessionStore:class SessionStore:
     def __init__(self, path: Path):
         self.path = path
 

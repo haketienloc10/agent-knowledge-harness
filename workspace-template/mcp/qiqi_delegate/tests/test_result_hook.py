@@ -181,6 +181,66 @@ class ResultHookTests(unittest.TestCase):
         finally:
             temp.cleanup()
 
+    def test_static_hook_captures_subagent_handback_lifecycle(self):
+        temp, sink, completed = self.run_static_hook(
+            "claude",
+            {
+                "hook_event_name": "PostToolUse",
+                "session_id": "claude-session",
+                "tool_name": "SubagentHandback",
+                "tool_input": {"message": "child report"},
+                "tool_response": {"success": True},
+            },
+        )
+        try:
+            self.assertEqual(completed.returncode, 0)
+            files = list(sink.glob("event-*.json"))
+            self.assertEqual(len(files), 1)
+            event = json.loads(files[0].read_text(encoding="utf-8"))
+            self.assertEqual(event["state"], "lifecycle")
+            self.assertEqual(event["lifecycle_kind"], "result_delivered")
+            self.assertEqual(event["lifecycle_source"], "subagent_handback")
+        finally:
+            temp.cleanup()
+
+    def test_static_hook_ignores_unrelated_post_tool_use(self):
+        temp, sink, completed = self.run_static_hook(
+            "claude",
+            {
+                "hook_event_name": "PostToolUse",
+                "session_id": "claude-session",
+                "tool_name": "Write",
+                "tool_input": {"file_path": "/repo/x"},
+                "tool_response": {"filePath": "/repo/x"},
+            },
+        )
+        try:
+            self.assertEqual(completed.returncode, 0)
+            self.assertEqual(list(sink.glob("event-*.json")), [])
+        finally:
+            temp.cleanup()
+
+    def test_lifecycle_hook_does_not_require_root_resume_session_identity(self):
+        temp, sink, completed = self.run_static_hook(
+            "claude",
+            {
+                "hook_event_name": "SubagentStop",
+                "session_id": "subagent-session",
+                "agent_id": "agent-1",
+                "last_assistant_message": "done",
+                "background_tasks": [],
+            },
+            expected_session_id="root-session",
+        )
+        try:
+            self.assertEqual(completed.returncode, 0)
+            files = list(sink.glob("event-*.json"))
+            self.assertEqual(len(files), 1)
+            event = json.loads(files[0].read_text(encoding="utf-8"))
+            self.assertEqual(event["operation_id"], "agent-1")
+        finally:
+            temp.cleanup()
+
     def test_static_hook_persists_missing_background_task_capability(self):
         temp, sink, completed = self.run_static_hook(
             "claude",

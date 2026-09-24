@@ -32,6 +32,19 @@ class ResultCaptureWaitTests(unittest.IsolatedAsyncioTestCase):
             json.dumps(event, ensure_ascii=False), encoding="utf-8"
         )
 
+    def test_claude_handoff_args_register_causal_lifecycle_hooks(self):
+        args = server._build_handoff_args("claude")
+        self.assertEqual(args[0], "--settings")
+        settings = json.loads(args[1])
+        hooks = settings["hooks"]
+        self.assertIn("Stop", hooks)
+        self.assertIn("StopFailure", hooks)
+        self.assertIn("SubagentStop", hooks)
+        self.assertIn("PostToolUse", hooks)
+        self.assertIn("PostToolUseFailure", hooks)
+        self.assertIn("SubagentHandback", hooks["PostToolUse"][0]["matcher"])
+        self.assertIn("TaskOutput", hooks["PostToolUse"][0]["matcher"])
+
     async def test_pending_background_stop_waits_then_returns_ambiguous_capture(self):
         self.write_event(
             1,
@@ -145,6 +158,113 @@ class ResultCaptureWaitTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["state"], "capture_ambiguous")
         self.assertIsNone(result["agent_response"])
         self.assertEqual(result["candidate_count"], 2)
+
+    async def test_subagent_handback_resolves_report_before_housekeeping(self):
+        self.write_event(
+            1,
+            normalize_hook_payload(
+                adapter="claude",
+                nonce="nonce-1",
+                payload={
+                    "hook_event_name": "PostToolUse",
+                    "session_id": "session-1",
+                    "tool_name": "SubagentHandback",
+                    "tool_input": {"message": "child evidence"},
+                    "tool_response": {"success": True},
+                },
+                captured_at_ns=5,
+            ),
+        )
+        self.write_event(
+            2,
+            normalize_hook_payload(
+                adapter="claude",
+                nonce="nonce-1",
+                payload={
+                    "hook_event_name": "Stop",
+                    "session_id": "session-1",
+                    "last_assistant_message": "FULL REPORT",
+                    "background_tasks": [
+                        {"id": "agent-1", "type": "subagent", "status": "running"}
+                    ],
+                },
+                captured_at_ns=10,
+            ),
+        )
+        self.write_event(
+            3,
+            normalize_hook_payload(
+                adapter="claude",
+                nonce="nonce-1",
+                payload={
+                    "hook_event_name": "Stop",
+                    "session_id": "session-1",
+                    "last_assistant_message": "housekeeping",
+                    "background_tasks": [],
+                },
+                captured_at_ns=20,
+            ),
+        )
+        result = await server._wait_for_result_capture(
+            self.sink, "nonce-1", "claude", "session-1"
+        )
+        self.assertEqual(result["state"], "settled")
+        self.assertEqual(result["agent_response"], "FULL REPORT")
+
+    async def test_task_output_delivery_resolves_later_shell_report(self):
+        self.write_event(
+            1,
+            normalize_hook_payload(
+                adapter="claude",
+                nonce="nonce-1",
+                payload={
+                    "hook_event_name": "Stop",
+                    "session_id": "session-1",
+                    "last_assistant_message": "waiting",
+                    "background_tasks": [
+                        {"id": "shell-1", "type": "shell", "status": "running"}
+                    ],
+                },
+                captured_at_ns=10,
+            ),
+        )
+        self.write_event(
+            2,
+            normalize_hook_payload(
+                adapter="claude",
+                nonce="nonce-1",
+                payload={
+                    "hook_event_name": "PostToolUse",
+                    "session_id": "session-1",
+                    "tool_name": "TaskOutput",
+                    "tool_input": {"task_id": "shell-1"},
+                    "tool_response": {
+                        "retrieval_status": "success",
+                        "task": {"task_id": "shell-1", "status": "completed"},
+                    },
+                },
+                captured_at_ns=15,
+            ),
+        )
+        self.write_event(
+            3,
+            normalize_hook_payload(
+                adapter="claude",
+                nonce="nonce-1",
+                payload={
+                    "hook_event_name": "Stop",
+                    "session_id": "session-1",
+                    "last_assistant_message": "FULL SHELL REPORT",
+                    "background_tasks": [],
+                },
+                captured_at_ns=20,
+            ),
+        )
+        result = await server._wait_for_result_capture(
+            self.sink, "nonce-1", "claude", "session-1"
+        )
+        self.assertEqual(result["state"], "settled")
+        self.assertEqual(result["agent_response"], "FULL SHELL REPORT")
 
     async def test_stop_failure_keeps_exact_failure_response_after_prior_stop(self):
         self.write_event(
