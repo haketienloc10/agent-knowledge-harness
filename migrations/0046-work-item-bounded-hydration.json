@@ -2,7 +2,7 @@
   "version": 46,
   "from_ref": "484d710b5c4ef236464baa48ad68f3ad21b81ff4",
   "to_ref": "0d612969152d6470492b700340d13bc456ac6151",
-  "description": "enforce bounded phase-aware filesystem Work Item hydration with a hard-budget semantic reader, current-turn scope lock, truncation fail-closed semantics, and startup regression coverage without restoring the legacy Work Item MCP boundary",
+  "description": "enforce bounded phase-aware filesystem Work Item hydration with a hard-budget semantic reader, current-turn scope lock, truncation fail-closed semantics, and startup regression coverage without restoring the legacy Work Item MCP boundary; after migration rerun work-item-template/scripts/install-workspace-skill.sh WORKSPACE and open a fresh QiQi parent session so the updated workspace-scoped skill tree is materialized",
   "workspace": {
     "merge": [
       "workspace-template/AGENTS.md"
