@@ -1,17 +1,21 @@
 {
   "version": 47,
   "from_ref": "0d612969152d6470492b700340d13bc456ac6151",
-  "to_ref": "678efe0c19f035627934edbaf7fcdc6ed865767d",
-  "description": "replace child-prompt semantic handoff markers with bounded runtime capture and causal Claude lifecycle resolution: preserve ambiguous Stop candidates for explicit review, resolve subagent handbacks and correlated background TaskOutput or structured async tool delivery without semantic text heuristics, preserve exact failure evidence, and keep insufficient causal evidence fail-closed as capture_ambiguous",
+  "to_ref": "601780a87c23b3d2e2750472686ec1ccc77eb892",
+  "description": "replace child-prompt semantic handoff markers with bounded runtime capture and causal Claude lifecycle resolution; preserve ambiguous captures as explicit JIT-reviewable evidence through direct delegation and TaskGraph without changing the durable SQLite scheduler enum, enable capture-review hydration in workspace tooling, resolve correlated subagent/background result delivery without semantic text heuristics, preserve exact failure evidence, and keep insufficient causal evidence fail-closed as capture_ambiguous",
   "workspace": {
     "merge": [],
     "replace": [
+      "workspace-template/.codex/config.toml",
       "workspace-template/mcp/qiqi_delegate/core.py",
       "workspace-template/mcp/qiqi_delegate/result_hook.py",
       "workspace-template/mcp/qiqi_delegate/server.py",
+      "workspace-template/mcp/qiqi_delegate/task_graph_runtime.py",
       "workspace-template/mcp/qiqi_delegate/tests/test_core.py",
       "workspace-template/mcp/qiqi_delegate/tests/test_result_capture_wait.py",
-      "workspace-template/mcp/qiqi_delegate/tests/test_result_hook.py"
+      "workspace-template/mcp/qiqi_delegate/tests/test_result_hook.py",
+      "workspace-template/mcp/qiqi_delegate/tests/test_task_graph_runtime.py",
+      "workspace-template/mcp/qiqi_delegate/tests/test_workspace_startup_policy.py"
     ],
     "delete": [],
     "manual_review": []
