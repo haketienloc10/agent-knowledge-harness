@@ -642,7 +642,7 @@ def normalize_hook_payload(
     )
 
 
-def load_capture_events(def load_capture_events(sink_dir: Path, nonce: str) -> list[dict[str, Any]]:
+def load_capture_events(sink_dir: Path, nonce: str) -> list[dict[str, Any]]:
     events: list[dict[str, Any]] = []
     if not sink_dir.is_dir():
         return events
@@ -838,7 +838,7 @@ def resolve_capture_events(
     }
 
 
-class SessionStore:class SessionStore:
+class SessionStore:
     def __init__(self, path: Path):
         self.path = path
 
