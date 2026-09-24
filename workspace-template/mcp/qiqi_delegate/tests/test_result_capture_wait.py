@@ -10,7 +10,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import server
-from core import SEMANTIC_HANDOFF_MARKER, normalize_hook_payload
+from core import normalize_hook_payload
 
 
 class ResultCaptureWaitTests(unittest.IsolatedAsyncioTestCase):
@@ -32,7 +32,7 @@ class ResultCaptureWaitTests(unittest.IsolatedAsyncioTestCase):
             json.dumps(event, ensure_ascii=False), encoding="utf-8"
         )
 
-    async def test_pending_background_stop_waits_past_initial_capture_timeout(self):
+    async def test_pending_background_stop_waits_then_returns_ambiguous_capture(self):
         self.write_event(
             1,
             normalize_hook_payload(
@@ -41,29 +41,19 @@ class ResultCaptureWaitTests(unittest.IsolatedAsyncioTestCase):
                 payload={
                     "hook_event_name": "Stop",
                     "session_id": "session-1",
-                    "last_assistant_message": "Tôi sẽ chờ subagent hoàn tất.",
-                    "background_tasks": [
-                        {
-                            "id": "agent-1",
-                            "type": "subagent",
-                            "status": "running",
-                            "description": "wait then report",
-                        }
-                    ],
+                    "last_assistant_message": "waiting for child",
+                    "background_tasks": [{"id": "agent-1"}],
                 },
                 captured_at_ns=10,
             ),
         )
-
         waiter = asyncio.create_task(
             server._wait_for_result_capture(
                 self.sink, "nonce-1", "claude", "session-1"
             )
         )
-
         await asyncio.sleep(0.12)
         self.assertFalse(waiter.done())
-
         self.write_event(
             2,
             normalize_hook_payload(
@@ -78,12 +68,12 @@ class ResultCaptureWaitTests(unittest.IsolatedAsyncioTestCase):
                 captured_at_ns=20,
             ),
         )
-
         result = await asyncio.wait_for(waiter, timeout=1)
-        self.assertEqual(result["state"], "settled")
-        self.assertEqual(result["agent_response"], "DONE — OK")
+        self.assertEqual(result["state"], "capture_ambiguous")
+        self.assertIsNone(result["agent_response"])
+        self.assertEqual(result["candidate_count"], 2)
 
-    async def test_marked_pending_handoff_survives_later_housekeeping_stop(self):
+    async def test_distinct_pending_and_quiescent_stops_are_ambiguous(self):
         self.write_event(
             1,
             normalize_hook_payload(
@@ -92,18 +82,8 @@ class ResultCaptureWaitTests(unittest.IsolatedAsyncioTestCase):
                 payload={
                     "hook_event_name": "Stop",
                     "session_id": "session-1",
-                    "last_assistant_message": (
-                        "FULL SELF-CONTAINED REPORT\n\n"
-                        + SEMANTIC_HANDOFF_MARKER
-                    ),
-                    "background_tasks": [
-                        {
-                            "id": "agent-1",
-                            "type": "subagent",
-                            "status": "running",
-                            "description": "trace source",
-                        }
-                    ],
+                    "last_assistant_message": "FULL SELF-CONTAINED REPORT",
+                    "background_tasks": [{"id": "agent-1"}],
                 },
                 captured_at_ns=10,
             ),
@@ -122,20 +102,15 @@ class ResultCaptureWaitTests(unittest.IsolatedAsyncioTestCase):
                 captured_at_ns=20,
             ),
         )
-
         result = await server._wait_for_result_capture(
             self.sink, "nonce-1", "claude", "session-1"
         )
+        self.assertEqual(result["state"], "capture_ambiguous")
+        self.assertIsNone(result["agent_response"])
+        self.assertEqual(result["candidate_count"], 2)
+        self.assertEqual(len(result["capture_events"]), 2)
 
-        self.assertEqual(result["state"], "settled")
-        self.assertEqual(
-            result["agent_response"],
-            "FULL SELF-CONTAINED REPORT",
-        )
-        self.assertTrue(result["semantic_handoff_ready"])
-        self.assertEqual(result["semantic_handoff_captured_at_ns"], 10)
-
-    async def test_marked_pending_handoff_is_generic_for_background_shell(self):
+    async def test_ambiguous_capture_is_generic_for_background_shell(self):
         self.write_event(
             1,
             normalize_hook_payload(
@@ -144,19 +119,8 @@ class ResultCaptureWaitTests(unittest.IsolatedAsyncioTestCase):
                 payload={
                     "hook_event_name": "Stop",
                     "session_id": "session-1",
-                    "last_assistant_message": (
-                        "Result is complete; diagnostic tail is still running.\n\n"
-                        + SEMANTIC_HANDOFF_MARKER
-                    ),
-                    "background_tasks": [
-                        {
-                            "id": "shell-1",
-                            "type": "shell",
-                            "status": "running",
-                            "description": "tail diagnostic log",
-                            "command": "tail -f /tmp/diagnostic.log",
-                        }
-                    ],
+                    "last_assistant_message": "Result is complete; diagnostic tail is still running.",
+                    "background_tasks": [{"id": "shell-1", "type": "shell"}],
                 },
                 captured_at_ns=10,
             ),
@@ -175,19 +139,14 @@ class ResultCaptureWaitTests(unittest.IsolatedAsyncioTestCase):
                 captured_at_ns=20,
             ),
         )
-
         result = await server._wait_for_result_capture(
             self.sink, "nonce-1", "claude", "session-1"
         )
+        self.assertEqual(result["state"], "capture_ambiguous")
+        self.assertIsNone(result["agent_response"])
+        self.assertEqual(result["candidate_count"], 2)
 
-        self.assertEqual(result["state"], "settled")
-        self.assertEqual(
-            result["agent_response"],
-            "Result is complete; diagnostic tail is still running.",
-        )
-        self.assertTrue(result["semantic_handoff_ready"])
-
-    async def test_stop_failure_keeps_exact_failure_response_after_marked_handoff(self):
+    async def test_stop_failure_keeps_exact_failure_response_after_prior_stop(self):
         self.write_event(
             1,
             normalize_hook_payload(
@@ -196,18 +155,8 @@ class ResultCaptureWaitTests(unittest.IsolatedAsyncioTestCase):
                 payload={
                     "hook_event_name": "Stop",
                     "session_id": "session-1",
-                    "last_assistant_message": (
-                        "FULL SELF-CONTAINED REPORT\n\n"
-                        + SEMANTIC_HANDOFF_MARKER
-                    ),
-                    "background_tasks": [
-                        {
-                            "id": "agent-1",
-                            "type": "subagent",
-                            "status": "running",
-                            "description": "cleanup",
-                        }
-                    ],
+                    "last_assistant_message": "FULL SELF-CONTAINED REPORT",
+                    "background_tasks": [{"id": "agent-1"}],
                 },
                 captured_at_ns=10,
             ),
@@ -226,15 +175,33 @@ class ResultCaptureWaitTests(unittest.IsolatedAsyncioTestCase):
                 captured_at_ns=20,
             ),
         )
-
         result = await server._wait_for_result_capture(
             self.sink, "nonce-1", "claude", "session-1"
         )
-
         self.assertEqual(result["state"], "failed")
         self.assertEqual(result["agent_response"], "Native failure evidence")
         self.assertEqual(result["error"], "background task failed")
-        self.assertFalse(result["semantic_handoff_ready"])
+
+    async def test_single_no_async_stop_returns_native_response(self):
+        self.write_event(
+            1,
+            normalize_hook_payload(
+                adapter="claude",
+                nonce="nonce-1",
+                payload={
+                    "hook_event_name": "Stop",
+                    "session_id": "session-1",
+                    "last_assistant_message": "final result",
+                    "background_tasks": [],
+                },
+                captured_at_ns=10,
+            ),
+        )
+        result = await server._wait_for_result_capture(
+            self.sink, "nonce-1", "claude", "session-1"
+        )
+        self.assertEqual(result["state"], "settled")
+        self.assertEqual(result["agent_response"], "final result")
 
     async def test_pending_background_stop_has_bounded_failure_path(self):
         server.NATIVE_PENDING_RESULT_WAIT_SECONDS = 0.05

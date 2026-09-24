@@ -11,7 +11,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 HOOK = ROOT / "result_hook.py"
-SEMANTIC_HANDOFF_MARKER = "<!-- qiqi-semantic-handoff:v1 -->"
 
 
 class ResultHookTests(unittest.TestCase):
@@ -160,24 +159,15 @@ class ResultHookTests(unittest.TestCase):
         finally:
             temp.cleanup()
 
-    def test_static_hook_marks_and_strips_semantic_handoff(self):
-        response = "FULL REPORT"
+    def test_static_hook_preserves_literal_handoff_marker_as_native_content(self):
+        response = "FULL REPORT\n\n<!-- qiqi-semantic-handoff:v1 -->"
         temp, sink, completed = self.run_static_hook(
             "claude",
             {
                 "hook_event_name": "Stop",
                 "session_id": "claude-session",
-                "last_assistant_message": (
-                    response + "\n\n" + SEMANTIC_HANDOFF_MARKER
-                ),
-                "background_tasks": [
-                    {
-                        "id": "shell-1",
-                        "type": "shell",
-                        "status": "running",
-                        "description": "diagnostic",
-                    }
-                ],
+                "last_assistant_message": response,
+                "background_tasks": [{"id": "shell-1"}],
             },
         )
         try:
@@ -187,8 +177,7 @@ class ResultHookTests(unittest.TestCase):
             event = json.loads(files[0].read_text(encoding="utf-8"))
             self.assertEqual(event["state"], "pending_async")
             self.assertEqual(event["agent_response"], response)
-            self.assertTrue(event["semantic_handoff_ready"])
-            self.assertNotIn(SEMANTIC_HANDOFF_MARKER, event["agent_response"])
+            self.assertNotIn("semantic_handoff_ready", event)
         finally:
             temp.cleanup()
 

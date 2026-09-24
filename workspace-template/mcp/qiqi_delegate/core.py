@@ -14,7 +14,8 @@ from typing import Any, Iterable
 # packet keeps the same aggregate ceiling while semantic completeness/minimality
 # remain the design criteria for normal operation.
 TASK_PACKET_MAX_CHARS = 100_000
-SEMANTIC_HANDOFF_MARKER = "<!-- qiqi-semantic-handoff:v1 -->"
+CAPTURE_MAX_RESPONSES = 8
+CAPTURE_MAX_RESPONSE_CHARS = 256_000
 SUPPORTED_HOOK_ADAPTERS = {"claude", "codex"}
 
 
@@ -280,11 +281,7 @@ def _bullet_lines(items: Iterable[str]) -> str:
     return "\n".join(f"- {item}" for item in items)
 
 
-def render_task_prompt(
-    packet: TaskPacket,
-    *,
-    require_semantic_handoff_marker: bool = False,
-) -> str:
+def render_task_prompt(packet: TaskPacket) -> str:
     sections = [
         "Repository task delegated by QiQi",
         f"## Repository objective\n\n{packet.objective}",
@@ -318,31 +315,8 @@ def render_task_prompt(
     if packet.known_unknowns:
         sections.append(f"## Known unknowns\n\n{_bullet_lines(packet.known_unknowns)}")
 
-    if require_semantic_handoff_marker:
-        sections.append(
-            "## Native semantic handoff\n\n"
-            "When your response itself is the self-contained handoff QiQi should review "
-            "against the acceptance criteria, append the exact marker below on its own "
-            "final line:\n\n"
-            f"{SEMANTIC_HANDOFF_MARKER}\n\n"
-            "Use the marker only on a response that contains the material evidence, "
-            "conclusion, or blocker needed for semantic review. Do not mark waiting, "
-            "progress, notification, housekeeping, or \"see previous response\" messages. "
-            "Async/background work may wake this session again after a marked handoff; "
-            "those later unmarked messages must not replace the marked handoff."
-        )
 
     return "\n\n".join(sections).strip()
-
-
-def _extract_semantic_handoff(response: str) -> tuple[str, bool]:
-    trimmed = response.rstrip()
-    if not trimmed.endswith(SEMANTIC_HANDOFF_MARKER):
-        return response, False
-    body = trimmed[: -len(SEMANTIC_HANDOFF_MARKER)].rstrip()
-    if not body:
-        return response, False
-    return body, True
 
 
 def normalize_hook_payload(
@@ -371,13 +345,11 @@ def normalize_hook_payload(
     if response is not None and not isinstance(response, str):
         raise ValueError("last_assistant_message must be a string or null")
 
-    semantic_handoff_ready = False
     background_task_count = 0
     if event == "Stop":
         if not isinstance(response, str) or not response.strip():
             raise ValueError("Stop hook is missing the native final assistant message")
         if adapter == "claude":
-            response, semantic_handoff_ready = _extract_semantic_handoff(response)
             background_tasks = payload.get("background_tasks")
             if not isinstance(background_tasks, list):
                 state = "capture_error"
@@ -428,7 +400,6 @@ def normalize_hook_payload(
         "error": error,
         "cwd": cwd,
         "background_task_count": background_task_count,
-        "semantic_handoff_ready": semantic_handoff_ready,
         "captured_at_ns": (
             captured_at_ns if captured_at_ns is not None else time.time_ns()
         ),
@@ -471,6 +442,18 @@ def select_capture_events(
             "native result hook produced no valid response capture for the Herdr session"
         )
     matching.sort(key=lambda item: int(item.get("captured_at_ns") or 0))
+    if len(matching) > CAPTURE_MAX_RESPONSES:
+        raise RuntimeError(
+            "native result capture overflow: "
+            f"{len(matching)} responses exceeds limit {CAPTURE_MAX_RESPONSES}"
+        )
+    total_response_chars = sum(len(str(item["agent_response"])) for item in matching)
+    if total_response_chars > CAPTURE_MAX_RESPONSE_CHARS:
+        raise RuntimeError(
+            "native result capture overflow: "
+            f"{total_response_chars} response characters exceeds limit "
+            f"{CAPTURE_MAX_RESPONSE_CHARS}"
+        )
     return matching
 
 
@@ -485,6 +468,52 @@ def select_capture_event(
         adapter=adapter,
         session_id=session_id,
     )[-1]
+
+
+def resolve_capture_events(
+    events: Iterable[dict[str, Any]],
+    *,
+    adapter: str,
+    session_id: str,
+) -> dict[str, Any]:
+    matching = select_capture_events(
+        events,
+        adapter=adapter,
+        session_id=session_id,
+    )
+    latest = matching[-1]
+    state = latest.get("state")
+    if state in {"failed", "capture_error", "pending_async"}:
+        return dict(latest)
+
+    stops = [
+        event
+        for event in matching
+        if event.get("hook_event") == "Stop"
+        and event.get("state") in {"pending_async", "settled"}
+    ]
+    if len(stops) <= 1:
+        return dict(latest)
+
+    distinct_responses: list[str] = []
+    for event in stops:
+        response = str(event["agent_response"])
+        if response not in distinct_responses:
+            distinct_responses.append(response)
+    if len(distinct_responses) == 1:
+        return dict(latest)
+
+    return {
+        "version": 1,
+        "adapter": adapter,
+        "session_id": session_id,
+        "native_turn_id": latest.get("native_turn_id"),
+        "state": "capture_ambiguous",
+        "agent_response": None,
+        "candidate_count": len(distinct_responses),
+        "capture_events": stops,
+        "captured_at_ns": latest.get("captured_at_ns"),
+    }
 
 
 class SessionStore:
@@ -525,6 +554,27 @@ class SessionStore:
             );
             CREATE INDEX IF NOT EXISTS turns_session_idx
                 ON turns(session_id, created_at_ns);
+            CREATE TABLE IF NOT EXISTS capture_reviews (
+                capture_review_id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                repository TEXT NOT NULL,
+                route TEXT NOT NULL,
+                candidate_count INTEGER NOT NULL,
+                created_at_ns INTEGER NOT NULL,
+                FOREIGN KEY (session_id) REFERENCES sessions(session_id)
+            );
+            CREATE TABLE IF NOT EXISTS capture_review_events (
+                capture_review_id TEXT NOT NULL,
+                sequence INTEGER NOT NULL,
+                hook_event TEXT NOT NULL,
+                runtime_state TEXT NOT NULL,
+                native_turn_id TEXT,
+                agent_response TEXT NOT NULL,
+                background_task_count INTEGER NOT NULL,
+                captured_at_ns INTEGER NOT NULL,
+                PRIMARY KEY (capture_review_id, sequence),
+                FOREIGN KEY (capture_review_id) REFERENCES capture_reviews(capture_review_id)
+            );
             """
         )
 
@@ -634,6 +684,94 @@ class SessionStore:
                     now,
                 ),
             )
+
+    def record_capture_review(
+        self,
+        *,
+        capture_review_id: str,
+        session_id: str,
+        repository: str,
+        agent: str,
+        route: str,
+        events: Iterable[dict[str, Any]],
+    ) -> None:
+        captured = [
+            dict(event)
+            for event in events
+            if event.get("hook_event") == "Stop"
+            and isinstance(event.get("agent_response"), str)
+            and event.get("agent_response")
+        ]
+        if not captured:
+            raise ValueError("capture review must contain at least one Stop response")
+        if len(captured) > CAPTURE_MAX_RESPONSES:
+            raise ValueError("capture review exceeds response-count limit")
+        total_response_chars = sum(len(str(event["agent_response"])) for event in captured)
+        if total_response_chars > CAPTURE_MAX_RESPONSE_CHARS:
+            raise ValueError("capture review exceeds response-size limit")
+        distinct_responses = list(
+            dict.fromkeys(str(event["agent_response"]) for event in captured)
+        )
+        now = time.time_ns()
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT repository, agent FROM sessions WHERE session_id = ?",
+                (session_id,),
+            ).fetchone()
+            if row is None:
+                raise RuntimeError("capture review requires a registered native session")
+            if row["repository"] != repository or row["agent"] != agent:
+                raise RuntimeError(
+                    "session identity changed while recording capture review"
+                )
+            conn.execute(
+                "INSERT INTO capture_reviews("
+                "capture_review_id, session_id, repository, route, candidate_count, created_at_ns"
+                ") VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    capture_review_id,
+                    session_id,
+                    repository,
+                    route,
+                    len(distinct_responses),
+                    now,
+                ),
+            )
+            for sequence, event in enumerate(captured, start=1):
+                conn.execute(
+                    "INSERT INTO capture_review_events("
+                    "capture_review_id, sequence, hook_event, runtime_state, native_turn_id, "
+                    "agent_response, background_task_count, captured_at_ns"
+                    ") VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        capture_review_id,
+                        sequence,
+                        str(event.get("hook_event") or "Stop"),
+                        str(event.get("state") or "unknown"),
+                        event.get("native_turn_id"),
+                        str(event["agent_response"]),
+                        int(event.get("background_task_count") or 0),
+                        int(event.get("captured_at_ns") or 0),
+                    ),
+                )
+
+    def get_capture_review(self, capture_review_id: str) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            review = conn.execute(
+                "SELECT * FROM capture_reviews WHERE capture_review_id = ?",
+                (capture_review_id,),
+            ).fetchone()
+            if review is None:
+                return None
+            events = conn.execute(
+                "SELECT sequence, hook_event, runtime_state, native_turn_id, agent_response, "
+                "background_task_count, captured_at_ns "
+                "FROM capture_review_events WHERE capture_review_id = ? ORDER BY sequence",
+                (capture_review_id,),
+            ).fetchall()
+        result = dict(review)
+        result["candidates"] = [dict(event) for event in events]
+        return result
 
     def get_turn(self, turn_id: str) -> dict[str, Any] | None:
         with self._connect() as conn:
