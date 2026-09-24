@@ -116,11 +116,11 @@ Sau install/update, mở fresh QiQi session **từ workspace root** để refres
 
 Existing tracked-task startup không full-read dossier. Sau khi resolve canonical dossier, QiQi dùng bundled reader tại `skills/work-item/scripts/read.py` để:
 
-- bootstrap metadata/current state tối thiểu từ `00_WORK_ITEM.md` dưới hard output budget;
+- bootstrap metadata/current state tối thiểu từ `00_WORK_ITEM.md` dưới hard output budget, tolerate recommended body sections bị thiếu và surface `legacy_reconciliation_required` khi có;
 - establish current-turn objective/acceptance slice trước optional lifecycle hydration;
-- inspect headings rồi đọc exact semantic section hoặc bounded line range;
+- inspect Markdown headings rồi đọc exact semantic section hoặc bounded line range; `90_report.textile` dùng bounded line range;
 - preserve revision + coverage metadata cho observed surface;
-- fail closed khi section thiếu, revision đổi hoặc selected output vượt budget;
+- fail closed khi explicit requested section thiếu, revision đổi hoặc selected output vượt budget;
 - coi generic tool truncation là incomplete coverage và thu hẹp read thay vì broad-read lại.
 
 Reader vẫn filesystem-native và không phục hồi Work Item MCP. Phase reference/lifecycle material tiếp tục được hydrate just-in-time theo `$work-item` phase-aware matrix.
