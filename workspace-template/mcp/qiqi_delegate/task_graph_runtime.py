@@ -29,6 +29,7 @@ _DECISION_FIELDS = frozenset({"node_id", "action", "resume_session", "feedback"}
 _DECISION_REQUIRED_FIELDS = frozenset({"node_id", "action"})
 _EXECUTION_TERMINAL_STATES = frozenset({"settled", "failed", "blocked"})
 _RETRY_FEEDBACK_SOURCE = "QiQi semantic review"
+MAX_BATCH_REVIEW_HYDRATIONS = 8
 
 RepoTaskExecutor = Callable[[GraphNode], Awaitable[dict[str, Any]]]
 ResumeRepoTaskExecutor = Callable[[GraphNode, str], Awaitable[dict[str, Any]]]
@@ -419,22 +420,26 @@ class GraphRuntime:
             "authored_node_count": len(graph.nodes),
         }
 
-    def get_node_review(
-        self,
-        graph_run_id: str,
-        node_id: str,
-        attempt_id: str,
-    ) -> dict[str, Any]:
-        """Hydrate one exact current attempt for semantic review or replan evidence."""
-
-        graph, snapshot, revision = self._snapshot(graph_run_id)
+    @staticmethod
+    def _clean_review_locator(node_id: str, attempt_id: str) -> tuple[str, str]:
         if not isinstance(node_id, str) or not node_id.strip():
             raise ValueError("node_id must be a non-empty string")
         if not isinstance(attempt_id, str) or not attempt_id.strip():
             raise ValueError("attempt_id must be a non-empty string")
-        clean_node_id = node_id.strip()
-        clean_attempt_id = attempt_id.strip()
+        return node_id.strip(), attempt_id.strip()
 
+    def _review_payload(
+        self,
+        graph_run_id: str,
+        graph: TaskGraph,
+        snapshot: GraphSnapshot,
+        revision: int,
+        node_id: str,
+        attempt_id: str,
+    ) -> dict[str, Any]:
+        """Validate and hydrate one exact current attempt without mutating graph state."""
+
+        clean_node_id, clean_attempt_id = self._clean_review_locator(node_id, attempt_id)
         states = {state.node_id: state for state in snapshot.node_states}
         state = states.get(clean_node_id)
         if state is None:
@@ -490,6 +495,103 @@ class GraphRuntime:
             "runtime_state": state.runtime_state,
             "acceptance_criteria": list(authored.task_packet.acceptance_criteria),
             "result": result,
+        }
+
+    def get_node_review(
+        self,
+        graph_run_id: str,
+        node_id: str,
+        attempt_id: str,
+    ) -> dict[str, Any]:
+        """Hydrate one exact current attempt for semantic review or replan evidence."""
+
+        graph, snapshot, revision = self._snapshot(graph_run_id)
+        return self._review_payload(
+            graph_run_id,
+            graph,
+            snapshot,
+            revision,
+            node_id,
+            attempt_id,
+        )
+
+    def get_node_reviews(
+        self,
+        graph_run_id: str,
+        reviews: Collection[tuple[str, str]],
+        *,
+        expected_revision: int | None = None,
+    ) -> dict[str, Any]:
+        """Atomically validate and hydrate a bounded set of exact review locators."""
+
+        graph, snapshot, revision = self._snapshot(graph_run_id)
+        if expected_revision is not None:
+            if (
+                isinstance(expected_revision, bool)
+                or not isinstance(expected_revision, int)
+                or expected_revision < 0
+            ):
+                raise ValueError("expected_revision must be a non-negative integer")
+            if expected_revision != revision:
+                raise RuntimeError(
+                    "stale graph snapshot revision: "
+                    f"expected={expected_revision}, current={revision}"
+                )
+
+        if isinstance(reviews, (str, bytes)) or not isinstance(reviews, Collection):
+            raise ValueError("graph reviews must be a collection of review locators")
+        locators = list(reviews)
+        if not locators:
+            raise ValueError("graph reviews must contain at least one review locator")
+        if len(locators) > MAX_BATCH_REVIEW_HYDRATIONS:
+            raise ValueError(
+                "graph reviews exceed maximum batch size "
+                f"{MAX_BATCH_REVIEW_HYDRATIONS}"
+            )
+
+        normalized: list[tuple[str, str]] = []
+        seen: set[tuple[str, str]] = set()
+        for index, locator in enumerate(locators):
+            if (
+                not isinstance(locator, (tuple, list))
+                or len(locator) != 2
+            ):
+                raise ValueError(
+                    f"graph reviews[{index}] must be a (node_id, attempt_id) pair"
+                )
+            clean = self._clean_review_locator(locator[0], locator[1])
+            if clean in seen:
+                raise ValueError(
+                    f"duplicate review locator at reviews[{index}]: "
+                    f"node_id={clean[0]!r}, attempt_id={clean[1]!r}"
+                )
+            seen.add(clean)
+            normalized.append(clean)
+
+        # Build the complete validated set before returning any rich evidence. This keeps
+        # stale/mismatched batches fail-closed rather than exposing a mixed partial result.
+        payloads = [
+            self._review_payload(
+                graph_run_id,
+                graph,
+                snapshot,
+                revision,
+                node_id,
+                attempt_id,
+            )
+            for node_id, attempt_id in normalized
+        ]
+        return {
+            "graph_run_id": graph_run_id,
+            "revision": revision,
+            "reviews": [
+                {
+                    key: value
+                    for key, value in payload.items()
+                    if key not in {"graph_run_id", "revision"}
+                }
+                for payload in payloads
+            ],
         }
 
     def reconcile_graph(
