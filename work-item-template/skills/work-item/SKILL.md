@@ -124,13 +124,14 @@ Bundled reader nằm tại `scripts/read.py` tương đối với active `work-i
 
 Startup cho existing tracked task:
 
-1. Chạy bounded `00_WORK_ITEM.md` bootstrap bằng `--profile bootstrap`. Surface này chỉ trả front-matter `id/revision/status/phase` cùng Objective, Current Requirements, Acceptance Criteria, Open Questions, Blockers và Current State.
+1. Chạy bounded `00_WORK_ITEM.md` bootstrap bằng `--profile bootstrap`. Surface này trả front-matter `id/revision/status/phase`, thêm `legacy_reconciliation_required` khi flag tồn tại, cùng các section Objective, Current Requirements, Acceptance Criteria, Open Questions, Blockers và Current State **nếu section đó hiện diện**. Body section là recommended current-state shape, không phải schema migration bắt buộc; section vắng được trả trong `missing_bootstrap_sections` thay vì làm bootstrap fail.
 2. Từ current user request + bootstrap, establish **current-turn objective/acceptance slice** trước khi đọc optional lifecycle material. Full product task trong Work Item không tự động mở rộng scope của turn hiện tại.
 3. Dùng coverage receipt để biết exact file/sections/range đã quan sát. `complete_file=false` nghĩa là absence ngoài coverage không phải negative evidence.
-4. Khi cần lifecycle material, trước tiên có thể dùng `--headings`, sau đó hydrate exact `--section` hoặc bounded `--lines START:END`. Reader không có default full-file mode; line range có hard maximum 120 lines.
+4. Khi cần Markdown lifecycle material, trước tiên có thể dùng `--headings`, sau đó hydrate exact `--section` hoặc bounded `--lines START:END`. `90_report.textile` không có Markdown semantic heading contract nên chỉ dùng bounded `--lines`. Reader không có default full-file mode; line range có hard maximum 120 lines.
 5. Reader có hard output budget 8192 bytes. `output_budget_exceeded` phải dẫn tới narrower section/range; không tăng budget hoặc đổi sang broad dump.
 6. Nếu một generic filesystem/tool read bị truncation, coi **truncation = incomplete coverage**. Không retry một broad read khác; thu hẹp surface bằng heading/section/range.
 7. Khi lifecycle evidence được đọc với known revision, truyền `--expected-revision <n>`. Revision mismatch fail closed và yêu cầu bounded bootstrap lại trước khi promote evidence.
+8. Nếu bootstrap trả `legacy_reconciliation_required: true`, `required_followup_sections` sẽ chứa `Import Reconciliation`. Hydrate exact section đó để lấy protected archive locator và hoàn thành legacy reconciliation gate trước substantive implementation/completion/reporting.
 
 Ví dụ:
 
@@ -156,7 +157,7 @@ python3 <work-item-skill-root>/scripts/read.py \
 | Straightforward implementation/delegation | Exact current evidence cần để tạo TaskPacket; planning/review material không load mặc định | Không đọc planning reference nếu approach obvious/reversible |
 | Non-obvious approach/trade-off/verification design | Exact relevant `20_investigation.md` + selected `30_plan.md` surface | `phases/planning.md` just-in-time |
 | Acceptance/completion assessment | Selected `40_review.md` + exact acceptance evidence | `phases/review.md` mandatory |
-| Report render/verification | Chỉ report material và exact supporting current-state evidence cần cho report | Không hydrate unrelated lifecycle phase |
+| Report render/verification | Đọc `90_report.textile` bằng bounded line range và exact supporting current-state evidence cần cho report | Không hydrate unrelated lifecycle phase |
 
 Scope chỉ được mở rộng ngoài current-turn objective/acceptance slice khi new evidence chứng minh material dependency/boundary cần thiết cho current request. Adjacent historical/task area trong dossier không tự trở thành investigation scope.
 
