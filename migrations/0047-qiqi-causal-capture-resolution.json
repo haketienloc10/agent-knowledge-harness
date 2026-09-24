@@ -1,7 +1,7 @@
 {
   "version": 47,
   "from_ref": "0d612969152d6470492b700340d13bc456ac6151",
-  "to_ref": "c6abddeef87253a37bf30d2b89f80a880886b62f",
+  "to_ref": "678efe0c19f035627934edbaf7fcdc6ed865767d",
   "description": "replace child-prompt semantic handoff markers with bounded runtime capture and causal Claude lifecycle resolution: preserve ambiguous Stop candidates for explicit review, resolve subagent handbacks and correlated background TaskOutput or structured async tool delivery without semantic text heuristics, preserve exact failure evidence, and keep insufficient causal evidence fail-closed as capture_ambiguous",
   "workspace": {
     "merge": [],
