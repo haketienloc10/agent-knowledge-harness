@@ -22,6 +22,7 @@ class WorkspaceStartupPolicyTests(unittest.TestCase):
         cls.agents = read_workspace_file("AGENTS.md")
         cls.identity = read_workspace_file("identity.md")
         cls.model_routing = read_workspace_file("instructions/model-routing.md")
+        cls.codex_config = read_workspace_file(".codex/config.toml")
 
     def test_model_routing_is_lazy_but_mandatory_before_actual_delegation(self) -> None:
         startup = markdown_section(self.agents, "## Startup")
@@ -95,6 +96,11 @@ class WorkspaceStartupPolicyTests(unittest.TestCase):
         scope_lock = startup.index("current-turn objective/acceptance slice")
         optional_hydration = startup.index("optional lifecycle material")
         self.assertLess(scope_lock, optional_hydration)
+
+    def test_capture_review_tool_is_enabled_for_ambiguous_delegation(self) -> None:
+        self.assertIn('"get_turn_capture_review"', self.codex_config)
+        self.assertIn('"delegate_repo_task"', self.codex_config)
+        self.assertIn('"get_node_review"', self.codex_config)
 
     def test_blocked_delegation_preserves_resume_identity_before_semantic_read(self) -> None:
         after = markdown_section(self.agents, "## Sau delegation")

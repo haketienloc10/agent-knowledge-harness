@@ -4,7 +4,7 @@ args = ["scripts/qiqi-mcp-server.sh"]
 startup_timeout_sec = 30
 tool_timeout_sec = 7200
 required = true
-enabled_tools = ["delegate_repo_task", "start_graph", "get_graph", "get_node_review", "get_node_reviews", "delegate_next", "submit_decisions", "reconcile_graph"]
+enabled_tools = ["delegate_repo_task", "get_turn_capture_review", "start_graph", "get_graph", "get_node_review", "get_node_reviews", "delegate_next", "submit_decisions", "reconcile_graph"]
 default_tools_approval_mode = "approve"
 
 [features.code_mode]
