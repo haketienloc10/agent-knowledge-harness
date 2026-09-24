@@ -17,7 +17,9 @@ ALLOWED_FILES = {
     "20_investigation.md",
     "30_plan.md",
     "40_review.md",
+    "90_report.textile",
 }
+MARKDOWN_FILES = ALLOWED_FILES - {"90_report.textile"}
 BOOTSTRAP_SECTIONS = (
     "Objective",
     "Current Requirements",
@@ -65,13 +67,16 @@ def parse_simple_front_matter(text: str) -> tuple[dict[str, object], int]:
             continue
         key, value = found.groups()
         value = value.strip()
-        if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+        quoted = len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}
+        if quoted:
             value = value[1:-1]
         if key in {"revision", "based_on_work_item_revision"}:
             try:
                 values[key] = int(value)
             except ValueError as exc:
                 raise ReadError("invalid_revision", f"front-matter {key} must be an integer") from exc
+        elif not quoted and value in {"true", "false"}:
+            values[key] = value == "true"
         else:
             values[key] = value
     return values, match.end()
@@ -89,13 +94,16 @@ def parse_front_matter(text: str) -> tuple[dict[str, object], int]:
     return values, end
 
 
-def headings(text: str) -> list[dict[str, object]]:
+def headings(text: str, *, start_offset: int = 0) -> list[dict[str, object]]:
     out: list[dict[str, object]] = []
     offset = 0
     in_fence = False
     fence_char = ""
     fence_len = 0
     for number, line in enumerate(text.splitlines(keepends=True), start=1):
+        if offset < start_offset:
+            offset += len(line)
+            continue
         stripped = line.lstrip()
         fence = re.match(r"^(`{3,}|~{3,})", stripped)
         if fence:
@@ -123,8 +131,13 @@ def headings(text: str) -> list[dict[str, object]]:
     return out
 
 
-def section_slice(text: str, wanted: str) -> tuple[str, dict[str, object]]:
-    all_headings = headings(text)
+def section_slice(
+    text: str,
+    wanted: str,
+    *,
+    start_offset: int = 0,
+) -> tuple[str, dict[str, object]]:
+    all_headings = headings(text, start_offset=start_offset)
     matches = [item for item in all_headings if item["heading"] == wanted]
     if not matches:
         raise ReadError("section_not_found", f"section not found: {wanted}", section=wanted)
@@ -155,8 +168,8 @@ def section_slice(text: str, wanted: str) -> tuple[str, dict[str, object]]:
     return content, info
 
 
-def top_level_headings(text: str) -> list[str]:
-    hs = headings(text)
+def top_level_headings(text: str, *, start_offset: int = 0) -> list[str]:
+    hs = headings(text, start_offset=start_offset)
     if not hs:
         return []
     minimum = min(int(item["level"]) for item in hs)
@@ -231,6 +244,8 @@ def main() -> int:
         parser.error("--profile cannot be combined with file selectors")
     if args.file and not (args.headings or args.section or args.lines):
         parser.error("--file requires exactly one of --headings, --section, or --lines")
+    if args.file and args.file not in MARKDOWN_FILES and (args.headings or args.section):
+        parser.error(f"{args.file} supports --lines only")
     if len(args.section) > MAX_SECTIONS:
         parser.error(f"at most {MAX_SECTIONS} --section selectors are allowed")
     if args.expected_revision is not None and args.expected_revision < 1:
@@ -239,7 +254,7 @@ def main() -> int:
     try:
         dossier = safe_dossier(args.dossier)
         primary_text = read_text(target_path(dossier, PRIMARY))
-        meta, _ = parse_front_matter(primary_text)
+        meta, primary_body_start = parse_front_matter(primary_text)
         revision = int(meta["revision"])
         if args.expected_revision is not None and revision != args.expected_revision:
             raise ReadError(
@@ -252,31 +267,70 @@ def main() -> int:
         if args.profile == "bootstrap":
             selected: list[dict[str, object]] = []
             chunks: list[str] = []
+            missing: list[str] = []
             for name in BOOTSTRAP_SECTIONS:
-                content, info = section_slice(primary_text, name)
+                try:
+                    section_content, info = section_slice(
+                        primary_text,
+                        name,
+                        start_offset=primary_body_start,
+                    )
+                except ReadError as exc:
+                    if exc.code != "section_not_found":
+                        raise
+                    missing.append(name)
+                    continue
                 selected.append(info)
-                chunks.append(content)
-            selected_names = list(BOOTSTRAP_SECTIONS)
-            omitted = [name for name in top_level_headings(primary_text) if name not in selected_names]
+                chunks.append(section_content)
+
+            selected_names = {str(item["heading"]) for item in selected}
+            omitted = [
+                name
+                for name in top_level_headings(
+                    primary_text,
+                    start_offset=primary_body_start,
+                )
+                if name not in selected_names
+            ]
+            metadata = {
+                key: meta[key]
+                for key in ("id", "revision", "status", "phase")
+            }
+            if "legacy_reconciliation_required" in meta:
+                metadata["legacy_reconciliation_required"] = meta[
+                    "legacy_reconciliation_required"
+                ]
+            legacy_reconciliation_required = (
+                metadata.get("legacy_reconciliation_required") is True
+                or str(metadata.get("legacy_reconciliation_required", "")).lower() == "true"
+            )
             payload = {
                 "ok": True,
                 "revision": revision,
-                "metadata": {key: meta[key] for key in ("id", "revision", "status", "phase")},
+                "metadata": metadata,
                 "coverage": {
                     "file": PRIMARY,
                     "mode": "bootstrap",
                     "sections": selected,
+                    "missing_bootstrap_sections": missing,
                     "omitted_top_level_sections": omitted,
                     "complete_file": False,
                 },
-                "content": "\n".join(chunks).rstrip() + "\n",
+                "required_followup_sections": (
+                    ["Import Reconciliation"] if legacy_reconciliation_required else []
+                ),
+                "content": (
+                    "\n".join(chunks).rstrip() + "\n"
+                    if chunks
+                    else ""
+                ),
             }
             compact_emit(payload)
             return 0
 
         filename = str(args.file)
         text = read_text(target_path(dossier, filename))
-        file_metadata, _ = parse_simple_front_matter(text)
+        file_metadata, body_start = parse_simple_front_matter(text)
         if args.headings:
             payload = {
                 "ok": True,
@@ -289,7 +343,7 @@ def main() -> int:
                 },
                 "headings": [
                     {key: item[key] for key in ("level", "heading", "line")}
-                    for item in headings(text)
+                    for item in headings(text, start_offset=body_start)
                 ],
             }
             compact_emit(payload)
@@ -299,7 +353,11 @@ def main() -> int:
             selected = []
             chunks = []
             for name in args.section:
-                content, info = section_slice(text, name)
+                content, info = section_slice(
+                    text,
+                    name,
+                    start_offset=body_start,
+                )
                 selected.append(info)
                 chunks.append(content)
             selected_names = set(args.section)
@@ -312,7 +370,9 @@ def main() -> int:
                     "mode": "sections",
                     "sections": selected,
                     "omitted_top_level_sections": [
-                        name for name in top_level_headings(text) if name not in selected_names
+                        name
+                        for name in top_level_headings(text, start_offset=body_start)
+                        if name not in selected_names
                     ],
                     "complete_file": False,
                 },
