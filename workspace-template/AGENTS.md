@@ -27,7 +27,7 @@ Khi tool/MCP không được expose như direct callable và QiQi cần hydrate 
 
 1. Đọc `identity.md`.
 2. Đọc `repos.yaml`.
-3. Nếu request identify/continue tracked task, apply `$work-item` và đọc đúng safe Work Item dossier + smallest relevant lifecycle docs.
+3. Nếu request identify/continue tracked task, apply `$work-item`, chạy bounded `00_WORK_ITEM.md` bootstrap bằng bundled reader, establish current-turn objective/acceptance slice, rồi chỉ hydrate optional lifecycle material just-in-time theo phase-aware matrix; không full-read dossier như startup ceremony.
 4. Chỉ đọc `SYSTEM_MAP.md` khi cần cross-repo semantic fact ngoài registry.
 5. Dùng Shared Knowledge theo decision rule, không search như ceremony.
 
@@ -57,6 +57,11 @@ Canonical ID/path mechanics thuộc `$work-item`: validate canonical ID, derive 
 - Không persist turn history, command chronology, intermediate attempts hoặc routine progress.
 - `00_WORK_ITEM.md` giữ effective current requirements/acceptance/scope/decisions/questions/blockers/state/next actions.
 - `10_intake.md`, `20_investigation.md`, `30_plan.md`, `40_review.md`, `90_report.textile` là living lifecycle docs, materialize khi cần.
+- Existing tracked-task startup dùng bundled bounded reader của `$work-item`: bootstrap chỉ metadata/current-state tối thiểu từ `00_WORK_ITEM.md`, rồi establish **current-turn objective/acceptance slice** trước optional lifecycle hydration.
+- Stable investigation follow-up không hydrate `10_intake.md`, planning hoặc review material mặc định; chỉ đọc exact `20_investigation.md` section/range khi current slice cần evidence. Material requirement change mới rerun intake gate và hydrate intake provenance khi material.
+- Planning/review material chỉ hydrate khi corresponding material gate thực sự cần; report material chỉ hydrate khi render/verify report.
+- Generic read bị truncation được coi là **incomplete coverage**; không retry broad dump. Narrow bằng heading/semantic section/bounded line range và preserve returned coverage receipt.
+- Bounded reader hard-cap output; `output_budget_exceeded` hoặc revision mismatch phải fail closed và dẫn tới narrower/reread strategy, không bỏ qua coverage/revision.
 - Numeric prefixes là canonical filename contract để dossier sort theo lifecycle; `references/` không đánh số vì không phải lifecycle phase.
 - Legacy unprefixed lifecycle filenames phải migrate trước khi tiếp tục; không tạo parallel numbered/unprefixed copies.
 - Requirement change rewrite current requirement và tăng `revision`; prior findings phải reconcile materiality thay vì auto discard.
