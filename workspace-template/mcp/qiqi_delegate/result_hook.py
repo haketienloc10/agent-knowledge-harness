@@ -56,10 +56,11 @@ def _load_active_capture(
         raise ValueError("active-capture descriptor has no nonce")
     expected_session_id = raw.get("expected_session_id")
     actual_session_id = payload.get("session_id")
+    hook_event = payload.get("hook_event_name")
     if expected_session_id is not None:
         if not isinstance(expected_session_id, str) or not expected_session_id:
             raise ValueError("active-capture expected_session_id is invalid")
-        if actual_session_id != expected_session_id:
+        if hook_event in {"Stop", "StopFailure"} and actual_session_id != expected_session_id:
             raise ValueError("active-capture native session mismatch")
     return Path(sink_value), nonce
 
@@ -94,7 +95,8 @@ def main() -> int:
             nonce=nonce,
             payload=payload,
         )
-        _write_event(sink, event)
+        if event is not None:
+            _write_event(sink, event)
     except Exception as exc:
         # Result capture must never make the native Stop hook continue/block a turn.
         # The MCP detects the missing/invalid event and fails the delegation explicitly.

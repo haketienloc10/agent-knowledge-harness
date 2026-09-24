@@ -27,7 +27,7 @@ _NODE_FIELDS = frozenset(
 _NODE_REQUIRED_FIELDS = frozenset({"node_id", "repository", "task_packet"})
 _DECISION_FIELDS = frozenset({"node_id", "action", "resume_session", "feedback"})
 _DECISION_REQUIRED_FIELDS = frozenset({"node_id", "action"})
-_EXECUTION_TERMINAL_STATES = frozenset({"settled", "failed", "blocked"})
+_EXECUTION_TERMINAL_STATES = frozenset({"settled", "failed", "blocked", "capture_ambiguous"})
 _RETRY_FEEDBACK_SOURCE = "QiQi semantic review"
 MAX_BATCH_REVIEW_HYDRATIONS = 8
 
@@ -109,7 +109,28 @@ def _validated_execution_result(value: Any) -> dict[str, Any]:
     response = value["agent_response"]
     if response is not None and not isinstance(response, str):
         raise RuntimeError("repo-task execution result agent_response must be a string or null")
+    if state == "capture_ambiguous":
+        if response is not None:
+            raise RuntimeError(
+                "capture_ambiguous repo-task result must not include agent_response"
+            )
+        _required_execution_id(value.get("capture_review_id"), "capture_review_id")
+        candidate_count = value.get("candidate_count")
+        if (
+            isinstance(candidate_count, bool)
+            or not isinstance(candidate_count, int)
+            or candidate_count < 2
+        ):
+            raise RuntimeError(
+                "capture_ambiguous repo-task result candidate_count must be an integer >= 2"
+            )
     return dict(value)
+
+
+def _persisted_runtime_state(execution_state: str) -> str:
+    """Map transport-only review states onto the durable scheduler state vocabulary."""
+
+    return "settled" if execution_state == "capture_ambiguous" else execution_state
 
 
 def _feedback_from_payload(value: Any, label: str) -> tuple[str, ...]:
@@ -371,13 +392,45 @@ class GraphRuntime:
                     f"persisted graph run is missing node state for {state.node_id!r}"
                 )
             current_attempt_id = persisted.get("current_attempt_id")
+            attempt = (
+                self.store.get_attempt(current_attempt_id)
+                if isinstance(current_attempt_id, str) and current_attempt_id
+                else None
+            )
+            attempt_result = attempt.get("result") if isinstance(attempt, dict) else None
+            public_runtime_state = state.runtime_state
+            capture_review_id: str | None = None
+            candidate_count: int | None = None
+            if (
+                state.semantic_state == "pending"
+                and state.runtime_state in REVIEWABLE_RUNTIME_STATES
+                and isinstance(attempt_result, dict)
+                and attempt_result.get("state") == "capture_ambiguous"
+            ):
+                public_runtime_state = "capture_ambiguous"
+                raw_review_id = attempt_result.get("capture_review_id")
+                raw_candidate_count = attempt_result.get("candidate_count")
+                if isinstance(raw_review_id, str) and raw_review_id:
+                    capture_review_id = raw_review_id
+                if isinstance(raw_candidate_count, int) and not isinstance(
+                    raw_candidate_count, bool
+                ):
+                    candidate_count = raw_candidate_count
             retry_plan = self._retry_plans.get((graph_run_id, state.node_id))
             execution_nodes.append(
                 {
                     "node_id": state.node_id,
                     "semantic_state": state.semantic_state,
-                    "runtime_state": state.runtime_state,
+                    "runtime_state": public_runtime_state,
                     "current_attempt_id": current_attempt_id,
+                    **(
+                        {
+                            "capture_review_id": capture_review_id,
+                            "candidate_count": candidate_count,
+                        }
+                        if capture_review_id is not None
+                        else {}
+                    ),
                     "session_id": persisted.get("session_id"),
                     "turn_id": persisted.get("turn_id"),
                     "retry_pending": (
@@ -401,8 +454,16 @@ class GraphRuntime:
                     {
                         "node_id": state.node_id,
                         "repository": authored.repository,
-                        "runtime_state": state.runtime_state,
+                        "runtime_state": public_runtime_state,
                         "attempt_id": current_attempt_id,
+                        **(
+                            {
+                                "capture_review_id": capture_review_id,
+                                "candidate_count": candidate_count,
+                            }
+                            if capture_review_id is not None
+                            else {}
+                        ),
                         "acceptance_criteria": list(
                             authored.task_packet.acceptance_criteria
                         ),
@@ -484,6 +545,13 @@ class GraphRuntime:
                 f"review attempt {clean_attempt_id!r} has no persisted result"
             )
 
+        public_runtime_state = state.runtime_state
+        if (
+            is_current_review
+            and result.get("state") == "capture_ambiguous"
+        ):
+            public_runtime_state = "capture_ambiguous"
+
         authored = next(node for node in graph.nodes if node.node_id == clean_node_id)
         return {
             "graph_run_id": graph_run_id,
@@ -492,7 +560,7 @@ class GraphRuntime:
             "repository": authored.repository,
             "attempt_id": clean_attempt_id,
             "semantic_state": state.semantic_state,
-            "runtime_state": state.runtime_state,
+            "runtime_state": public_runtime_state,
             "acceptance_criteria": list(authored.task_packet.acceptance_criteria),
             "result": result,
         }
@@ -800,7 +868,7 @@ class GraphRuntime:
 
         self.store.finish_attempt(
             wave_attempt.attempt_id,
-            runtime_state=result["state"],
+            runtime_state=_persisted_runtime_state(result["state"]),
             result=result,
             session_id=result["session_id"],
             turn_id=result["turn_id"],
@@ -962,6 +1030,14 @@ class GraphRuntime:
                     **(
                         {"blocker_type": outcome["blocker_type"]}
                         if "blocker_type" in outcome
+                        else {}
+                    ),
+                    **(
+                        {
+                            "capture_review_id": outcome["capture_review_id"],
+                            "candidate_count": outcome["candidate_count"],
+                        }
+                        if outcome.get("state") == "capture_ambiguous"
                         else {}
                     ),
                 }

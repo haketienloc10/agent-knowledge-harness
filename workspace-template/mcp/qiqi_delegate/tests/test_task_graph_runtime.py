@@ -129,6 +129,77 @@ class TaskGraphRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(attempts[0]["resume_session"])
         self.assertEqual(attempts[0]["result"]["agent_response"], "completed contracts")
 
+    async def test_capture_ambiguous_is_preserved_as_reviewable_graph_evidence(self) -> None:
+        started = self.start()
+        run_id = started["graph_run_id"]
+
+        async def ambiguous_executor(node: GraphNode) -> dict:
+            return {
+                "session_id": f"session-{node.node_id}",
+                "turn_id": f"turn-{node.node_id}",
+                "state": "capture_ambiguous",
+                "agent_response": None,
+                "capture_review_id": f"capture-{node.node_id}",
+                "candidate_count": 2,
+            }
+
+        result = await self.runtime.delegate_next(
+            run_id,
+            executor=ambiguous_executor,
+        )
+
+        self.assertEqual(result["graph_state"], "awaiting_review")
+        self.assertEqual(result["results"][0]["runtime_state"], "capture_ambiguous")
+        self.assertEqual(
+            result["results"][0]["capture_review_id"],
+            "capture-contracts",
+        )
+        self.assertEqual(result["results"][0]["candidate_count"], 2)
+        self.assertEqual(
+            result["review_required"][0]["runtime_state"],
+            "capture_ambiguous",
+        )
+        self.assertEqual(
+            result["review_required"][0]["capture_review_id"],
+            "capture-contracts",
+        )
+        self.assertEqual(result["nodes"][0]["runtime_state"], "capture_ambiguous")
+
+        attempt_id = result["results"][0]["attempt_id"]
+        attempt = self.store.get_attempt(attempt_id)
+        self.assertEqual(attempt["runtime_state"], "settled")
+        self.assertEqual(attempt["result"]["state"], "capture_ambiguous")
+        self.assertEqual(
+            attempt["result"]["capture_review_id"],
+            "capture-contracts",
+        )
+
+        review = self.runtime.get_node_review(
+            run_id,
+            "contracts",
+            attempt_id,
+        )
+        self.assertEqual(review["runtime_state"], "capture_ambiguous")
+        self.assertEqual(
+            review["result"]["capture_review_id"],
+            "capture-contracts",
+        )
+
+    async def test_capture_ambiguous_requires_review_locator_and_candidate_count(self) -> None:
+        started = self.start()
+        run_id = started["graph_run_id"]
+
+        async def invalid_executor(node: GraphNode) -> dict:
+            return {
+                "session_id": f"session-{node.node_id}",
+                "turn_id": f"turn-{node.node_id}",
+                "state": "capture_ambiguous",
+                "agent_response": None,
+            }
+
+        with self.assertRaisesRegex(RuntimeError, "capture_review_id"):
+            await self.runtime.delegate_next(run_id, executor=invalid_executor)
+
     async def test_get_node_review_rejects_stale_attempt_locator(self) -> None:
         started = self.start()
         run_id = started["graph_run_id"]

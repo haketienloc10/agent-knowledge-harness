@@ -11,7 +11,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 HOOK = ROOT / "result_hook.py"
-SEMANTIC_HANDOFF_MARKER = "<!-- qiqi-semantic-handoff:v1 -->"
 
 
 class ResultHookTests(unittest.TestCase):
@@ -160,24 +159,15 @@ class ResultHookTests(unittest.TestCase):
         finally:
             temp.cleanup()
 
-    def test_static_hook_marks_and_strips_semantic_handoff(self):
-        response = "FULL REPORT"
+    def test_static_hook_preserves_literal_handoff_marker_as_native_content(self):
+        response = "FULL REPORT\n\n<!-- qiqi-semantic-handoff:v1 -->"
         temp, sink, completed = self.run_static_hook(
             "claude",
             {
                 "hook_event_name": "Stop",
                 "session_id": "claude-session",
-                "last_assistant_message": (
-                    response + "\n\n" + SEMANTIC_HANDOFF_MARKER
-                ),
-                "background_tasks": [
-                    {
-                        "id": "shell-1",
-                        "type": "shell",
-                        "status": "running",
-                        "description": "diagnostic",
-                    }
-                ],
+                "last_assistant_message": response,
+                "background_tasks": [{"id": "shell-1"}],
             },
         )
         try:
@@ -187,8 +177,67 @@ class ResultHookTests(unittest.TestCase):
             event = json.loads(files[0].read_text(encoding="utf-8"))
             self.assertEqual(event["state"], "pending_async")
             self.assertEqual(event["agent_response"], response)
-            self.assertTrue(event["semantic_handoff_ready"])
-            self.assertNotIn(SEMANTIC_HANDOFF_MARKER, event["agent_response"])
+            self.assertNotIn("semantic_handoff_ready", event)
+        finally:
+            temp.cleanup()
+
+    def test_static_hook_captures_subagent_handback_lifecycle(self):
+        temp, sink, completed = self.run_static_hook(
+            "claude",
+            {
+                "hook_event_name": "PostToolUse",
+                "session_id": "claude-session",
+                "tool_name": "SubagentHandback",
+                "tool_input": {"message": "child report"},
+                "tool_response": {"success": True},
+            },
+        )
+        try:
+            self.assertEqual(completed.returncode, 0)
+            files = list(sink.glob("event-*.json"))
+            self.assertEqual(len(files), 1)
+            event = json.loads(files[0].read_text(encoding="utf-8"))
+            self.assertEqual(event["state"], "lifecycle")
+            self.assertEqual(event["lifecycle_kind"], "result_delivered")
+            self.assertEqual(event["lifecycle_source"], "subagent_handback")
+        finally:
+            temp.cleanup()
+
+    def test_static_hook_ignores_unrelated_post_tool_use(self):
+        temp, sink, completed = self.run_static_hook(
+            "claude",
+            {
+                "hook_event_name": "PostToolUse",
+                "session_id": "claude-session",
+                "tool_name": "Write",
+                "tool_input": {"file_path": "/repo/x"},
+                "tool_response": {"filePath": "/repo/x"},
+            },
+        )
+        try:
+            self.assertEqual(completed.returncode, 0)
+            self.assertEqual(list(sink.glob("event-*.json")), [])
+        finally:
+            temp.cleanup()
+
+    def test_lifecycle_hook_does_not_require_root_resume_session_identity(self):
+        temp, sink, completed = self.run_static_hook(
+            "claude",
+            {
+                "hook_event_name": "SubagentStop",
+                "session_id": "subagent-session",
+                "agent_id": "agent-1",
+                "last_assistant_message": "done",
+                "background_tasks": [],
+            },
+            expected_session_id="root-session",
+        )
+        try:
+            self.assertEqual(completed.returncode, 0)
+            files = list(sink.glob("event-*.json"))
+            self.assertEqual(len(files), 1)
+            event = json.loads(files[0].read_text(encoding="utf-8"))
+            self.assertEqual(event["operation_id"], "agent-1")
         finally:
             temp.cleanup()
 

@@ -29,7 +29,7 @@ from core import (
     load_capture_events,
     new_turn_id,
     render_task_prompt,
-    select_capture_events,
+    resolve_capture_events,
 )
 
 _workspace_root_env = os.environ.get("QIQI_WORKSPACE_ROOT")
@@ -124,11 +124,14 @@ mcp = MCPServer(
         "policy. The MCP launches/resumes the native Codex or Claude session through Herdr "
         "and captures native assistant Stop responses through a static result-hook command "
         "routed to MCP-owned active-capture state; it never scrapes terminal scrollback or "
-        "parses agent transcripts. Claude receives an explicit semantic-handoff marker contract; "
-        "the hook strips that marker and preserves the latest marked handoff candidate while "
-        "background work remains pending, so a later unmarked completion/housekeeping Stop cannot "
-        "overwrite the self-contained handoff. Unmarked async captures still wait for a later "
-        "Stop with no background tasks, and pending waits remain bounded. Codex "
+        "parses agent transcripts. Root Stop responses are preserved as a bounded capture window. "
+        "Runtime quiescence decides when that window closes, not which response is semantically "
+        "correct. If multiple distinct Stop responses remain without causal evidence that proves "
+        "one supersedes the others, the delegation returns a compact capture_ambiguous locator; "
+        "candidates stay in MCP-owned SQLite until explicitly reviewed. Claude causal "
+        "lifecycle hooks capture successful SubagentHandback delivery, SubagentStop, "
+        "TaskOutput delivery, and structured async tool lifecycle so later housekeeping "
+        "Stops cannot replace an earlier response after the last proven result delivery. Codex "
         "trusts only the exact QiQi session hook by matching its computed trusted_hash; global "
         "hook-trust bypass is forbidden. Settled/failed/blocked are runtime lifecycle states, "
         "not semantic completion. Runtime session ownership is persisted in MCP-owned SQLite "
@@ -205,6 +208,12 @@ def _delegation_tool_error(exc: ValueError | RuntimeError) -> ToolError:
             "upgrade Claude Code to a version whose Stop hook reports background_tasks, "
             "then RESUME the preserved native session"
         )
+    elif "native result capture overflow" in lowered:
+        code = "native_result_capture_overflow"
+        action = "review the delegated turn shape before resuming; capture is bounded and never silently truncated"
+    elif "unknown capture_review_id" in lowered:
+        code = "capture_review_not_found"
+        action = "use the exact capture_review_id returned by delegate_repo_task"
     elif "native final response was not captured" in lowered:
         code = "native_result_capture_failed"
         action = "use the preserved session_id in this error to RESUME the exact native session after repairing result capture"
@@ -519,10 +528,28 @@ def _codex_session_hook_key() -> str:
 def _build_handoff_args(adapter: str) -> list[str]:
     command = _result_hook_command(adapter)
     if adapter == "claude":
+        lifecycle_matcher = (
+            "Agent|Bash|TaskOutput|Workflow|Monitor|SubagentHandback|mcp__.*"
+        )
         settings = {
             "hooks": {
                 "Stop": [{"hooks": [{"type": "command", "command": command}]}],
                 "StopFailure": [{"hooks": [{"type": "command", "command": command}]}],
+                "SubagentStop": [
+                    {"hooks": [{"type": "command", "command": command}]}
+                ],
+                "PostToolUse": [
+                    {
+                        "matcher": lifecycle_matcher,
+                        "hooks": [{"type": "command", "command": command}],
+                    }
+                ],
+                "PostToolUseFailure": [
+                    {
+                        "matcher": "TaskOutput",
+                        "hooks": [{"type": "command", "command": command}],
+                    }
+                ],
             }
         }
         return ["--settings", json.dumps(settings, ensure_ascii=False, separators=(",", ":"))]
@@ -1022,57 +1049,35 @@ async def _wait_for_result_capture(
     while True:
         events = load_capture_events(sink, nonce)
         try:
-            matching = select_capture_events(
+            resolution = resolve_capture_events(
                 events, adapter=adapter, session_id=native_session_id
             )
         except RuntimeError as exc:
+            if "native result capture overflow" in str(exc):
+                raise
             last_error = exc
         else:
-            event = matching[-1]
-            semantic_candidates = [
-                candidate
-                for candidate in matching
-                if candidate.get("semantic_handoff_ready") is True
-                and candidate.get("hook_event") == "Stop"
-                and candidate.get("state") in {"pending_async", "settled"}
-            ]
-            semantic_candidate = (
-                semantic_candidates[-1] if semantic_candidates else None
-            )
-
-            state = event.get("state")
-            if state == "failed":
-                return event
-            if state == "settled":
-                if semantic_candidate is None:
-                    return event
-                selected = dict(event)
-                selected["agent_response"] = semantic_candidate["agent_response"]
-                selected["native_turn_id"] = (
-                    semantic_candidate.get("native_turn_id")
-                    or event.get("native_turn_id")
-                )
-                selected["semantic_handoff_ready"] = True
-                selected["semantic_handoff_captured_at_ns"] = semantic_candidate.get(
-                    "captured_at_ns"
-                )
-                return selected
+            state = resolution.get("state")
+            if state in {"settled", "failed", "capture_ambiguous"}:
+                return resolution
             if state == "capture_error":
-                detail = event.get("error")
+                detail = resolution.get("error")
                 raise RuntimeError(
                     detail
                     if isinstance(detail, str) and detail
                     else "native result hook reported an unspecified capture error"
                 )
             if state == "pending_async":
-                captured_at_ns = int(event.get("captured_at_ns") or 0)
+                captured_at_ns = int(resolution.get("captured_at_ns") or 0)
                 if captured_at_ns != latest_pending_capture_ns:
                     latest_pending_capture_ns = captured_at_ns
                     pending_deadline = (
                         time.monotonic() + NATIVE_PENDING_RESULT_WAIT_SECONDS
                     )
             else:
-                raise RuntimeError(f"native result hook produced unexpected state: {state!r}")
+                raise RuntimeError(
+                    f"native result hook produced unexpected state: {state!r}"
+                )
 
         now = time.monotonic()
         if pending_deadline is not None:
@@ -1099,6 +1104,19 @@ def _prepare_resume(repository: str, agent_name: str, session_id: str) -> None:
         if not _import_legacy_resume_if_present(repository, agent_name, session_id):
             raise first_error
     _store.require_resume(session_id, repository, agent_name)
+
+
+@mcp.tool()
+@_public_tool_errors
+async def get_turn_capture_review(capture_review_id: str) -> dict[str, Any]:
+    """Hydrate raw Stop candidates for one previously ambiguous delegated turn."""
+    capture_review_id = capture_review_id.strip()
+    if not capture_review_id:
+        raise ValueError("capture_review_id must not be empty")
+    review = _store.get_capture_review(capture_review_id)
+    if review is None:
+        raise RuntimeError(f"unknown capture_review_id={capture_review_id!r}")
+    return review
 
 
 @mcp.tool()
@@ -1139,9 +1157,10 @@ async def delegate_repo_task(
     native conversation. Session ownership is stored in `.qiqi/state/qiqi_delegate.sqlite3`.
 
     Settled/failed native turns return `session_id`, QiQi-owned `turn_id`, `state`,
-    and one native semantic `agent_response`. Claude responses explicitly marked as the
-    self-contained handoff survive later unmarked async-completion/housekeeping Stops;
-    the internal marker is stripped before persistence/return. If Herdr reaches `blocked`
+    and one native `agent_response`. Multiple distinct root Stop responses are preserved
+    until quiescence; if current lifecycle metadata cannot prove one response supersedes
+    the others, the turn returns `state="capture_ambiguous"` with a compact review locator
+    instead of guessing. If Herdr reaches `blocked`
     before the agent
     emits a native final response, the MCP first persists native session ownership,
     then returns `state="blocked"`, `agent_response=None`, and
@@ -1170,10 +1189,7 @@ async def delegate_repo_task(
     repo = _resolve_repo(repository)
     agent_name, agent, route_config = _resolve_route(route)
     adapter = agent["adapter"]
-    prompt = render_task_prompt(
-        packet,
-        require_semantic_handoff_marker=(adapter == "claude"),
-    )
+    prompt = render_task_prompt(packet)
     command_name = agent["command"]
     if shutil.which(command_name) is None:
         raise RuntimeError(f"missing execution agent CLI: {command_name}")
@@ -1244,8 +1260,31 @@ async def delegate_repo_task(
                 ) from exc
 
             state = event["state"]
-            response = event["agent_response"]
             native_turn_id = event.get("native_turn_id")
+            if state == "capture_ambiguous":
+                capture_events = event.get("capture_events")
+                if not isinstance(capture_events, list):
+                    raise RuntimeError(
+                        "ambiguous native capture is missing persisted candidate evidence"
+                    )
+                _store.record_capture_review(
+                    capture_review_id=qiqi_turn_id,
+                    session_id=native_session_id,
+                    repository=repository,
+                    agent=agent_name,
+                    route=route,
+                    events=capture_events,
+                )
+                return {
+                    "session_id": native_session_id,
+                    "turn_id": qiqi_turn_id,
+                    "state": "capture_ambiguous",
+                    "agent_response": None,
+                    "capture_review_id": qiqi_turn_id,
+                    "candidate_count": int(event.get("candidate_count") or 0),
+                }
+
+            response = event["agent_response"]
             _store.record_turn(
                 turn_id=qiqi_turn_id,
                 session_id=native_session_id,
