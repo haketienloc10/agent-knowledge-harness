@@ -130,6 +130,7 @@ class TaskGraphMcpTests(unittest.IsolatedAsyncioTestCase):
                 "start_graph",
                 "get_graph",
                 "get_node_review",
+                "get_node_reviews",
                 "delegate_next",
                 "submit_decisions",
             }.issubset(names)
@@ -210,12 +211,33 @@ class TaskGraphMcpTests(unittest.IsolatedAsyncioTestCase):
             0,
         )
 
+    async def test_get_node_reviews_public_schema_is_closed_and_hard_bounded(self) -> None:
+        tools = {tool.name: tool for tool in await mcp.list_tools()}
+        schema = tools["get_node_reviews"].input_schema
+        reviews = schema["properties"]["reviews"]
+        self.assertEqual(reviews.get("minItems"), 1)
+        self.assertEqual(reviews.get("maxItems"), 8)
+        locator = _resolve_ref(schema, reviews["items"])
+        self.assertEqual(
+            set(locator["properties"]),
+            {"node_id", "attempt_id"},
+        )
+        self.assertEqual(
+            set(locator["required"]),
+            {"node_id", "attempt_id"},
+        )
+        self.assertFalse(locator.get("additionalProperties", True))
+        expected_revision = schema["properties"]["expected_revision"]
+        self.assertIn("null", str(expected_revision))
+        self.assertIn("0", str(expected_revision))
+
     async def test_graph_public_input_schemas_have_no_open_nested_object_payloads(self) -> None:
         tools = {tool.name: tool for tool in await mcp.list_tools()}
         for tool_name in (
             "start_graph",
             "get_graph",
             "get_node_review",
+            "get_node_reviews",
             "reconcile_graph",
             "delegate_next",
             "submit_decisions",
