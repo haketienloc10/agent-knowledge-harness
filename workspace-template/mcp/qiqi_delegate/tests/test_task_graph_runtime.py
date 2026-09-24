@@ -8,6 +8,7 @@ from pathlib import Path
 from core import build_task_packet
 from task_graph import GraphNode, TaskGraph
 from task_graph_runtime import (
+    MAX_BATCH_REVIEW_HYDRATIONS,
     GraphRuntime,
     decisions_from_payload,
     task_graph_from_payload,
@@ -143,6 +144,160 @@ class TaskGraphRuntimeTests(unittest.IsolatedAsyncioTestCase):
         hydrated = self.runtime.get_node_review(run_id, "contracts", attempt_id)
         self.assertEqual(hydrated["node_id"], "contracts")
         self.assertEqual(hydrated["result"]["agent_response"], "completed contracts")
+
+    async def test_get_node_reviews_hydrates_four_node_wave_without_mutation(self) -> None:
+        graph = TaskGraph(
+            nodes=tuple(
+                GraphNode(
+                    f"node-{index}",
+                    f"repo-{index}",
+                    self.packet(f"Work {index}."),
+                    route="codex-balanced",
+                )
+                for index in range(4)
+            )
+        )
+        started = self.runtime.start_graph(
+            graph,
+            repository_names={f"repo-{index}" for index in range(4)},
+        )
+        run_id = started["graph_run_id"]
+        reviewable = await self.runtime.delegate_next(
+            run_id,
+            executor=self.settled_executor,
+        )
+        locators = [
+            (item["node_id"], item["attempt_id"])
+            for item in reviewable["review_required"]
+        ]
+
+        hydrated = self.runtime.get_node_reviews(
+            run_id,
+            locators,
+            expected_revision=reviewable["revision"],
+        )
+
+        self.assertEqual(hydrated["graph_run_id"], run_id)
+        self.assertEqual(hydrated["revision"], reviewable["revision"])
+        self.assertEqual(
+            [item["node_id"] for item in hydrated["reviews"]],
+            [f"node-{index}" for index in range(4)],
+        )
+        self.assertEqual(
+            [item["result"]["agent_response"] for item in hydrated["reviews"]],
+            [f"completed node-{index}" for index in range(4)],
+        )
+        current = self.runtime.get_graph(run_id)
+        self.assertEqual(current["graph_state"], "awaiting_review")
+        self.assertTrue(
+            all(item["semantic_state"] == "pending" for item in current["nodes"])
+        )
+
+    async def test_get_node_reviews_rejects_duplicate_oversized_stale_and_mixed_locators(self) -> None:
+        graph = TaskGraph(
+            nodes=(
+                GraphNode(
+                    "a",
+                    "repo-a",
+                    self.packet("Work a."),
+                    route="codex-balanced",
+                ),
+                GraphNode(
+                    "b",
+                    "repo-b",
+                    self.packet("Work b."),
+                    route="codex-balanced",
+                ),
+            )
+        )
+        started = self.runtime.start_graph(
+            graph,
+            repository_names={"repo-a", "repo-b"},
+        )
+        run_id = started["graph_run_id"]
+        reviewable = await self.runtime.delegate_next(
+            run_id,
+            executor=self.settled_executor,
+        )
+        by_node = {
+            item["node_id"]: item["attempt_id"]
+            for item in reviewable["review_required"]
+        }
+
+        with self.assertRaisesRegex(ValueError, "duplicate review locator"):
+            self.runtime.get_node_reviews(
+                run_id,
+                [("a", by_node["a"]), ("a", by_node["a"])],
+            )
+
+        with self.assertRaisesRegex(ValueError, "maximum batch size"):
+            self.runtime.get_node_reviews(
+                run_id,
+                [
+                    (f"node-{index}", f"attempt-{index}")
+                    for index in range(MAX_BATCH_REVIEW_HYDRATIONS + 1)
+                ],
+            )
+
+        with self.assertRaisesRegex(RuntimeError, "stale review attempt"):
+            self.runtime.get_node_reviews(
+                run_id,
+                [("a", by_node["a"]), ("b", "attempt-stale")],
+            )
+
+        with self.assertRaisesRegex(RuntimeError, "stale review attempt"):
+            self.runtime.get_node_reviews(
+                run_id,
+                [("a", by_node["b"])],
+            )
+
+        with self.assertRaisesRegex(RuntimeError, "stale graph snapshot revision"):
+            self.runtime.get_node_reviews(
+                run_id,
+                [("a", by_node["a"])],
+                expected_revision=reviewable["revision"] - 1,
+            )
+
+    async def test_get_node_reviews_preserves_explicit_accepted_upstream_evidence_rule(self) -> None:
+        started = self.start()
+        run_id = started["graph_run_id"]
+        contracts_review = await self.runtime.delegate_next(
+            run_id,
+            executor=self.settled_executor,
+        )
+        contracts_attempt = contracts_review["review_required"][0]["attempt_id"]
+        accepted = self.runtime.submit_decisions(
+            run_id,
+            decisions_from_payload(
+                [{"node_id": "contracts", "action": "accept"}]
+            ),
+            expected_revision=contracts_review["revision"],
+        )
+        self.assertEqual(accepted["graph_state"], "ready")
+
+        backend_review = await self.runtime.delegate_next(
+            run_id,
+            executor=self.settled_executor,
+        )
+        backend_attempt = backend_review["review_required"][0]["attempt_id"]
+
+        hydrated = self.runtime.get_node_reviews(
+            run_id,
+            [
+                ("contracts", contracts_attempt),
+                ("backend", backend_attempt),
+            ],
+            expected_revision=backend_review["revision"],
+        )
+
+        self.assertEqual(
+            [item["semantic_state"] for item in hydrated["reviews"]],
+            ["satisfied", "pending"],
+        )
+        self.assertEqual(
+            [item["result"]["agent_response"] for item in hydrated["reviews"]],
+            ["completed contracts", "completed backend"],
+        )
 
     async def test_delegate_next_executes_all_conflict_free_runnable_nodes_per_wave(self) -> None:
         graph = TaskGraph(
