@@ -13,6 +13,7 @@ phase_files=(
 )
 
 [[ -f "$skill/SKILL.md" ]] || fail 'missing work-item SKILL.md'
+[[ -f "$skill/scripts/read.py" ]] || fail 'missing bounded Work Item reader'
 for rel in "${phase_files[@]}"; do
   [[ -f "$skill/$rel" ]] || fail "missing Work Item phase protocol: $rel"
 done
@@ -40,7 +41,10 @@ for pattern in \
   'không tạo dossier directory mới trước intake gate' \
   'needs_user_clarification` → `status: waiting`' \
   'blocked` → `status: blocked`' \
-  'không để lại empty/orphan dossier'; do
+  'không để lại empty/orphan dossier' \
+  'Bounded hydration contract' \
+  'current-turn objective/acceptance slice' \
+  'truncation = incomplete coverage'; do
   grep -Fiq -- "$pattern" "$parent" || fail "work-item skill missing phase/role contract: $pattern"
 done
 
@@ -131,6 +135,7 @@ for target in \
   "$workspace/.agents/skills/work-item" \
   "$workspace/.claude/skills/work-item"; do
   [[ -f "$target/SKILL.md" ]] || fail "workspace installer missed $target/SKILL.md"
+  [[ -f "$target/scripts/read.py" ]] || fail "workspace installer missed $target/scripts/read.py"
   [[ -f "$target/$marker" ]] || fail "workspace managed marker missing: $target"
   if ! python3 - "$source_skill" "$target" "$marker" <<'PY'
 from pathlib import Path

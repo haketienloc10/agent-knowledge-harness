@@ -8,6 +8,7 @@ required=(
   README.md
   ARTIFACTS.md
   skills/work-item/SKILL.md
+  skills/work-item/scripts/read.py
   skills/work-item/templates/00_WORK_ITEM.md
   skills/work-item/templates/10_intake.md
   skills/work-item/templates/20_investigation.md
@@ -17,6 +18,7 @@ required=(
   scripts/install-user-skill.sh
   scripts/export-legacy-work-items.py
   scripts/remove-legacy-user-mcp.sh
+  tests/test_bounded_read.py
 )
 for rel in "${required[@]}"; do
   [[ -f "$home/$rel" ]] || fail "missing required file: $rel"
@@ -51,7 +53,12 @@ for pattern in \
   '20_investigation.md' \
   '30_plan.md' \
   '40_review.md' \
-  '90_report.textile'; do
+  '90_report.textile' \
+  '## Bounded hydration contract' \
+  'current-turn objective/acceptance slice' \
+  'output_budget_exceeded' \
+  'truncation = incomplete coverage' \
+  '### Phase-aware hydration matrix'; do
   grep -Fq -- "$pattern" "$skill" || fail "skill missing contract: $pattern"
 done
 
@@ -87,6 +94,8 @@ for pattern in \
 done
 
 python3 -m py_compile "$exporter"
+python3 -m py_compile "$home/skills/work-item/scripts/read.py"
+python3 -m unittest discover -s "$home/tests" -v
 bash -n "$home/scripts/install-user-skill.sh"
 bash -n "$home/scripts/remove-legacy-user-mcp.sh"
 

@@ -74,6 +74,28 @@ class WorkspaceStartupPolicyTests(unittest.TestCase):
         self.assertIn("không hydrate accepted nodes như routine context", orchestration)
         self.assertIn("không xóa execution evidence khỏi store", orchestration)
 
+    def test_work_item_startup_hydration_is_bounded_phase_aware_and_scope_locked(self) -> None:
+        startup = markdown_section(self.agents, "## Startup")
+        work_item = markdown_section(self.agents, "## Work Item")
+
+        self.assertIn("bounded `00_WORK_ITEM.md` bootstrap", startup)
+        self.assertIn("current-turn objective/acceptance slice", startup)
+        self.assertIn("phase-aware matrix", startup)
+        self.assertIn("không full-read dossier như startup ceremony", startup)
+
+        self.assertIn("current-turn objective/acceptance slice", work_item)
+        self.assertIn("Stable investigation follow-up", work_item)
+        self.assertIn("không hydrate `10_intake.md`, planning hoặc review material mặc định", work_item)
+        self.assertIn("Material requirement change", work_item)
+        self.assertIn("Planning/review material chỉ hydrate", work_item)
+        self.assertIn("truncation", work_item)
+        self.assertIn("incomplete coverage", work_item)
+        self.assertIn("output_budget_exceeded", work_item)
+
+        scope_lock = startup.index("current-turn objective/acceptance slice")
+        optional_hydration = startup.index("optional lifecycle material")
+        self.assertLess(scope_lock, optional_hydration)
+
     def test_blocked_delegation_preserves_resume_identity_before_semantic_read(self) -> None:
         after = markdown_section(self.agents, "## Sau delegation")
         inspect_state = after.index('Inspect runtime `state`')
