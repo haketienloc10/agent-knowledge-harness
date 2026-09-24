@@ -18,6 +18,7 @@ from server import (
 )
 from task_graph import GraphNode
 from task_graph_runtime import (
+    MAX_BATCH_REVIEW_HYDRATIONS,
     GraphRuntime,
     RecoverableRepoTaskExecutionError,
     decisions_from_payload,
@@ -109,6 +110,22 @@ GraphDecisionInput = Annotated[
 ]
 DecisionListInput = Annotated[list[GraphDecisionInput], Field(min_length=1)]
 RevisionInput = Annotated[int, Field(ge=0)]
+OptionalRevisionInput = Annotated[int | None, Field(ge=0)]
+
+
+class ReviewLocatorInput(BaseModel):
+    """Exact current attempt locator for bounded review hydration."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    node_id: str = Field(min_length=1)
+    attempt_id: str = Field(min_length=1)
+
+
+ReviewLocatorListInput = Annotated[
+    list[ReviewLocatorInput],
+    Field(min_length=1, max_length=MAX_BATCH_REVIEW_HYDRATIONS),
+]
 
 
 def _graph_tool_error(exc: ValueError | RuntimeError) -> ToolError:
@@ -270,6 +287,28 @@ async def get_node_review(
     content remains absent from get_graph/delegate_next snapshots.
     """
     return _graph_runtime.get_node_review(graph_run_id, node_id, attempt_id)
+
+
+@mcp.tool()
+@_graph_public_errors
+async def get_node_reviews(
+    graph_run_id: str,
+    reviews: ReviewLocatorListInput,
+    expected_revision: OptionalRevisionInput = None,
+) -> dict[str, Any]:
+    """Hydrate a bounded exact-attempt review set in one atomic read.
+
+    Use this when one review_required wave contains multiple independent nodes. Every
+    node_id/attempt_id locator is validated before any rich result is returned. Accepted
+    upstream evidence remains eligible only by explicit exact current-attempt locator.
+    This read never mutates semantic state or accepts nodes; decisions remain a separate
+    submit_decisions call.
+    """
+    return _graph_runtime.get_node_reviews(
+        graph_run_id,
+        [(review.node_id, review.attempt_id) for review in reviews],
+        expected_revision=expected_revision,
+    )
 
 
 @mcp.tool()
