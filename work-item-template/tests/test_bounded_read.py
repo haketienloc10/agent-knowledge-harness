@@ -93,6 +93,10 @@ class BoundedWorkItemReadTests(unittest.TestCase):
         self.dossier.mkdir()
         (self.dossier / "00_WORK_ITEM.md").write_text(primary(), encoding="utf-8")
         (self.dossier / "20_investigation.md").write_text(investigation(), encoding="utf-8")
+        (self.dossier / "90_report.textile").write_text(
+            "h3. +1. Root-cause/requirement:+\n\nReport line.\n",
+            encoding="utf-8",
+        )
 
     def tearDown(self) -> None:
         self.temp.cleanup()
@@ -213,6 +217,87 @@ class BoundedWorkItemReadTests(unittest.TestCase):
         self.assertNotEqual(completed.returncode, 0)
         self.assertEqual(completed.stdout, "")
         self.assertIn("at most 120 lines", completed.stderr)
+
+    def test_front_matter_heading_like_comment_is_not_indexed(self) -> None:
+        text = primary().replace(
+            'phase: investigation\n',
+            'phase: investigation\n# Objective\n',
+            1,
+        )
+        (self.dossier / "00_WORK_ITEM.md").write_text(text, encoding="utf-8")
+
+        completed = self.run_reader("--profile", "bootstrap")
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        payload = json.loads(completed.stdout)
+        self.assertIn("# Objective", payload["content"])
+        objective = next(
+            item for item in payload["coverage"]["sections"]
+            if item["heading"] == "Objective"
+        )
+        self.assertGreater(objective["start_line"], 6)
+
+    def test_bootstrap_tolerates_absent_recommended_sections(self) -> None:
+        text = primary()
+        for heading in ("# Open Questions\n\n- None\n\n", "# Blockers\n\n- None\n\n"):
+            text = text.replace(heading, "")
+        (self.dossier / "00_WORK_ITEM.md").write_text(text, encoding="utf-8")
+
+        completed = self.run_reader("--profile", "bootstrap")
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        payload = json.loads(completed.stdout)
+        self.assertEqual(
+            set(payload["coverage"]["missing_bootstrap_sections"]),
+            {"Open Questions", "Blockers"},
+        )
+        self.assertIn("Objective", payload["content"])
+
+    def test_bootstrap_exposes_legacy_reconciliation_requirement(self) -> None:
+        text = primary().replace(
+            "phase: investigation\n",
+            "phase: investigation\nlegacy_reconciliation_required: true\n",
+            1,
+        )
+        text += (
+            "\n# Import Reconciliation\n\n"
+            "Protected legacy archive: .qiqi/migration-backups/v0024/item.json.\n"
+        )
+        (self.dossier / "00_WORK_ITEM.md").write_text(text, encoding="utf-8")
+
+        completed = self.run_reader("--profile", "bootstrap")
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        payload = json.loads(completed.stdout)
+        self.assertIs(payload["metadata"]["legacy_reconciliation_required"], True)
+        self.assertEqual(
+            payload["required_followup_sections"],
+            ["Import Reconciliation"],
+        )
+        self.assertIn(
+            "Import Reconciliation",
+            payload["coverage"]["omitted_top_level_sections"],
+        )
+
+    def test_report_supports_bounded_line_reads(self) -> None:
+        completed = self.run_reader(
+            "--file",
+            "90_report.textile",
+            "--lines",
+            "1:2",
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        payload = json.loads(completed.stdout)
+        self.assertEqual(payload["coverage"]["file"], "90_report.textile")
+        self.assertEqual(payload["coverage"]["mode"], "lines")
+        self.assertIn("Root-cause/requirement", payload["content"])
+
+    def test_report_rejects_markdown_semantic_selectors(self) -> None:
+        completed = self.run_reader(
+            "--file",
+            "90_report.textile",
+            "--headings",
+        )
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertEqual(completed.stdout, "")
+        self.assertIn("supports --lines only", completed.stderr)
 
     def test_file_without_selector_has_no_full_file_happy_path(self) -> None:
         completed = self.run_reader("--file", "20_investigation.md")
