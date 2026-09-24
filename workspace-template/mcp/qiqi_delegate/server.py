@@ -125,13 +125,13 @@ mcp = MCPServer(
         "and captures native assistant Stop responses through a static result-hook command "
         "routed to MCP-owned active-capture state; it never scrapes terminal scrollback or "
         "parses agent transcripts. Root Stop responses are preserved as a bounded capture window. "
-        "Runtime quiescence decides when that window closes, not which response is semantically "
-        "correct. If multiple distinct Stop responses remain without causal evidence that proves "
-        "one supersedes the others, the delegation returns a compact capture_ambiguous locator; "
-        "candidates stay in MCP-owned SQLite until explicitly reviewed. Claude causal "
-        "lifecycle hooks capture successful SubagentHandback delivery, SubagentStop, "
-        "TaskOutput delivery, and structured async tool lifecycle so later housekeeping "
-        "Stops cannot replace an earlier response after the last proven result delivery. Codex "
+        "Runtime quiescence decides when that window closes. Within one closed capture window, "
+        "response selection uses only Stop order and response length: the latest response wins "
+        "when it is at least 35% of the longest response; a latest response at or below 15% of "
+        "the longest and at least 600 characters shorter is treated as housekeeping, and the "
+        "latest response at or above the 35% substantial threshold wins instead. Gray-zone "
+        "captures remain capture_ambiguous and candidates stay in MCP-owned SQLite until "
+        "explicitly reviewed. Codex "
         "trusts only the exact QiQi session hook by matching its computed trusted_hash; global "
         "hook-trust bypass is forbidden. Settled/failed/blocked are runtime lifecycle states, "
         "not semantic completion. Runtime session ownership is persisted in MCP-owned SQLite "
@@ -528,28 +528,10 @@ def _codex_session_hook_key() -> str:
 def _build_handoff_args(adapter: str) -> list[str]:
     command = _result_hook_command(adapter)
     if adapter == "claude":
-        lifecycle_matcher = (
-            "Agent|Bash|TaskOutput|Workflow|Monitor|SubagentHandback|mcp__.*"
-        )
         settings = {
             "hooks": {
                 "Stop": [{"hooks": [{"type": "command", "command": command}]}],
                 "StopFailure": [{"hooks": [{"type": "command", "command": command}]}],
-                "SubagentStop": [
-                    {"hooks": [{"type": "command", "command": command}]}
-                ],
-                "PostToolUse": [
-                    {
-                        "matcher": lifecycle_matcher,
-                        "hooks": [{"type": "command", "command": command}],
-                    }
-                ],
-                "PostToolUseFailure": [
-                    {
-                        "matcher": "TaskOutput",
-                        "hooks": [{"type": "command", "command": command}],
-                    }
-                ],
             }
         }
         return ["--settings", json.dumps(settings, ensure_ascii=False, separators=(",", ":"))]

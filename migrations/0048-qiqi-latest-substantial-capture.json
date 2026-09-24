@@ -1,0 +1,25 @@
+{
+  "version": 48,
+  "from_ref": "b7773102df36abd971be9a759e59269748cf4802",
+  "to_ref": "523baadcf372037e67de335a40ca410d6d51408d",
+  "description": "replace Claude causal lifecycle capture with a Stop-only bounded resolver that uses latest-substantial response selection inside each delegated turn: accept the latest response at or above 35% of the longest response, reject a latest response at or below 15% only when it is at least 600 characters shorter and fall back to the latest substantial response, keep gray-zone captures explicit as capture_ambiguous, and remove SubagentHandback/SubagentStop/TaskOutput/structured async lifecycle hooks and correlation",
+  "workspace": {
+    "merge": [],
+    "replace": [
+      "workspace-template/mcp/qiqi_delegate/core.py",
+      "workspace-template/mcp/qiqi_delegate/result_hook.py",
+      "workspace-template/mcp/qiqi_delegate/server.py",
+      "workspace-template/mcp/qiqi_delegate/tests/test_core.py",
+      "workspace-template/mcp/qiqi_delegate/tests/test_result_capture_wait.py",
+      "workspace-template/mcp/qiqi_delegate/tests/test_result_hook.py"
+    ],
+    "delete": [],
+    "manual_review": []
+  },
+  "repo": {
+    "merge": [],
+    "replace": [],
+    "delete": [],
+    "manual_review": []
+  }
+}

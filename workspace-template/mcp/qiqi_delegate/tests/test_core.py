@@ -8,7 +8,10 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from core import (
+    CAPTURE_HOUSEKEEPING_REJECT_RATIO,
+    CAPTURE_LATEST_ACCEPT_RATIO,
     CAPTURE_MAX_RESPONSES,
+    CAPTURE_MIN_SIGNIFICANT_DROP_CHARS,
     TASK_PACKET_MAX_CHARS,
     SessionStore,
     active_capture_filename,
@@ -337,36 +340,155 @@ class HookPayloadTests(unittest.TestCase):
         )
         self.assertEqual(chosen["state"], "pending_async")
 
-    def test_resolver_returns_ambiguous_for_distinct_multi_stop_capture(self):
-        result = resolve_capture_events(
-            [
-                {
-                    "version": 1,
-                    "adapter": "claude",
+    def test_capture_selection_thresholds_are_explicit(self):
+        self.assertEqual(CAPTURE_LATEST_ACCEPT_RATIO, 0.35)
+        self.assertEqual(CAPTURE_HOUSEKEEPING_REJECT_RATIO, 0.15)
+        self.assertEqual(CAPTURE_MIN_SIGNIFICANT_DROP_CHARS, 600)
+
+    def test_resolver_accepts_latest_substantial_response(self):
+        events = [
+            normalize_hook_payload(
+                adapter="claude",
+                nonce="n",
+                payload={
+                    "hook_event_name": "Stop",
                     "session_id": "root",
-                    "hook_event": "Stop",
-                    "state": "pending_async",
-                    "agent_response": "FULL REPORT",
-                    "background_task_count": 1,
-                    "captured_at_ns": 10,
+                    "last_assistant_message": "A" * 5000,
+                    "background_tasks": [{"id": "agent-a"}],
                 },
-                {
-                    "version": 1,
-                    "adapter": "claude",
+                captured_at_ns=10,
+            ),
+            normalize_hook_payload(
+                adapter="claude",
+                nonce="n",
+                payload={
+                    "hook_event_name": "Stop",
                     "session_id": "root",
-                    "hook_event": "Stop",
-                    "state": "settled",
-                    "agent_response": "housekeeping",
-                    "background_task_count": 0,
-                    "captured_at_ns": 20,
+                    "last_assistant_message": "B" * 2200,
+                    "background_tasks": [],
                 },
-            ],
-            adapter="claude",
-            session_id="root",
-        )
+                captured_at_ns=20,
+            ),
+        ]
+        result = resolve_capture_events(events, adapter="claude", session_id="root")
+        self.assertEqual(result["state"], "settled")
+        self.assertEqual(result["agent_response"], "B" * 2200)
+
+    def test_resolver_rejects_tiny_housekeeping_after_full_report(self):
+        report = "R" * 7000
+        events = [
+            normalize_hook_payload(
+                adapter="claude",
+                nonce="n",
+                payload={
+                    "hook_event_name": "Stop",
+                    "session_id": "root",
+                    "last_assistant_message": report,
+                    "background_tasks": [{"id": "agent-a"}],
+                },
+                captured_at_ns=10,
+            ),
+            normalize_hook_payload(
+                adapter="claude",
+                nonce="n",
+                payload={
+                    "hook_event_name": "Stop",
+                    "session_id": "root",
+                    "last_assistant_message": "housekeeping " * 10,
+                    "background_tasks": [],
+                },
+                captured_at_ns=20,
+            ),
+        ]
+        result = resolve_capture_events(events, adapter="claude", session_id="root")
+        self.assertEqual(result["state"], "settled")
+        self.assertEqual(result["agent_response"], report)
+        self.assertEqual(result["capture_source_state"], "pending_async")
+
+    def test_resolver_multiple_subagents_selects_latest_substantial_before_housekeeping(self):
+        responses = [
+            ("launch", 250, [{"id": "a"}, {"id": "b"}, {"id": "c"}]),
+            ("a", 5200, [{"id": "b"}, {"id": "c"}]),
+            ("ab", 4300, [{"id": "c"}]),
+            ("abc", 2100, [{"id": "c"}]),
+            ("done", 180, []),
+        ]
+        events = []
+        for index, (label, size, background) in enumerate(responses, start=1):
+            events.append(
+                normalize_hook_payload(
+                    adapter="claude",
+                    nonce="n",
+                    payload={
+                        "hook_event_name": "Stop",
+                        "session_id": "root",
+                        "last_assistant_message": label + ":" + ("x" * size),
+                        "background_tasks": background,
+                    },
+                    captured_at_ns=index * 10,
+                )
+            )
+        result = resolve_capture_events(events, adapter="claude", session_id="root")
+        self.assertEqual(result["state"], "settled")
+        self.assertTrue(result["agent_response"].startswith("abc:"))
+
+    def test_resolver_gray_zone_remains_ambiguous(self):
+        events = [
+            normalize_hook_payload(
+                adapter="claude",
+                nonce="n",
+                payload={
+                    "hook_event_name": "Stop",
+                    "session_id": "root",
+                    "last_assistant_message": "A" * 5000,
+                    "background_tasks": [{"id": "agent-a"}],
+                },
+                captured_at_ns=10,
+            ),
+            normalize_hook_payload(
+                adapter="claude",
+                nonce="n",
+                payload={
+                    "hook_event_name": "Stop",
+                    "session_id": "root",
+                    "last_assistant_message": "B" * 1200,
+                    "background_tasks": [],
+                },
+                captured_at_ns=20,
+            ),
+        ]
+        result = resolve_capture_events(events, adapter="claude", session_id="root")
         self.assertEqual(result["state"], "capture_ambiguous")
         self.assertIsNone(result["agent_response"])
         self.assertEqual(result["candidate_count"], 2)
+
+    def test_resolver_short_absolute_drop_remains_ambiguous(self):
+        events = [
+            normalize_hook_payload(
+                adapter="claude",
+                nonce="n",
+                payload={
+                    "hook_event_name": "Stop",
+                    "session_id": "root",
+                    "last_assistant_message": "A" * 500,
+                    "background_tasks": [{"id": "agent-a"}],
+                },
+                captured_at_ns=10,
+            ),
+            normalize_hook_payload(
+                adapter="claude",
+                nonce="n",
+                payload={
+                    "hook_event_name": "Stop",
+                    "session_id": "root",
+                    "last_assistant_message": "B" * 70,
+                    "background_tasks": [],
+                },
+                captured_at_ns=20,
+            ),
+        ]
+        result = resolve_capture_events(events, adapter="claude", session_id="root")
+        self.assertEqual(result["state"], "capture_ambiguous")
 
     def test_resolver_collapses_exact_duplicate_stop_responses(self):
         result = resolve_capture_events(
@@ -439,249 +561,6 @@ class HookPayloadTests(unittest.TestCase):
         ]
         with self.assertRaisesRegex(RuntimeError, "capture overflow"):
             resolve_capture_events(events, adapter="claude", session_id="root")
-
-    def test_subagent_handback_normalizes_as_result_delivery(self):
-        event = normalize_hook_payload(
-            adapter="claude",
-            nonce="n",
-            payload={
-                "hook_event_name": "PostToolUse",
-                "session_id": "root",
-                "cwd": "/repo",
-                "tool_name": "SubagentHandback",
-                "tool_input": {"message": "child report"},
-                "tool_response": {"success": True},
-                "tool_use_id": "toolu-handback",
-            },
-            captured_at_ns=5,
-        )
-        self.assertEqual(event["state"], "lifecycle")
-        self.assertEqual(event["lifecycle_kind"], "result_delivered")
-        self.assertEqual(event["lifecycle_source"], "subagent_handback")
-        self.assertEqual(event["detail"], "child report")
-
-    def test_task_output_success_normalizes_as_result_delivery(self):
-        event = normalize_hook_payload(
-            adapter="claude",
-            nonce="n",
-            payload={
-                "hook_event_name": "PostToolUse",
-                "session_id": "root",
-                "cwd": "/repo",
-                "tool_name": "TaskOutput",
-                "tool_input": {"task_id": "shell-1", "block": True},
-                "tool_response": {
-                    "retrieval_status": "success",
-                    "task": {"task_id": "shell-1", "status": "completed"},
-                },
-            },
-            captured_at_ns=15,
-        )
-        self.assertEqual(event["lifecycle_kind"], "result_delivered")
-        self.assertEqual(event["operation_id"], "shell-1")
-
-    def test_stop_preserves_background_task_identity_for_causal_resolution(self):
-        event = normalize_hook_payload(
-            adapter="claude",
-            nonce="n",
-            payload={
-                "hook_event_name": "Stop",
-                "session_id": "root",
-                "cwd": "/repo",
-                "last_assistant_message": "report",
-                "background_tasks": [
-                    {
-                        "id": "agent-1",
-                        "type": "subagent",
-                        "status": "running",
-                    }
-                ],
-            },
-            captured_at_ns=10,
-        )
-        self.assertEqual(event["background_task_ids"], ["agent-1"])
-        self.assertEqual(event["background_tasks"][0]["type"], "subagent")
-
-    def test_resolver_selects_first_stop_after_single_subagent_handback(self):
-        events = [
-            normalize_hook_payload(
-                adapter="claude",
-                nonce="n",
-                payload={
-                    "hook_event_name": "PostToolUse",
-                    "session_id": "root",
-                    "tool_name": "SubagentHandback",
-                    "tool_input": {"message": "child report"},
-                    "tool_response": {"success": True},
-                },
-                captured_at_ns=5,
-            ),
-            normalize_hook_payload(
-                adapter="claude",
-                nonce="n",
-                payload={
-                    "hook_event_name": "Stop",
-                    "session_id": "root",
-                    "last_assistant_message": "FULL REPORT",
-                    "background_tasks": [
-                        {"id": "agent-1", "type": "subagent", "status": "running"}
-                    ],
-                },
-                captured_at_ns=10,
-            ),
-            normalize_hook_payload(
-                adapter="claude",
-                nonce="n",
-                payload={
-                    "hook_event_name": "Stop",
-                    "session_id": "root",
-                    "last_assistant_message": "housekeeping",
-                    "background_tasks": [],
-                },
-                captured_at_ns=20,
-            ),
-        ]
-        result = resolve_capture_events(events, adapter="claude", session_id="root")
-        self.assertEqual(result["state"], "settled")
-        self.assertEqual(result["agent_response"], "FULL REPORT")
-        self.assertEqual(result["capture_source_state"], "pending_async")
-        self.assertEqual(result["causal_resolution"]["source"], "subagent_handback")
-
-    def test_resolver_selects_stop_after_task_output_delivery(self):
-        events = [
-            normalize_hook_payload(
-                adapter="claude",
-                nonce="n",
-                payload={
-                    "hook_event_name": "Stop",
-                    "session_id": "root",
-                    "last_assistant_message": "waiting",
-                    "background_tasks": [
-                        {"id": "shell-1", "type": "shell", "status": "running"}
-                    ],
-                },
-                captured_at_ns=10,
-            ),
-            normalize_hook_payload(
-                adapter="claude",
-                nonce="n",
-                payload={
-                    "hook_event_name": "PostToolUse",
-                    "session_id": "root",
-                    "tool_name": "TaskOutput",
-                    "tool_input": {"task_id": "shell-1"},
-                    "tool_response": {
-                        "retrieval_status": "success",
-                        "task": {"task_id": "shell-1", "status": "completed"},
-                    },
-                },
-                captured_at_ns=15,
-            ),
-            normalize_hook_payload(
-                adapter="claude",
-                nonce="n",
-                payload={
-                    "hook_event_name": "Stop",
-                    "session_id": "root",
-                    "last_assistant_message": "FULL SHELL REPORT",
-                    "background_tasks": [],
-                },
-                captured_at_ns=20,
-            ),
-        ]
-        result = resolve_capture_events(events, adapter="claude", session_id="root")
-        self.assertEqual(result["state"], "settled")
-        self.assertEqual(result["agent_response"], "FULL SHELL REPORT")
-        self.assertEqual(result["causal_resolution"]["operation_id"], "shell-1")
-
-    def test_resolver_preserves_report_before_duplicate_completion_wake(self):
-        events = [
-            normalize_hook_payload(
-                adapter="claude",
-                nonce="n",
-                payload={
-                    "hook_event_name": "PostToolUse",
-                    "session_id": "root",
-                    "tool_name": "TaskOutput",
-                    "tool_input": {"task_id": "shell-1"},
-                    "tool_response": {
-                        "retrieval_status": "success",
-                        "task": {"task_id": "shell-1", "status": "completed"},
-                    },
-                },
-                captured_at_ns=5,
-            ),
-            normalize_hook_payload(
-                adapter="claude",
-                nonce="n",
-                payload={
-                    "hook_event_name": "Stop",
-                    "session_id": "root",
-                    "last_assistant_message": "FULL SHELL REPORT",
-                    "background_tasks": [
-                        {"id": "shell-1", "type": "shell", "status": "running"}
-                    ],
-                },
-                captured_at_ns=10,
-            ),
-            normalize_hook_payload(
-                adapter="claude",
-                nonce="n",
-                payload={
-                    "hook_event_name": "Stop",
-                    "session_id": "root",
-                    "last_assistant_message": "completion housekeeping",
-                    "background_tasks": [],
-                },
-                captured_at_ns=20,
-            ),
-        ]
-        result = resolve_capture_events(events, adapter="claude", session_id="root")
-        self.assertEqual(result["state"], "settled")
-        self.assertEqual(result["agent_response"], "FULL SHELL REPORT")
-
-    def test_uncorrelated_handback_with_multiple_subagents_stays_ambiguous(self):
-        events = [
-            normalize_hook_payload(
-                adapter="claude",
-                nonce="n",
-                payload={
-                    "hook_event_name": "PostToolUse",
-                    "session_id": "root",
-                    "tool_name": "SubagentHandback",
-                    "tool_input": {"message": "one report"},
-                    "tool_response": {"success": True},
-                },
-                captured_at_ns=5,
-            ),
-            normalize_hook_payload(
-                adapter="claude",
-                nonce="n",
-                payload={
-                    "hook_event_name": "Stop",
-                    "session_id": "root",
-                    "last_assistant_message": "combined report",
-                    "background_tasks": [
-                        {"id": "agent-1", "type": "subagent", "status": "running"},
-                        {"id": "agent-2", "type": "subagent", "status": "running"},
-                    ],
-                },
-                captured_at_ns=10,
-            ),
-            normalize_hook_payload(
-                adapter="claude",
-                nonce="n",
-                payload={
-                    "hook_event_name": "Stop",
-                    "session_id": "root",
-                    "last_assistant_message": "housekeeping",
-                    "background_tasks": [],
-                },
-                captured_at_ns=20,
-            ),
-        ]
-        result = resolve_capture_events(events, adapter="claude", session_id="root")
-        self.assertEqual(result["state"], "capture_ambiguous")
 
     def test_capture_error_is_selectable_for_actionable_failure(self):
         chosen = select_capture_event(
