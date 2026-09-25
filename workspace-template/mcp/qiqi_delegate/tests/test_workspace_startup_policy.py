@@ -28,7 +28,8 @@ class WorkspaceStartupPolicyTests(unittest.TestCase):
         startup = markdown_section(self.agents, "## Startup")
 
         self.assertIn("không phải mandatory startup read", startup)
-        self.assertIn("Default delegation route = `claude-balanced`", startup)
+        self.assertIn("fallback = `claude-balanced`", startup)
+        self.assertIn(".qiqi/config.local.json.default_route", startup)
         self.assertIn("Turn không delegate không hydrate route policy", startup)
         self.assertIn("just-in-time ngay trước route decision", startup)
         self.assertNotRegex(
@@ -38,11 +39,16 @@ class WorkspaceStartupPolicyTests(unittest.TestCase):
 
         self.assertIn("**không phải mandatory startup material**", self.model_routing)
         self.assertIn("đọc file này ngay trước route decision", self.model_routing)
-        self.assertIn("Default delegation route = claude-balanced", self.model_routing)
+        self.assertIn(".qiqi/config.local.json", self.model_routing)
+        self.assertIn("fallback = claude-balanced", self.model_routing)
+        self.assertIn("Turn không delegate **không đọc**", self.model_routing)
 
-    def test_orchestration_preserves_deterministic_default(self) -> None:
+    def test_orchestration_preserves_deterministic_machine_local_default(self) -> None:
         orchestration = markdown_section(self.agents, "## Orchestration + delegation")
-        self.assertIn("Default delegation route = `claude-balanced`", orchestration)
+        self.assertIn(".qiqi/config.local.json", orchestration)
+        self.assertIn("execution_agents", orchestration)
+        self.assertIn("default_route", orchestration)
+        self.assertIn("fallback = `claude-balanced`", orchestration)
         self.assertIn("đọc `instructions/model-routing.md`", orchestration)
 
     def test_qiqi_delegates_repo_discovery_but_allows_exact_bounded_reconciliation_read(self) -> None:

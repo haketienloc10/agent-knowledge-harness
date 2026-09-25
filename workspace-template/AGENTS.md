@@ -31,7 +31,7 @@ Khi tool/MCP không được expose như direct callable và QiQi cần hydrate 
 4. Chỉ đọc `SYSTEM_MAP.md` khi cần cross-repo semantic fact ngoài registry.
 5. Dùng Shared Knowledge theo decision rule, không search như ceremony.
 
-`instructions/model-routing.md` **không phải mandatory startup read**. Default delegation route = `claude-balanced`. Turn không delegate không hydrate route policy. Khi một turn thực sự cần delegation, đọc `instructions/model-routing.md` **just-in-time ngay trước route decision** rồi chọn exact route.
+`instructions/model-routing.md` **không phải mandatory startup read**. Default delegation route được resolve just-in-time: dùng `.qiqi/config.local.json.default_route` khi machine-local config tồn tại và hợp lệ, nếu không fallback = `claude-balanced`. Turn không delegate không hydrate route policy hoặc `.qiqi/config.local.json`. Khi một turn thực sự cần delegation, đọc `instructions/model-routing.md` **just-in-time ngay trước route decision** rồi chọn exact route.
 
 ## Repository discovery boundary
 
@@ -71,7 +71,7 @@ Canonical ID/path mechanics thuộc `$work-item`: validate canonical ID, derive 
 
 `repos.yaml` là canonical repository registry. QiQi sở hữu repo/dependency/wave, user/product semantics, Work Item reconciliation, route, START/RESUME, stale detection và final completion.
 
-Default delegation route = `claude-balanced`. Ngay trước mọi actual delegation, đọc `instructions/model-routing.md` và chọn exact route nhẹ nhất vẫn đủ tin cậy.
+Ngay trước mọi actual delegation, đọc `instructions/model-routing.md`. Nếu `.qiqi/config.local.json` tồn tại và hợp lệ, chỉ chọn route thuộc `execution_agents` đã enable và dùng `default_route` làm deterministic fallback; nếu không có local config thì fallback = `claude-balanced`. Sau đó chọn exact route nhẹ nhất vẫn đủ tin cậy.
 
 TaskPacket phải là smallest sufficient repo-local assignment contract:
 
