@@ -1,0 +1,29 @@
+{
+  "version": 49,
+  "from_ref": "4ba64ad17b2f803a494b25bb9362208cac8262e6",
+  "to_ref": "f5af5a6eb5860a429bd097f99af49331ea443e7c",
+  "description": "introduce the Supervisor–Lead–Peers workspace contract while preserving QiQi as the Lead runtime name: add an independent Supervisor policy and shared WORKSPACE_PROTOCOL, make repository children explicit Peers with independent REOPEN_REQUEST/DEPENDENCY_REQUEST/BLOCKED signals, require explicit Lead disposition for actionable Peer responses, and extend workspace/repository checkers to enforce the SLP role boundaries",
+  "workspace": {
+    "merge": [
+      "workspace-template/AGENTS.md",
+      "workspace-template/README.md",
+      "workspace-template/docs/WORKSPACE_SETUP.md",
+      "workspace-template/scripts/workspace-check.sh"
+    ],
+    "replace": [
+      "workspace-template/docs/WORKSPACE_PROTOCOL.md",
+      "workspace-template/instructions/supervisor.md"
+    ],
+    "delete": [],
+    "manual_review": []
+  },
+  "repo": {
+    "merge": [
+      "repo-template/AGENTS.md",
+      "repo-template/scripts/repo-check.sh"
+    ],
+    "replace": [],
+    "delete": [],
+    "manual_review": []
+  }
+}
