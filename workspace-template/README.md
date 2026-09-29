@@ -9,8 +9,10 @@ repos.yaml
 SYSTEM_MAP.md
 docs/WORKSPACE_PROTOCOL.md        # shared SLP contract
 work-items/
-instructions/supervisor.md        # Supervisor overlay/policy
 instructions/
+├── supervisor.md                 # Supervisor overlay/policy
+├── agent-routing.yaml
+└── model-routing.md
 mcp/qiqi_delegate/
 scripts/
 ```
