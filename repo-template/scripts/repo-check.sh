@@ -15,6 +15,8 @@ for pattern in \
   'REOPEN_REQUEST' \
   'DEPENDENCY_REQUEST' \
   'BLOCKED' \
+  'Không đọc, sửa hoặc tự verify bằng source/test/config/contract của sibling repo' \
+  'không phải filesystem authorization' \
   'explicit disposition' \
   'trực tiếp rewrite canonical Work Item' \
   'Không tạo execution diary' \
