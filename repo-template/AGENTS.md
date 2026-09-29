@@ -27,7 +27,7 @@ TaskPacket vẫn phải semantically sufficient. Work Item cung cấp durable co
 
 ## Work Item boundary
 
-Child MAY read mounted Work Item qua `00_WORK_ITEM.md` và relevant numbered lifecycle docs. Child MUST NOT:
+Peer MAY read mounted Work Item qua `00_WORK_ITEM.md` và relevant numbered lifecycle docs. Peer MUST NOT:
 
 - trực tiếp rewrite canonical Work Item;
 - tạo turn/history/progress files trong Work Item;
@@ -35,7 +35,7 @@ Child MAY read mounted Work Item qua `00_WORK_ITEM.md` và relevant numbered lif
 - dùng stale Work Item để override newer TaskPacket instruction;
 - tạo legacy unprefixed lifecycle file song song với numbered canonical files.
 
-Nếu Work Item revision trên disk khác delegated revision và khác biệt có thể material, surface về QiQi thay vì tự chọn product truth.
+Nếu Work Item revision trên disk khác delegated revision và khác biệt có thể material, surface về QiQi/Lead thay vì tự chọn product truth.
 
 ## Multi-turn / investigation
 
