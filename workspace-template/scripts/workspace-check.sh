@@ -10,7 +10,9 @@ required=(
   AGENTS.md
   identity.md
   repos.yaml
+  docs/WORKSPACE_PROTOCOL.md
   work-items/.gitkeep
+  instructions/supervisor.md
   instructions/agent-routing.yaml
   instructions/model-routing.md
   scripts/qiqi-mcp-server.sh
@@ -32,6 +34,8 @@ routing="$workspace_root/instructions/agent-routing.yaml"
 config="$workspace_root/.codex/config.toml"
 agents="$workspace_root/AGENTS.md"
 model_routing="$workspace_root/instructions/model-routing.md"
+protocol="$workspace_root/docs/WORKSPACE_PROTOCOL.md"
+supervisor="$workspace_root/instructions/supervisor.md"
 
 for pattern in \
   'work_items_dir="$workspace_root/work-items"' \
@@ -91,6 +95,34 @@ grep -Fq 'đọc file này ngay trước route decision' "$model_routing" || \
   fail 'model-routing.md must require just-in-time route policy hydration'
 grep -Fq 'Default delegation route = claude-balanced' "$model_routing" || \
   fail 'model-routing.md must preserve claude-balanced default'
+
+
+for pattern in \
+  'Supervisor–Lead–Peers (SLP)' \
+  'Lead brief' \
+  'actual Peer response' \
+  'explicit Lead disposition' \
+  'REOPEN_REQUEST' \
+  'DEPENDENCY_REQUEST' \
+  'BLOCKED'; do
+  grep -Fq -- "$pattern" "$protocol" || fail "WORKSPACE_PROTOCOL.md missing SLP contract: $pattern"
+done
+
+for pattern in \
+  'Room role: **Supervisor**' \
+  'không phải technical Lead thứ hai' \
+  'Không ACCEPT/REJECT candidate' \
+  'không giả vờ continuous supervision'; do
+  grep -Fq -- "$pattern" "$supervisor" || fail "supervisor.md missing oversight boundary: $pattern"
+done
+
+for pattern in \
+  'SLP Lead (QiQi)' \
+  'docs/WORKSPACE_PROTOCOL.md' \
+  'Peer judgment + Lead disposition' \
+  'explicit `ACCEPT` / `REJECT`'; do
+  grep -Fq -- "$pattern" "$agents" || fail "AGENTS.md missing SLP Lead policy: $pattern"
+done
 
 # Validate the canonical repository/dependency registry. The harness template itself
 # contains {{...}} placeholders, so CI sets QIQI_TEMPLATE_CHECK=1 and validates
