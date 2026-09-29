@@ -10,7 +10,12 @@ for pattern in \
   'mounted Work Item' \
   'work_item_path=<absolute-path>; id=<canonical-id>; revision=<n>' \
   'TaskPacket vẫn phải semantically sufficient' \
-  'Child MAY read mounted Work Item' \
+  'SLP Peer trong repository con' \
+  'Peer MAY read mounted Work Item' \
+  'REOPEN_REQUEST' \
+  'DEPENDENCY_REQUEST' \
+  'BLOCKED' \
+  'explicit disposition' \
   'trực tiếp rewrite canonical Work Item' \
   'Không tạo execution diary' \
   'Final response MUST NOT chứa secret/dữ liệu nhạy cảm thô' \
