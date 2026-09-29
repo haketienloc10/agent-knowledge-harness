@@ -105,7 +105,8 @@ for pattern in \
   'explicit Lead disposition' \
   'REOPEN_REQUEST' \
   'DEPENDENCY_REQUEST' \
-  'BLOCKED'; do
+  'BLOCKED' \
+  'không cấp filesystem authority'; do
   grep -Fq -- "$pattern" "$protocol" || fail "WORKSPACE_PROTOCOL.md missing SLP contract: $pattern"
 done
 
@@ -121,6 +122,8 @@ for pattern in \
   'SLP Lead (QiQi)' \
   'docs/WORKSPACE_PROTOCOL.md' \
   'Peer judgment + Lead disposition' \
+  'filesystem authorization' \
+  'downstream Peer không cần và không được tự dereference sibling repo' \
   'explicit `ACCEPT` / `REJECT`'; do
   grep -Fq -- "$pattern" "$agents" || fail "AGENTS.md missing SLP Lead policy: $pattern"
 done
