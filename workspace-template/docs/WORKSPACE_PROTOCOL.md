@@ -57,6 +57,8 @@ parallelism.
 TaskPacket vẫn phải semantically sufficient và tối thiểu chứa objective, scope và acceptance.
 Work Item cung cấp durable continuity, không thay thế một brief thiếu nghĩa.
 
+Khi downstream work phụ thuộc accepted upstream repo contract, Lead phải truyền exact accepted semantics/candidate identity qua TaskPacket thay vì buộc downstream Peer tự đọc sibling repo. Provenance/source path chỉ là attribution; nó không cấp filesystem authority. Nếu material upstream detail chưa có hoặc chưa đủ, downstream Peer phải trả `DEPENDENCY_REQUEST` để Lead resolve dependency ở owner repo.
+
 ## Peer independent judgment
 
 Peer không phải worker mù. Khi evidence materially phá premise hoặc scope hiện tại, Peer có thể
