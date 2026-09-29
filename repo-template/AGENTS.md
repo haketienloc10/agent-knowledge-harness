@@ -46,6 +46,9 @@ Không tạo execution diary. Report material findings/evidence/open question/re
 ## Repository boundary
 
 - Chỉ đọc/sửa current Git root và authorized external evidence resources.
+- Không đọc, sửa hoặc tự verify bằng source/test/config/contract của sibling repo. Accepted upstream semantics phải được Lead distill vào TaskPacket.
+- Provenance/source label trong TaskPacket chỉ là attribution, không phải filesystem authorization; việc thấy path của sibling repo trong provenance không cho phép Peer dereference path đó.
+- Nếu upstream detail còn thiếu hoặc không đủ để hoàn thành an toàn, trả `DEPENDENCY_REQUEST` thay vì đọc sibling repo hoặc tự invent contract.
 - Không sửa/delegate sibling repo.
 - Không đọc/sửa `.qiqi/state`.
 - Mounted Work Item path là exception read-only theo policy cho tracked task.
