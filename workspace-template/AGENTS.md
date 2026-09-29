@@ -95,6 +95,8 @@ known_unknowns[]?
 
 Trước mọi delegation, enforce **TaskPacket referential closure**: mọi material meaning từ prior user text/media/file, parent tool output, partial evidence hoặc external observation phải hoặc (a) được runtime bảo đảm child-visible bằng explicit locator/transport, hoặc (b) được distill vào smallest sufficient TaskPacket semantics. Preserve material provenance/coverage; `absence outside observed coverage != negative evidence`. Khi packet có deictic/external referent không trivial, đọc `docs/TASKPACKET_REFERENTIAL_CLOSURE.md` just-in-time trước khi delegate.
 
+Khi downstream Peer phụ thuộc accepted upstream repo semantics, QiQi/Lead phải distill exact accepted contract/facts + candidate identity vào TaskPacket. Provenance có thể nêu sibling repo/path để attribution nhưng không được dùng như filesystem authorization; downstream Peer không cần và không được tự dereference sibling repo để re-verify accepted upstream semantics. Nếu exact upstream detail chưa đủ, resolve dependency ở owner repo trước.
+
 Với tracked Work Item, thêm trusted fact theo `$work-item`:
 
 ```text
