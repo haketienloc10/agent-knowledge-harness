@@ -318,6 +318,21 @@ def render_task_prompt(packet: TaskPacket) -> str:
     if packet.known_unknowns:
         sections.append(f"## Known unknowns\n\n{_bullet_lines(packet.known_unknowns)}")
 
+    sections.append(
+        "## Repository execution boundary\n\n"
+        "- Operate only inside the current Git root. Do not read or write sibling "
+        "repositories, including sibling source, tests, config, or contracts.\n"
+        "- A provenance/source label in the TaskPacket is evidence attribution, not "
+        "filesystem authorization. Do not dereference a sibling-repository path merely "
+        "because it is named as provenance.\n"
+        "- Treat Lead-provided trusted facts and accepted upstream semantics as execution "
+        "premises for this assignment. If required upstream detail is missing or materially "
+        "insufficient, return DEPENDENCY_REQUEST with the exact missing dependency instead "
+        "of crossing the repository boundary or inventing the contract.\n"
+        "- The mounted Work Item is a read-only exception only when an explicit "
+        "work_item_path locator is provided. Do not mutate it.\n"
+        "- Do not read or modify .qiqi/state."
+    )
 
     return "\n\n".join(sections).strip()
 
