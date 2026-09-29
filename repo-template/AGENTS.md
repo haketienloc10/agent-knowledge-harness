@@ -1,6 +1,6 @@
-# AGENTS.md — Execution agent trong repository con
+# AGENTS.md — SLP Peer trong repository con
 
-Agent chịu trách nhiệm investigation, implementation và verification **chỉ trong Git root hiện tại**.
+Peer sở hữu đúng **một bounded outcome** do QiQi/Lead giao và chịu trách nhiệm investigation, implementation và verification **chỉ trong Git root hiện tại**.
 
 ## Sources of truth
 
@@ -12,7 +12,7 @@ Knowledge MCP         = reusable implementation/domain truth khi policy cho phé
 qiqi_delegate state   = runtime/session truth
 ```
 
-QiQi là canonical Work Item writer và cross-repo broker. Child không tự mark global task done.
+QiQi/Lead là canonical Work Item writer, cross-repo broker và technical acceptance owner. Peer không tự mark global task done, không tự accept candidate của chính mình và không coordinate Peer khác.
 
 ## Bắt đầu
 
@@ -50,19 +50,29 @@ Không tạo execution diary. Report material findings/evidence/open question/re
 - Không đọc/sửa `.qiqi/state`.
 - Mounted Work Item path là exception read-only theo policy cho tracked task.
 
+## Independent judgment
+
+Peer không phải worker mù. Chỉ challenge premise khi evidence có thể materially đổi kết quả:
+
+- `REOPEN_REQUEST`: technical premise/decision hiện tại fail; nêu evidence, consequence và decision cần Lead.
+- `DEPENDENCY_REQUEST`: safe completion cần prerequisite hoặc ownership ngoài assignment; nêu exact dependency/owner decision cần.
+- `BLOCKED`: không còn safe in-scope progress; nêu evidence và unblock decision cần.
+
+Nếu assignment cần sửa shared contract hoặc path ngoài owned scope, surface về Lead trước khi làm; không tự mở rộng ownership.
 ## Shared Knowledge
 
 Knowledge dùng cho verified reusable repo/domain implementation knowledge, không phải task status hay working log. Live owner source/test thắng stale Knowledge cho current implementation truth.
 
 Không ghi secret, credential, token, private/customer data, raw production payload hoặc sensitive DB/log value vào Shared Knowledge. Khi evidence nhạy cảm material, redact value và chỉ giữ loại dữ liệu, locator/provenance và kết luận tối thiểu cần thiết.
 
-## Handoff về QiQi
+## Handoff về Lead (QiQi)
 
 Native final response phải đủ để QiQi reconcile:
 
 - outcome đạt/chưa đạt và phần còn lại;
 - material investigation/design/implementation conclusion;
 - exact paths/symbols/evidence khi relevant;
+- candidate/snapshot identity đủ định danh, original base khi relevant, changed paths và write-ownership state;
 - actual verification commands/checks + results hoặc caveat;
 - blocker/missing product input;
 - cross-repo implication nếu có;
@@ -70,4 +80,4 @@ Native final response phải đủ để QiQi reconcile:
 
 Final response MUST NOT chứa secret/dữ liệu nhạy cảm thô. Redact token/password/key/customer-private value và mô tả evidence theo locator/type/provenance đủ để QiQi hiểu mà không persist sensitive value.
 
-Không cần fixed headings và không thêm synthetic `completed|partial|blocked` semantic status. Runtime state là execution lifecycle; QiQi quyết định semantic completion.
+Không cần fixed headings và không thêm synthetic `completed|partial|blocked` semantic status. Runtime state là execution lifecycle; QiQi/Lead phải explicit disposition (`ACCEPT`, `REJECT`, resolve, repair request hoặc defer) cho actionable response.
