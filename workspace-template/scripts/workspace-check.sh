@@ -34,6 +34,7 @@ routing="$workspace_root/instructions/agent-routing.yaml"
 config="$workspace_root/.codex/config.toml"
 agents="$workspace_root/AGENTS.md"
 model_routing="$workspace_root/instructions/model-routing.md"
+identity="$workspace_root/identity.md"
 protocol="$workspace_root/docs/WORKSPACE_PROTOCOL.md"
 supervisor="$workspace_root/instructions/supervisor.md"
 
@@ -124,6 +125,14 @@ for pattern in \
   grep -Fq -- "$pattern" "$agents" || fail "AGENTS.md missing SLP Lead policy: $pattern"
 done
 
+
+for pattern in \
+  'SLP **Lead**' \
+  'Human sở hữu product goal' \
+  'Supervisor là oversight plane' \
+  'explicit Lead disposition'; do
+  grep -Fq -- "$pattern" "$identity" || fail "identity.md missing SLP Lead authority: $pattern"
+done
 # Validate the canonical repository/dependency registry. The harness template itself
 # contains {{...}} placeholders, so CI sets QIQI_TEMPLATE_CHECK=1 and validates
 # structure without requiring concrete Git roots. Installed workspaces run the full
