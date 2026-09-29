@@ -8,10 +8,14 @@
 ├── identity.md
 ├── repos.yaml
 ├── SYSTEM_MAP.md
+├── docs/WORKSPACE_PROTOCOL.md
 ├── work-items/
 ├── .agents/skills/work-item/    # Codex workspace-scoped parent skill
 ├── .claude/skills/work-item/    # Claude workspace-scoped parent skill
 ├── instructions/
+│   ├── supervisor.md
+│   ├── agent-routing.yaml
+│   └── model-routing.md
 ├── mcp/qiqi_delegate/
 └── scripts/
 ```
@@ -20,9 +24,16 @@
 
 `$work-item` cũng là **workspace-scoped QiQi parent skill**. Repo child không nhận một copy riêng của skill; child dùng TaskPacket + mounted Work Item read-only context theo repo `AGENTS.md`.
 
+## SLP runtime roles
+
+`AGENTS.md` là Lead policy của QiQi. `docs/WORKSPACE_PROTOCOL.md` là shared authority/ownership/acceptance contract. `instructions/supervisor.md` là Supervisor overlay cho một independent top-level supervision session/room.
+
+Supervisor không chạy như repo child của QiQi: nếu Supervisor bị spawn dưới Lead như một ordinary Peer thì governance plane mất independence. Host/room phải tạo Supervisor như sibling oversight role và cung cấp một communication path về Lead hoặc Human/operator.
+
+Repository agents dùng `repo-template/AGENTS.md` và là Peers. Peer chỉ sở hữu bounded delegated outcome; actual response của Peer phải được Lead disposition rõ ràng trước khi dependent work coi candidate là accepted.
 ## Runtime
 
-Parent QiQi/$work-item resolve canonical task resource trực tiếp tại `<workspace>/work-items`; parent không dựa vào environment variable được một MCP child process export.
+Parent QiQi/Lead + `$work-item` resolve canonical task resource trực tiếp tại `<workspace>/work-items`; parent không dựa vào environment variable được một MCP child process export.
 
 `scripts/qiqi-mcp-server.sh` resolve workspace root, `mkdir -p work-items`, export `QIQI_WORK_ITEMS_DIR=<workspace>/work-items` cho qiqi_delegate và start MCP. qiqi_delegate dùng alias này để inject native additional-dir access cho Codex/Claude.
 
@@ -140,7 +151,7 @@ uv sync --project mcp/qiqi_delegate
 
 ## Repo delegation
 
-TaskPacket vẫn chứa objective/scope/acceptance đầy đủ. Child được đọc exact mounted dossier từ `work_item_path`, bắt đầu ở `00_WORK_ITEM.md`, nhưng không mutate canonical dossier và không chạy Work Item lifecycle thay QiQi.
+TaskPacket vẫn chứa objective/scope/acceptance đầy đủ. Peer được đọc exact mounted dossier từ `work_item_path`, bắt đầu ở `00_WORK_ITEM.md`, nhưng không mutate canonical dossier và không chạy Work Item lifecycle thay QiQi.
 
 `instructions/model-routing.md` không phải mandatory startup material. Default delegation route là `claude-balanced`; khi một turn thực sự delegate, QiQi đọc route policy just-in-time ngay trước route decision.
 
@@ -152,4 +163,4 @@ Sau khi `repos.yaml` đã được materialize thành repository thực, workspa
 bash scripts/workspace-check.sh
 ```
 
-Checker verify repository registry shape, `required_for`/`depends_on`, duplicate/unknown/self dependencies, dependency cycles, relative paths, exact Git roots, duplicate roots, qiqi_delegate tests và Herdr integration readiness. Harness CI dùng `QIQI_TEMPLATE_CHECK=1` chỉ để validate unmaterialized template placeholders mà không giả vờ kiểm machine-local Git roots/Herdr state.
+Checker verify SLP protocol/role artifacts, repository registry shape, `required_for`/`depends_on`, duplicate/unknown/self dependencies, dependency cycles, relative paths, exact Git roots, duplicate roots, qiqi_delegate tests và Herdr integration readiness. Harness CI dùng `QIQI_TEMPLATE_CHECK=1` chỉ để validate unmaterialized template placeholders mà không giả vờ kiểm machine-local Git roots/Herdr state.
