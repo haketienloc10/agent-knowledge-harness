@@ -1,0 +1,27 @@
+{
+  "version": 52,
+  "from_ref": "62de7266ee8385101fb224279c8b5888ee5d4c02",
+  "to_ref": "671f35be7865fe1ec1cd3950e3bd05b5497c447d",
+  "description": "add the Phase 3 persistent Herdr SLP control plane and Supervisor-to-Lead wakeup: keep independently addressable Lead and Supervisor agents in a persistent slp-control workspace, run Supervisor from an isolated non-project control cwd with read-only/no-escalation Codex permissions, capture Supervisor semantic output through the native Stop hook rather than terminal reads, validate a bounded governance-only issue/no_issue schema, persist structured findings, deliver confirmed findings to Lead with Herdr agent prompt without treating delivery or acknowledgement as closure, and document/check the runtime authority boundary",
+  "workspace": {
+    "merge": [
+      "workspace-template/instructions/supervisor.md",
+      "workspace-template/scripts/workspace-check.sh"
+    ],
+    "replace": [
+      "workspace-template/docs/SUPERVISOR_RUNTIME.md",
+      "workspace-template/mcp/qiqi_delegate/core.py",
+      "workspace-template/mcp/qiqi_delegate/supervisor_broker.py",
+      "workspace-template/mcp/qiqi_delegate/supervisor_control.py",
+      "workspace-template/mcp/qiqi_delegate/tests/test_supervisor_control.py"
+    ],
+    "delete": [],
+    "manual_review": []
+  },
+  "repo": {
+    "merge": [],
+    "replace": [],
+    "delete": [],
+    "manual_review": []
+  }
+}
