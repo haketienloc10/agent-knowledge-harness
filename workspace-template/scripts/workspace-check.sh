@@ -104,6 +104,16 @@ grep -Fq '"recorded": True' "$supervisor_control" || \
   fail 'Supervisor AuditPacket must expose an existing Lead disposition'
 grep -Fq 'LEFT JOIN lead_dispositions d ON d.turn_id = c.turn_id' "$supervisor_control" || \
   fail 'Supervisor pending cases must hydrate disposition state by exact Peer turn'
+grep -Fq '_RULE_CONTRACTS' "$supervisor_control" || \
+  fail 'Supervisor AuditPacket must define deterministic R1-R5 rule contracts'
+grep -Fq '"version": 2' "$supervisor_control" || \
+  fail 'Supervisor AuditPacket contract version must include explicit rule semantics'
+grep -Fq 'rule_contract is the normative meaning' "$supervisor_control" || \
+  fail 'Supervisor prompt must treat rule_contract as normative'
+for rule in R1 R2 R3 R4 R5; do
+  grep -Fq "\"$rule\":" "$supervisor_control" || \
+    fail "Supervisor AuditPacket missing deterministic rule contract: $rule"
+done
 
 for pattern in \
   'bounded AuditPacket' \
@@ -123,6 +133,8 @@ for pattern in \
   'record_dependency_consumed' \
   'write_scope.claimed/released' \
   'autonomous E2E-08 state-machine integration test' \
+  'normative `rule_contract`' \
+  'R1: actual Peer response exists without an explicit Lead disposition' \
   'bash scripts/e2e-autonomous-supervisor.sh <repository-name>'; do
   grep -Fq -- "$pattern" "$supervisor_runtime_doc" || \
     fail "SUPERVISOR_RUNTIME.md missing runtime contract: $pattern"
