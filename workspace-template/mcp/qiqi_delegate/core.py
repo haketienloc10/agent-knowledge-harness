@@ -36,6 +36,9 @@ SLP_EVENT_TYPES = frozenset(
     }
 )
 LEAD_DISPOSITION_ACTIONS = frozenset({"accept", "reject", "repair", "defer", "resolve"})
+PEER_SIGNAL_TYPES = frozenset(
+    {"REOPEN_REQUEST", "DEPENDENCY_REQUEST", "BLOCKED", "runtime_blocked"}
+)
 SUPERVISOR_CASE_STATUSES = frozenset(
     {"OPEN", "DELIVERED_TO_LEAD", "WAITING_FOR_EVIDENCE", "CLOSED", "ESCALATED_TO_HUMAN"}
 )
@@ -1038,6 +1041,56 @@ class SessionStore:
                 work_item_revision=clean_work_item_revision,
                 candidate_id=clean_candidate,
                 payload={"source_turn_id": source_turn},
+            )
+
+    def record_peer_signal(
+        self,
+        *,
+        turn_id: str,
+        signal: str,
+        work_item_id: str | None = None,
+        work_item_revision: int | None = None,
+        details: str | None = None,
+    ) -> int:
+        clean_turn = self._optional_runtime_text(turn_id, "turn_id")
+        if clean_turn is None:
+            raise ValueError("turn_id must not be empty")
+        if not isinstance(signal, str) or signal.strip() not in PEER_SIGNAL_TYPES:
+            raise ValueError(f"unsupported Peer signal: {signal!r}")
+        clean_signal = signal.strip()
+        clean_work_item_id = self._optional_runtime_text(work_item_id, "work_item_id")
+        clean_work_item_revision = self._optional_work_item_revision(work_item_revision)
+        if (clean_work_item_id is None) != (clean_work_item_revision is None):
+            raise ValueError("work_item_id and work_item_revision must be provided together")
+        clean_details = self._optional_runtime_text(details, "details")
+        with self._connect() as conn:
+            turn = conn.execute(
+                "SELECT session_id, repository, route, task_packet_json FROM turns WHERE turn_id = ?",
+                (clean_turn,),
+            ).fetchone()
+            if turn is None:
+                raise RuntimeError(
+                    "Peer signal requires an existing captured Peer turn: "
+                    f"unknown turn_id={clean_turn!r}"
+                )
+            if clean_work_item_id is None:
+                packet_payload = json.loads(turn["task_packet_json"])
+                clean_work_item_id, clean_work_item_revision = _work_item_ref_from_payload(
+                    packet_payload
+                )
+            payload: dict[str, Any] = {"signal": clean_signal}
+            if clean_details is not None:
+                payload["details"] = clean_details
+            return self._insert_slp_event(
+                conn,
+                event_type="peer.signal",
+                turn_id=clean_turn,
+                session_id=turn["session_id"],
+                repository=turn["repository"],
+                route=turn["route"],
+                work_item_id=clean_work_item_id,
+                work_item_revision=clean_work_item_revision,
+                payload=payload,
             )
 
     def record_write_scope_claim(
