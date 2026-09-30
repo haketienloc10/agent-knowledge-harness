@@ -19,6 +19,11 @@ The persisted control-plane identity includes Herdr session + Lead model + Super
 that identity changes, the runtime closes the stale `slp-control` workspace and recreates the
 agents instead of silently reusing sessions launched with an older model.
 
+Persisted Herdr topology is also validated before reuse. If the saved workspace or either
+saved pane no longer exists (for example after a Herdr restart or manual workspace close), the
+runtime clears the stale control-plane row and recreates `slp-control` automatically. A missing
+persisted pane must not require operator cleanup.
+
 
 ## Sources of truth
 
