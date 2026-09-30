@@ -38,8 +38,8 @@ for command in herdr uv python3; do
   }
 done
 
-[[ -x "$broker_launcher" ]] || {
-  printf 'ERROR: missing executable broker launcher: %s\n' "$broker_launcher" >&2
+[[ -f "$broker_launcher" ]] || {
+  printf 'ERROR: missing broker launcher: %s\n' "$broker_launcher" >&2
   exit 66
 }
 
@@ -90,7 +90,7 @@ if pgrep -f "$workspace_root/mcp/qiqi_delegate/supervisor_broker.py" >/dev/null 
   fi
   printf 'Using existing Supervisor broker.\n'
 else
-  "$broker_launcher" >"$broker_log" 2>&1 &
+  bash "$broker_launcher" >"$broker_log" 2>&1 &
   broker_pid="$!"
   started_broker=1
   printf 'Started Supervisor broker pid=%s log=%s\n' "$broker_pid" "$broker_log"
