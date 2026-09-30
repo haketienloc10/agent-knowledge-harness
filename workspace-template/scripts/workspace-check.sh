@@ -82,8 +82,8 @@ for pattern in \
   grep -Fq -- "$pattern" "$supervisor_control" || \
     fail "Supervisor control plane missing persistent/runtime boundary: $pattern"
 done
-if grep -Eq 'pane[.]read|agent[.]read|delegate_repo_task|record_lead_disposition' "$supervisor_control"; then
-  fail 'Supervisor control plane must not expose terminal reads, Peer delegation, or Lead disposition mutation'
+if grep -Eq 'pane[.]read|agent[.]read|delegate_repo_task|record_lead_disposition|record_work_item_revision|record_peer_signal|record_dependency_consumed' "$supervisor_control"; then
+  fail 'Supervisor control plane must not expose terminal reads, Peer delegation, Work Item/runtime mutation, or Lead disposition mutation'
 fi
 
 for pattern in \
@@ -99,9 +99,22 @@ for pattern in \
   'workspace: slp-control' \
   'Supervisor responses are captured through the native Stop hook' \
   '`pane.read` or `agent.read` as semantic input.' \
-  'must not claim continuous supervision'; do
+  'must not claim continuous supervision' \
+  'work_item.revision_changed' \
+  'record_dependency_consumed' \
+  'write_scope.claimed/released' \
+  'autonomous E2E-08 state-machine integration test'; do
   grep -Fq -- "$pattern" "$supervisor_runtime_doc" || \
     fail "SUPERVISOR_RUNTIME.md missing runtime contract: $pattern"
+done
+
+for tool_name in \
+  'record_lead_disposition' \
+  'record_work_item_revision' \
+  'record_peer_signal' \
+  'record_dependency_consumed'; do
+  grep -Fq -- "$tool_name" "$config" || \
+    fail "QiQi config missing SLP semantic runtime tool: $tool_name"
 done
 
 grep -Fq 'command: codex' "$routing" || fail 'Codex must resolve the native codex CLI'
@@ -183,7 +196,11 @@ for pattern in \
   'Peer judgment + Lead disposition' \
   'filesystem authorization' \
   'downstream Peer không cần và không được tự dereference sibling repo' \
-  'explicit `ACCEPT` / `REJECT`'; do
+  'explicit `ACCEPT` / `REJECT`' \
+  'record_work_item_revision' \
+  'record_peer_signal' \
+  'record_dependency_consumed' \
+  'write_scope.claimed/released'; do
   grep -Fq -- "$pattern" "$agents" || fail "AGENTS.md missing SLP Lead policy: $pattern"
 done
 
