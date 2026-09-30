@@ -103,6 +103,7 @@ RepositoryName = Annotated[
     ),
 ]
 LeadDispositionAction = Literal["accept", "reject", "repair", "defer", "resolve"]
+PeerSignal = Literal["REOPEN_REQUEST", "DEPENDENCY_REQUEST", "BLOCKED"]
 
 
 mcp = MCPServer(
@@ -137,8 +138,10 @@ mcp = MCPServer(
         "trusts only the exact QiQi session hook by matching its computed trusted_hash; global "
         "hook-trust bypass is forbidden. Settled/failed/blocked are runtime lifecycle states, "
         "not semantic completion. Direct actionable Peer turns must be closed with the "
-        "record_lead_disposition tool; TaskGraph submit_decisions bridges its semantic "
-        "decision into the same runtime disposition stream. Runtime session ownership and "
+        "record_lead_disposition tool; tracked Work Item revisions must be mirrored with "
+        "record_work_item_revision after material mutation, and direct dependency consumption "
+        "must be recorded with record_dependency_consumed. TaskGraph submit_decisions and "
+        "dependency execution bridge into the same runtime stream. Runtime session ownership and "
         "SLP semantic transitions are persisted in the same MCP-owned SQLite state, not in "
         "Markdown result artifacts."
     ),
@@ -1124,6 +1127,84 @@ async def record_lead_disposition(
 
 @mcp.tool()
 @_public_tool_errors
+async def record_work_item_revision(
+    work_item_id: str,
+    work_item_revision: int,
+    reason: str | None = None,
+) -> dict[str, Any]:
+    """Record a canonical tracked Work Item revision in SLP runtime state.
+
+    QiQi remains the canonical filesystem Work Item writer. Call this immediately after a
+    material Work Item revision change so stale-candidate supervision does not depend on a
+    later delegation observing the new revision. Repeating the current revision is idempotent;
+    revision rollback fails closed.
+    """
+    return _store.record_work_item_revision(
+        work_item_id=work_item_id,
+        work_item_revision=work_item_revision,
+        reason=reason,
+    )
+
+
+@mcp.tool()
+@_public_tool_errors
+async def record_peer_signal(
+    turn_id: str,
+    signal: PeerSignal,
+    details: str | None = None,
+    work_item_id: str | None = None,
+    work_item_revision: int | None = None,
+) -> dict[str, Any]:
+    """Record an explicit actionable Peer signal already observed in a captured response."""
+    seq = _store.record_peer_signal(
+        turn_id=turn_id,
+        signal=signal,
+        details=details,
+        work_item_id=work_item_id,
+        work_item_revision=work_item_revision,
+    )
+    return {"event_seq": seq, "turn_id": turn_id, "signal": signal}
+
+
+@mcp.tool()
+@_public_tool_errors
+async def record_dependency_consumed(
+    source_turn_id: str,
+    repository: RepositoryName | None = None,
+    consumer_turn_id: str | None = None,
+    work_item_id: str | None = None,
+    work_item_revision: int | None = None,
+    candidate_id: str | None = None,
+) -> dict[str, Any]:
+    """Record direct-delegation consumption of an upstream Peer candidate.
+
+    TaskGraph dependencies are emitted automatically when downstream nodes execute. Use this
+    tool only for direct orchestration where QiQi intentionally consumes an upstream turn as
+    a downstream premise.
+    """
+    if repository is not None:
+        repository = repository.strip()
+        if not repository:
+            repository = None
+        else:
+            _resolve_repo(repository)
+    seq = _store.record_dependency_consumed(
+        source_turn_id=source_turn_id,
+        consumer_turn_id=consumer_turn_id,
+        repository=repository,
+        work_item_id=work_item_id,
+        work_item_revision=work_item_revision,
+        candidate_id=candidate_id,
+    )
+    return {
+        "event_seq": seq,
+        "source_turn_id": source_turn_id,
+        "consumer_turn_id": consumer_turn_id,
+    }
+
+
+@mcp.tool()
+@_public_tool_errors
 async def get_turn_capture_review(capture_review_id: str) -> dict[str, Any]:
     """Hydrate raw Stop candidates for one previously ambiguous delegated turn."""
     capture_review_id = capture_review_id.strip()
@@ -1214,14 +1295,31 @@ async def delegate_repo_task(
     if session_id:
         _prepare_resume(repository, agent_name, session_id)
 
+    qiqi_turn_id = new_turn_id()
+    work_item_id, work_item_revision = task_packet_work_item_ref(packet)
+    if work_item_id is not None and work_item_revision is not None:
+        _store.record_work_item_revision(
+            work_item_id=work_item_id,
+            work_item_revision=work_item_revision,
+            reason="observed in delegated TaskPacket",
+        )
+
     await _ensure_herdr_server()
     await _require_current_integration(adapter)
     await _claim_resources(repo, session_id)
 
     workspace_id: str | None = None
     capture_path: Path | None = None
-    qiqi_turn_id = new_turn_id()
-    work_item_id, work_item_revision = task_packet_work_item_ref(packet)
+    write_claim_id = f"repo:{repository}:turn:{qiqi_turn_id}"
+    _store.record_write_scope_claim(
+        claim_id=write_claim_id,
+        repository=repository,
+        owner=qiqi_turn_id,
+        scope=["*"],
+        turn_id=qiqi_turn_id,
+        work_item_id=work_item_id,
+        work_item_revision=work_item_revision,
+    )
     _store.record_slp_event(
         event_type="peer.dispatched",
         turn_id=qiqi_turn_id,
@@ -1341,7 +1439,16 @@ async def delegate_repo_task(
         _remove_active_capture(capture_path)
         if workspace_id:
             await _close_herdr_workspace(workspace_id)
-        await _release_resources(repo, session_id)
+        try:
+            _store.record_write_scope_release(
+                claim_id=write_claim_id,
+                repository=repository,
+                turn_id=qiqi_turn_id,
+                work_item_id=work_item_id,
+                work_item_revision=work_item_revision,
+            )
+        finally:
+            await _release_resources(repo, session_id)
 
 
 if __name__ == "__main__":
