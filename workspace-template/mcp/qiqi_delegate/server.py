@@ -1311,23 +1311,27 @@ async def delegate_repo_task(
     workspace_id: str | None = None
     capture_path: Path | None = None
     write_claim_id = f"repo:{repository}:turn:{qiqi_turn_id}"
-    _store.record_write_scope_claim(
-        claim_id=write_claim_id,
-        repository=repository,
-        owner=qiqi_turn_id,
-        scope=["*"],
-        turn_id=qiqi_turn_id,
-        work_item_id=work_item_id,
-        work_item_revision=work_item_revision,
-    )
-    _store.record_slp_event(
-        event_type="peer.dispatched",
-        turn_id=qiqi_turn_id,
-        repository=repository,
-        route=route,
-        work_item_id=work_item_id,
-        work_item_revision=work_item_revision,
-    )
+    try:
+        _store.record_write_scope_claim(
+            claim_id=write_claim_id,
+            repository=repository,
+            owner=qiqi_turn_id,
+            scope=["*"],
+            turn_id=qiqi_turn_id,
+            work_item_id=work_item_id,
+            work_item_revision=work_item_revision,
+        )
+        _store.record_slp_event(
+            event_type="peer.dispatched",
+            turn_id=qiqi_turn_id,
+            repository=repository,
+            route=route,
+            work_item_id=work_item_id,
+            work_item_revision=work_item_revision,
+        )
+    except Exception:
+        await _release_resources(repo, session_id)
+        raise
     try:
         with tempfile.TemporaryDirectory(prefix="qiqi-handoff-") as temp_dir:
             sink = Path(temp_dir).resolve()
