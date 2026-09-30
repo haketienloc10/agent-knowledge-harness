@@ -179,6 +179,9 @@ class TaskGraphMcpTests(unittest.IsolatedAsyncioTestCase):
             {
                 "delegate_repo_task",
                 "record_lead_disposition",
+                "record_work_item_revision",
+                "record_peer_signal",
+                "record_dependency_consumed",
                 "start_graph",
                 "get_graph",
                 "get_node_review",
