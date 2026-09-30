@@ -50,6 +50,41 @@ class SupervisorFindingContractTests(unittest.TestCase):
         self.assertNotIn("task_packet_json", packet)
         self.assertNotIn("RAW PEER RESPONSE", encoded)
 
+    def test_audit_packet_reports_existing_lead_disposition(self) -> None:
+        packet = build_audit_packet(
+            {
+                "case_id": "case-r5",
+                "rule": "R5",
+                "turn_id": "turn-stale",
+                "work_item_id": "e2e:009",
+                "work_item_revision": 3,
+                "candidate_id": None,
+                "details": {
+                    "turn_id": "turn-stale",
+                    "stale_revision": 2,
+                    "current_revision": 3,
+                },
+                "lead_disposition": {
+                    "disposition_id": "disp-1",
+                    "action": "accept",
+                    "work_item_revision": 2,
+                    "candidate_id": "candidate-1",
+                },
+            }
+        )
+
+        self.assertEqual(
+            packet["disposition_state"],
+            {
+                "recorded": True,
+                "source": "lead_dispositions",
+                "disposition_id": "disp-1",
+                "action": "accept",
+                "work_item_revision": 2,
+                "candidate_id": "candidate-1",
+            },
+        )
+
     def test_finding_schema_accepts_governance_only_issue(self) -> None:
         finding = parse_supervisor_finding(
             json.dumps(
