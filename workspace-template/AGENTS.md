@@ -72,7 +72,8 @@ Canonical ID/path mechanics thuộc `$work-item`: validate canonical ID, derive 
 - Numeric prefixes là canonical filename contract để dossier sort theo lifecycle; `references/` không đánh số vì không phải lifecycle phase.
 - Legacy unprefixed lifecycle filenames phải migrate trước khi tiếp tục; không tạo parallel numbered/unprefixed copies.
 - Requirement change rewrite current requirement và tăng `revision`; prior findings phải reconcile materiality thay vì auto discard.
-- Ngay sau material revision mutation, gọi `record_work_item_revision(work_item_id, work_item_revision, reason)` để Supervisor runtime thấy revision mới trước delegation tiếp theo; filesystem Work Item vẫn là canonical task truth.
+- State/phase/progress/evidence/disposition/report reconciliation (`waiting`, `done`, ACCEPT/REJECT, closure, v.v.) **không tự tăng revision** nếu effective requirement/acceptance/scope không đổi.
+- Chỉ sau material requirement revision mutation mới gọi `record_work_item_revision(work_item_id, work_item_revision, reason)`; không emit revision mới cho state-only reconciliation. Filesystem Work Item vẫn là canonical task truth.
 - Multi-turn continuity merge/rewrite current semantic state; native session giữ short-term conversation continuity.
 
 ## Orchestration + delegation
