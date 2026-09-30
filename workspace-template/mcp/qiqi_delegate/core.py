@@ -941,6 +941,173 @@ class SessionStore:
                 payload=payload,
             )
 
+    def record_work_item_revision(
+        self,
+        *,
+        work_item_id: str,
+        work_item_revision: int,
+        reason: str | None = None,
+    ) -> dict[str, Any]:
+        clean_id = self._optional_runtime_text(work_item_id, "work_item_id")
+        if clean_id is None:
+            raise ValueError("work_item_id must not be empty")
+        clean_revision = self._optional_work_item_revision(work_item_revision)
+        if clean_revision is None:
+            raise ValueError("work_item_revision is required")
+        clean_reason = self._optional_runtime_text(reason, "reason")
+        with self._connect() as conn:
+            latest = conn.execute(
+                "SELECT seq, work_item_revision FROM slp_events "
+                "WHERE event_type = 'work_item.revision_changed' AND work_item_id = ? "
+                "ORDER BY seq DESC LIMIT 1",
+                (clean_id,),
+            ).fetchone()
+            if latest is not None:
+                previous = int(latest["work_item_revision"])
+                if clean_revision < previous:
+                    raise RuntimeError(
+                        "Work Item revision must be monotonic: "
+                        f"current={previous}, attempted={clean_revision}"
+                    )
+                if clean_revision == previous:
+                    return {
+                        "event_seq": int(latest["seq"]),
+                        "work_item_id": clean_id,
+                        "work_item_revision": clean_revision,
+                        "idempotent": True,
+                    }
+            seq = self._insert_slp_event(
+                conn,
+                event_type="work_item.revision_changed",
+                work_item_id=clean_id,
+                work_item_revision=clean_revision,
+                payload={"reason": clean_reason} if clean_reason is not None else {},
+            )
+        return {
+            "event_seq": seq,
+            "work_item_id": clean_id,
+            "work_item_revision": clean_revision,
+            "idempotent": False,
+        }
+
+    def record_dependency_consumed(
+        self,
+        *,
+        source_turn_id: str,
+        consumer_turn_id: str | None = None,
+        repository: str | None = None,
+        work_item_id: str | None = None,
+        work_item_revision: int | None = None,
+        candidate_id: str | None = None,
+        graph_run_id: str | None = None,
+        node_id: str | None = None,
+        attempt_id: str | None = None,
+    ) -> int:
+        source_turn = self._optional_runtime_text(source_turn_id, "source_turn_id")
+        if source_turn is None:
+            raise ValueError("source_turn_id must not be empty")
+        clean_consumer = self._optional_runtime_text(consumer_turn_id, "consumer_turn_id")
+        clean_repository = self._optional_runtime_text(repository, "repository")
+        clean_work_item_id = self._optional_runtime_text(work_item_id, "work_item_id")
+        clean_work_item_revision = self._optional_work_item_revision(work_item_revision)
+        if (clean_work_item_id is None) != (clean_work_item_revision is None):
+            raise ValueError("work_item_id and work_item_revision must be provided together")
+        clean_candidate = self._optional_runtime_text(candidate_id, "candidate_id")
+        clean_graph_run = self._optional_runtime_text(graph_run_id, "graph_run_id")
+        clean_node = self._optional_runtime_text(node_id, "node_id")
+        clean_attempt = self._optional_runtime_text(attempt_id, "attempt_id")
+        with self._connect() as conn:
+            source = conn.execute(
+                "SELECT turn_id FROM turns WHERE turn_id = ?",
+                (source_turn,),
+            ).fetchone()
+            if source is None:
+                raise RuntimeError(
+                    "dependency consumption requires an existing captured source Peer turn: "
+                    f"unknown source_turn_id={source_turn!r}"
+                )
+            return self._insert_slp_event(
+                conn,
+                event_type="dependency.consumed",
+                turn_id=clean_consumer,
+                repository=clean_repository,
+                graph_run_id=clean_graph_run,
+                node_id=clean_node,
+                attempt_id=clean_attempt,
+                work_item_id=clean_work_item_id,
+                work_item_revision=clean_work_item_revision,
+                candidate_id=clean_candidate,
+                payload={"source_turn_id": source_turn},
+            )
+
+    def record_write_scope_claim(
+        self,
+        *,
+        claim_id: str,
+        repository: str,
+        owner: str,
+        scope: list[str],
+        turn_id: str | None = None,
+        work_item_id: str | None = None,
+        work_item_revision: int | None = None,
+    ) -> int:
+        clean_claim = self._optional_runtime_text(claim_id, "claim_id")
+        clean_repository = self._optional_runtime_text(repository, "repository")
+        clean_owner = self._optional_runtime_text(owner, "owner")
+        clean_turn = self._optional_runtime_text(turn_id, "turn_id")
+        clean_work_item_id = self._optional_runtime_text(work_item_id, "work_item_id")
+        clean_work_item_revision = self._optional_work_item_revision(work_item_revision)
+        if clean_claim is None or clean_repository is None or clean_owner is None:
+            raise ValueError("claim_id, repository and owner are required")
+        if (clean_work_item_id is None) != (clean_work_item_revision is None):
+            raise ValueError("work_item_id and work_item_revision must be provided together")
+        if not isinstance(scope, list) or not scope:
+            raise ValueError("scope must contain at least one path/scope entry")
+        clean_scope: list[str] = []
+        for item in scope:
+            if not isinstance(item, str) or not item.strip():
+                raise ValueError("scope entries must be non-empty strings")
+            clean_scope.append(item.strip())
+        return self.record_slp_event(
+            event_type="write_scope.claimed",
+            turn_id=clean_turn,
+            repository=clean_repository,
+            work_item_id=clean_work_item_id,
+            work_item_revision=clean_work_item_revision,
+            payload={
+                "claim_id": clean_claim,
+                "owner": clean_owner,
+                "scope": clean_scope,
+            },
+        )
+
+    def record_write_scope_release(
+        self,
+        *,
+        claim_id: str,
+        repository: str,
+        turn_id: str | None = None,
+        work_item_id: str | None = None,
+        work_item_revision: int | None = None,
+    ) -> int:
+        clean_claim = self._optional_runtime_text(claim_id, "claim_id")
+        clean_repository = self._optional_runtime_text(repository, "repository")
+        clean_turn = self._optional_runtime_text(turn_id, "turn_id")
+        clean_work_item_id = self._optional_runtime_text(work_item_id, "work_item_id")
+        clean_work_item_revision = self._optional_work_item_revision(work_item_revision)
+        if clean_claim is None or clean_repository is None:
+            raise ValueError("claim_id and repository are required")
+        if (clean_work_item_id is None) != (clean_work_item_revision is None):
+            raise ValueError("work_item_id and work_item_revision must be provided together")
+        return self.record_slp_event(
+            event_type="write_scope.released",
+            turn_id=clean_turn,
+            repository=clean_repository,
+            work_item_id=clean_work_item_id,
+            work_item_revision=clean_work_item_revision,
+            payload={"claim_id": clean_claim},
+        )
+
     def list_slp_events(
         self, *, after_seq: int = 0, limit: int = 100
     ) -> list[dict[str, Any]]:
@@ -1076,6 +1243,23 @@ class SessionStore:
                     now,
                 ),
             )
+            if clean_action == "accept":
+                self._insert_slp_event(
+                    conn,
+                    event_type="candidate.accepted",
+                    turn_id=clean_turn_id,
+                    session_id=turn["session_id"],
+                    repository=turn["repository"],
+                    route=turn["route"],
+                    graph_run_id=clean_graph_run_id,
+                    node_id=clean_node_id,
+                    attempt_id=clean_attempt_id,
+                    work_item_id=clean_work_item_id,
+                    work_item_revision=clean_work_item_revision,
+                    candidate_id=clean_candidate_id,
+                    payload={"disposition_id": disposition_id},
+                    created_at_ns=now,
+                )
             row = conn.execute(
                 "SELECT * FROM lead_dispositions WHERE disposition_id = ?",
                 (disposition_id,),
