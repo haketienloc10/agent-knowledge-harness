@@ -278,6 +278,75 @@ class AutonomousSupervisorRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.broker.process_pending()
         self.assertEqual(self.broker.list_cases()[0]["status"], "CLOSED")
 
+    async def test_r5_runtime_packet_hydrates_prior_lead_disposition(self) -> None:
+        packet = build_task_packet(
+            objective="Produce one bounded result.",
+            scope=["repository work"],
+            acceptance_criteria=["focused verification passes"],
+            context={
+                "trusted_facts": [
+                    {
+                        "fact": (
+                            "work_item_path=/tmp/work-items/e2e:010; "
+                            "id=e2e:010; revision=2"
+                        ),
+                        "source": "canonical Work Item locator",
+                    }
+                ]
+            },
+        )
+        self.store.record_turn(
+            turn_id="turn-r5-accepted",
+            session_id="session-turn-r5-accepted",
+            repository="repo-a",
+            agent="claude",
+            route="claude-balanced",
+            state="settled",
+            native_turn_id=None,
+            packet=packet,
+            agent_response="raw peer response",
+        )
+        self.broker.process_pending()
+        self.store.record_lead_disposition(
+            turn_id="turn-r5-accepted",
+            action="accept",
+            reason="candidate met revision 2 requirements",
+            work_item_id="e2e:010",
+            work_item_revision=2,
+            candidate_id="candidate-r2",
+        )
+        self.broker.process_pending()
+        self.store.record_slp_event(
+            event_type="work_item.revision_changed",
+            work_item_id="e2e:010",
+            work_item_revision=3,
+            payload={"reason": "material requirement change"},
+        )
+        self.broker.process_pending()
+
+        fake = _FakeControlPlane("no_issue")
+        runtime = AutonomousSupervisorRuntime(
+            state_db=self.db_path,
+            control_plane=fake,
+        )
+        await runtime.handle_pending_cases()
+
+        self.assertEqual(len(fake.supervisor_packets), 1)
+        self.assertEqual(fake.supervisor_packets[0]["rule"], "R5")
+        self.assertEqual(
+            fake.supervisor_packets[0]["disposition_state"],
+            {
+                "recorded": True,
+                "source": "lead_dispositions",
+                "disposition_id": self.store.get_lead_disposition(
+                    "turn-r5-accepted"
+                )["disposition_id"],
+                "action": "accept",
+                "work_item_revision": 2,
+                "candidate_id": "candidate-r2",
+            },
+        )
+
     async def test_runtime_is_idempotent_after_finding_delivery(self) -> None:
         self._record_turn("turn-2")
         self.broker.process_pending()
