@@ -16,9 +16,11 @@ required=(
   instructions/agent-routing.yaml
   instructions/model-routing.md
   scripts/qiqi-mcp-server.sh
+  scripts/qiqi-supervisor-broker.sh
   scripts/migrate-work-item-filenames-v27.py
   mcp/qiqi_delegate/server.py
   mcp/qiqi_delegate/core.py
+  mcp/qiqi_delegate/supervisor_broker.py
   .codex/config.toml
 )
 for rel in "${required[@]}"; do
@@ -30,6 +32,8 @@ command -v uv >/dev/null 2>&1 || fail 'missing command: uv'
 command -v python3 >/dev/null 2>&1 || fail 'missing command: python3'
 
 launcher="$workspace_root/scripts/qiqi-mcp-server.sh"
+supervisor_launcher="$workspace_root/scripts/qiqi-supervisor-broker.sh"
+supervisor_broker="$mcp_project/supervisor_broker.py"
 routing="$workspace_root/instructions/agent-routing.yaml"
 config="$workspace_root/.codex/config.toml"
 agents="$workspace_root/AGENTS.md"
@@ -44,6 +48,18 @@ for pattern in \
   'export QIQI_WORK_ITEMS_DIR="$work_items_dir"'; do
   grep -Fq -- "$pattern" "$launcher" || fail "launcher missing delegated Work Items contract: $pattern"
 done
+
+for pattern in \
+  'QIQI_HERDR_SESSION' \
+  'supervisor_broker.py'; do
+  grep -Fq -- "$pattern" "$supervisor_launcher" || fail "Supervisor launcher missing runtime contract: $pattern"
+done
+
+grep -Fq 'events.subscribe' "$supervisor_broker" || \
+  fail 'Supervisor broker must use Herdr events.subscribe as its primary wakeup stream'
+if grep -Eq 'pane[.]read|agent[.]read' "$supervisor_broker"; then
+  fail 'Supervisor broker must not read terminal/pane output as semantic truth'
+fi
 
 grep -Fq 'command: codex' "$routing" || fail 'Codex must resolve the native codex CLI'
 grep -Fq 'command: claude' "$routing" || fail 'Claude must resolve the native claude CLI'
@@ -314,8 +330,10 @@ PY
 fi
 
 bash -n "$launcher"
+bash -n "$supervisor_launcher"
 bash -n "$workspace_root/scripts/workspace-check.sh"
 python3 -m py_compile "$workspace_root/scripts/migrate-work-item-filenames-v27.py"
+python3 -m py_compile "$supervisor_broker"
 
 uv run --project "$mcp_project" python -m unittest discover -s "$mcp_project/tests" -v
 
