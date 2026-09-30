@@ -394,23 +394,25 @@ async def submit_decisions(
     parsed = decisions_from_payload(
         [decision.model_dump(exclude_none=True, exclude_defaults=True) for decision in decisions]
     )
-    disposition_links: list[tuple[str, str, str]] = []
+    disposition_links: list[tuple[str, str | None, str | None]] = []
     for decision in parsed:
         node = _graph_runtime.store.get_node(graph_run_id, decision.node_id)
         if node is None:
             raise RuntimeError(
                 f"persisted graph run is missing node state for {decision.node_id!r}"
             )
-        turn_id = node.get("turn_id")
-        attempt_id = node.get("current_attempt_id")
-        if not isinstance(turn_id, str) or not turn_id:
-            raise RuntimeError(
-                f"TaskGraph decision for {decision.node_id!r} has no captured Peer turn_id"
-            )
-        if not isinstance(attempt_id, str) or not attempt_id:
-            raise RuntimeError(
-                f"TaskGraph decision for {decision.node_id!r} has no current attempt_id"
-            )
+        raw_turn_id = node.get("turn_id")
+        raw_attempt_id = node.get("current_attempt_id")
+        turn_id = raw_turn_id if isinstance(raw_turn_id, str) and raw_turn_id else None
+        attempt_id = (
+            raw_attempt_id
+            if isinstance(raw_attempt_id, str) and raw_attempt_id
+            else None
+        )
+        # A recoverable execution/capture failure can legitimately reach review without
+        # an actual Peer response. There is no communication loop to disposition until a
+        # captured turn exists, so preserve the TaskGraph recovery path and emit no fake
+        # Lead-disposition event.
         disposition_links.append((decision.node_id, turn_id, attempt_id))
 
     result = _graph_runtime.submit_decisions(
@@ -422,10 +424,11 @@ async def submit_decisions(
         parsed, disposition_links, strict=True
     ):
         # Real TaskGraph execution delegates through delegate_repo_task, which persists
-        # the canonical raw turn before returning. Unit/integration executors may return
-        # a synthetic normalized turn_id without raw SessionStore evidence; never invent
-        # that evidence merely to satisfy SLP instrumentation.
-        if _store.get_turn(turn_id) is None:
+        # the canonical raw turn before returning. Recoverable failures may have no turn
+        # at all, and unit/integration executors may return a synthetic normalized turn_id
+        # without raw SessionStore evidence; never invent evidence merely to satisfy SLP
+        # instrumentation.
+        if turn_id is None or _store.get_turn(turn_id) is None:
             continue
         reason = f"TaskGraph semantic decision: {decision.action}"
         if decision.feedback:
