@@ -106,6 +106,23 @@ part of its control surface.
 This is a runtime capability boundary and defense-in-depth policy. It is not an OS/container
 security claim against a malicious local process with independent host access.
 
+## Phase 4 semantic integration
+
+The runtime now emits/records the semantic inputs consumed by the deterministic broker:
+
+- tracked TaskPacket observation records `work_item.revision_changed` idempotently;
+- canonical Work Item mutation must call `record_work_item_revision` immediately;
+- direct Peer signals are recorded with `record_peer_signal`;
+- direct downstream consumption uses `record_dependency_consumed`;
+- TaskGraph downstream execution automatically records each accepted upstream dependency turn;
+- every direct/TaskGraph repository delegation uses the existing repository ownership lock and
+  emits conservative `write_scope.claimed/released` events with scope `["*"]`;
+- explicit Lead `accept` also emits `candidate.accepted`.
+
+The current `["*"]` claim mirrors the actual qiqi_delegate same-repository serialization
+boundary. It is intentionally conservative and does not replace Lead's finer-grained write-scope
+planning.
+
 ## Herdr wakeup contract
 
 The broker uses raw `events.subscribe` only as a wakeup stream. On startup, reconnect, topology
@@ -139,3 +156,8 @@ scripts/qiqi-supervisor-broker.sh --once
 
 The broker must remain running for continuous supervision. If it is absent or unhealthy, the
 workspace must not claim continuous supervision.
+
+CI includes an autonomous E2E-08 state-machine integration test that proves broker case opening,
+Supervisor review, Lead wakeup, explicit Lead disposition, and semantic case closure without a
+Human relay. A real installed workspace must still run the live Herdr E2E-08 operator scenario
+before the deployment claims continuous supervision for that environment.
