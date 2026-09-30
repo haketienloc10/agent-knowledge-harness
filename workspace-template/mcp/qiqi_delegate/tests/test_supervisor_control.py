@@ -36,7 +36,21 @@ class SupervisorFindingContractTests(unittest.TestCase):
         packet = build_audit_packet(case)
         encoded = json.dumps(packet)
 
+        self.assertEqual(packet["version"], 2)
         self.assertEqual(packet["case_id"], "case-1")
+        self.assertEqual(
+            packet["rule_contract"],
+            {
+                "predicate": (
+                    "An actual Peer response exists for the exact turn and no explicit Lead "
+                    "disposition is recorded for that same Peer turn."
+                ),
+                "issue_when": [
+                    "peer_response_locator.turn_id is present",
+                    "disposition_state.recorded is false",
+                ],
+            },
+        )
         self.assertEqual(
             packet["lead_brief_locator"],
             {"turn_id": "turn-1", "source": "turns.task_packet_json"},
@@ -49,6 +63,56 @@ class SupervisorFindingContractTests(unittest.TestCase):
         self.assertNotIn("agent_response", packet)
         self.assertNotIn("task_packet_json", packet)
         self.assertNotIn("RAW PEER RESPONSE", encoded)
+
+    def test_audit_packet_exposes_normative_contract_for_every_broker_rule(self) -> None:
+        cases = {
+            "R1": {"turn_id": "turn-r1"},
+            "R2": {
+                "turn_id": "turn-r2-consumer",
+                "details": {"source_turn_id": "turn-r2-source"},
+            },
+            "R3": {
+                "turn_id": None,
+                "details": {
+                    "claim_ids": ["claim-a", "claim-b"],
+                    "scope": ["src"],
+                },
+            },
+            "R4": {
+                "turn_id": "turn-r4",
+                "details": {"signal": "BLOCKED"},
+            },
+            "R5": {
+                "turn_id": "turn-r5",
+                "details": {"stale_revision": 1, "current_revision": 2},
+            },
+        }
+
+        for rule, overrides in cases.items():
+            with self.subTest(rule=rule):
+                case = {
+                    "case_id": f"case-{rule}",
+                    "rule": rule,
+                    "work_item_id": "e2e:contract",
+                    "work_item_revision": 2,
+                    "candidate_id": None,
+                    "details": {},
+                    **overrides,
+                }
+                packet = build_audit_packet(case)
+                self.assertEqual(packet["version"], 2)
+                self.assertTrue(packet["rule_contract"]["predicate"])
+                self.assertTrue(packet["rule_contract"]["issue_when"])
+
+    def test_audit_packet_rejects_unknown_rule_without_guessing(self) -> None:
+        with self.assertRaisesRegex(ValueError, "unsupported Supervisor rule"):
+            build_audit_packet(
+                {
+                    "case_id": "case-unknown",
+                    "rule": "R99",
+                    "details": {},
+                }
+            )
 
     def test_audit_packet_reports_existing_lead_disposition(self) -> None:
         packet = build_audit_packet(
