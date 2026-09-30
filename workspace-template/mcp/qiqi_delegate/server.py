@@ -15,7 +15,7 @@ import tempfile
 import time
 import uuid
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 import yaml
 from mcp.server import MCPServer
@@ -30,6 +30,7 @@ from core import (
     new_turn_id,
     render_task_prompt,
     resolve_capture_events,
+    task_packet_work_item_ref,
 )
 
 _workspace_root_env = os.environ.get("QIQI_WORKSPACE_ROOT")
@@ -101,6 +102,7 @@ RepositoryName = Annotated[
         )
     ),
 ]
+LeadDispositionAction = Literal["accept", "reject", "repair", "defer", "resolve"]
 
 
 mcp = MCPServer(
@@ -134,8 +136,11 @@ mcp = MCPServer(
         "explicitly reviewed. Codex "
         "trusts only the exact QiQi session hook by matching its computed trusted_hash; global "
         "hook-trust bypass is forbidden. Settled/failed/blocked are runtime lifecycle states, "
-        "not semantic completion. Runtime session ownership is persisted in MCP-owned SQLite "
-        "state, not in a Markdown result artifact."
+        "not semantic completion. Direct actionable Peer turns must be closed with the "
+        "record_lead_disposition tool; TaskGraph submit_decisions bridges its semantic "
+        "decision into the same runtime disposition stream. Runtime session ownership and "
+        "SLP semantic transitions are persisted in the same MCP-owned SQLite state, not in "
+        "Markdown result artifacts."
     ),
 )
 
@@ -1090,6 +1095,35 @@ def _prepare_resume(repository: str, agent_name: str, session_id: str) -> None:
 
 @mcp.tool()
 @_public_tool_errors
+async def record_lead_disposition(
+    turn_id: str,
+    action: LeadDispositionAction,
+    reason: str,
+    work_item_id: str | None = None,
+    work_item_revision: int | None = None,
+    candidate_id: str | None = None,
+) -> dict[str, Any]:
+    """Record QiQi's explicit semantic disposition for one captured Peer turn.
+
+    This is runtime communication-loop state, not a replacement for the canonical Work
+    Item. The exact Peer response remains only in turns.agent_response. For tracked work,
+    work_item_id/work_item_revision may be supplied explicitly; when omitted, the store
+    derives them only from the canonical Work Item locator already present in the captured
+    TaskPacket. Repeating the exact same disposition is idempotent; attempting a different
+    second disposition for the same Peer turn fails closed.
+    """
+    return _store.record_lead_disposition(
+        turn_id=turn_id,
+        action=action,
+        reason=reason,
+        work_item_id=work_item_id,
+        work_item_revision=work_item_revision,
+        candidate_id=candidate_id,
+    )
+
+
+@mcp.tool()
+@_public_tool_errors
 async def get_turn_capture_review(capture_review_id: str) -> dict[str, Any]:
     """Hydrate raw Stop candidates for one previously ambiguous delegated turn."""
     capture_review_id = capture_review_id.strip()
@@ -1187,6 +1221,15 @@ async def delegate_repo_task(
     workspace_id: str | None = None
     capture_path: Path | None = None
     qiqi_turn_id = new_turn_id()
+    work_item_id, work_item_revision = task_packet_work_item_ref(packet)
+    _store.record_slp_event(
+        event_type="peer.dispatched",
+        turn_id=qiqi_turn_id,
+        repository=repository,
+        route=route,
+        work_item_id=work_item_id,
+        work_item_revision=work_item_revision,
+    )
     try:
         with tempfile.TemporaryDirectory(prefix="qiqi-handoff-") as temp_dir:
             sink = Path(temp_dir).resolve()
@@ -1223,6 +1266,16 @@ async def delegate_repo_task(
             _store.register_session(native_session_id, repository, agent_name)
 
             if status == "blocked":
+                _store.record_slp_event(
+                    event_type="peer.signal",
+                    turn_id=qiqi_turn_id,
+                    session_id=native_session_id,
+                    repository=repository,
+                    route=route,
+                    work_item_id=work_item_id,
+                    work_item_revision=work_item_revision,
+                    payload={"signal": "runtime_blocked"},
+                )
                 return {
                     "session_id": native_session_id,
                     "turn_id": qiqi_turn_id,
