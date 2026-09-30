@@ -125,7 +125,7 @@ class SlpRuntimeStoreTests(unittest.TestCase):
         events = self.store.list_slp_events()
         self.assertEqual(
             [item["event_type"] for item in events],
-            ["peer.response", "lead.disposition"],
+            ["peer.response", "lead.disposition", "candidate.accepted"],
         )
         self.assertEqual(
             events[-1]["payload"],
