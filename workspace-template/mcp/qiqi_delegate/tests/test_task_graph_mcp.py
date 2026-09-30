@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from core import SessionStore, build_task_packet  # noqa: E402
 from mcp import Client  # noqa: E402
 from task_graph_mcp import mcp  # noqa: E402
 from task_graph_runtime import GraphRuntime  # noqa: E402
@@ -105,7 +106,9 @@ class TaskGraphMcpTests(unittest.IsolatedAsyncioTestCase):
         self.temp = tempfile.TemporaryDirectory()
         db_path = Path(self.temp.name) / ".qiqi" / "state" / "qiqi_delegate.sqlite3"
         self.runtime = GraphRuntime(GraphRuntimeStore(db_path))
+        self.slp_store = SessionStore(db_path)
         self.runtime_patch = patch("task_graph_mcp._graph_runtime", self.runtime)
+        self.store_patch = patch("task_graph_mcp._store", self.slp_store)
         self.registry_patch = patch(
             "task_graph_mcp._load_repo_registry",
             return_value={
@@ -114,12 +117,60 @@ class TaskGraphMcpTests(unittest.IsolatedAsyncioTestCase):
             },
         )
         self.runtime_patch.start()
+        self.store_patch.start()
         self.registry_patch.start()
 
     def tearDown(self) -> None:
         self.registry_patch.stop()
+        self.store_patch.stop()
         self.runtime_patch.stop()
         self.temp.cleanup()
+
+    def recording_delegate(self, *results: dict) -> AsyncMock:
+        queue = list(results)
+
+        async def execute(**kwargs):
+            if not queue:
+                raise AssertionError("recording delegate received an unexpected extra call")
+            result = queue.pop(0)
+            route = kwargs["route"]
+            agent = "claude" if route.startswith("claude") else "codex"
+            context = kwargs.get("context")
+            packet = build_task_packet(
+                objective=kwargs["objective"],
+                scope=kwargs["scope"],
+                acceptance_criteria=kwargs["acceptance_criteria"],
+                out_of_scope=kwargs.get("out_of_scope"),
+                context=context.to_core_dict() if context is not None else None,
+                constraints=kwargs.get("constraints"),
+                known_unknowns=kwargs.get("known_unknowns"),
+            )
+            turn_id = result["turn_id"]
+            self.slp_store.record_slp_event(
+                event_type="peer.dispatched",
+                turn_id=turn_id,
+                repository=kwargs["repository"],
+                route=route,
+            )
+            if result["state"] in {"settled", "failed"}:
+                self.slp_store.record_turn(
+                    turn_id=turn_id,
+                    session_id=result["session_id"],
+                    repository=kwargs["repository"],
+                    agent=agent,
+                    route=route,
+                    state=result["state"],
+                    native_turn_id=None,
+                    packet=packet,
+                    agent_response=result["agent_response"],
+                )
+            elif result["state"] == "blocked":
+                self.slp_store.register_session(
+                    result["session_id"], kwargs["repository"], agent
+                )
+            return result
+
+        return AsyncMock(side_effect=execute)
 
     async def test_public_graph_tools_are_registered(self) -> None:
         tools = await mcp.list_tools()
@@ -127,6 +178,7 @@ class TaskGraphMcpTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(
             {
                 "delegate_repo_task",
+                "record_lead_disposition",
                 "start_graph",
                 "get_graph",
                 "get_node_review",
@@ -286,8 +338,8 @@ class TaskGraphMcpTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("repo_task", error_text(result))
 
     async def test_outer_loop_executes_reviews_and_accepts_one_node(self) -> None:
-        delegate = AsyncMock(
-            return_value={
+        delegate = self.recording_delegate(
+            {
                 "session_id": "native-session-contracts",
                 "turn_id": "qiqi-turn-contracts",
                 "state": "settled",
@@ -420,21 +472,19 @@ class TaskGraphMcpTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(reviewable["review_required"][0]["attempt_id"])
 
     async def test_get_node_review_hydrates_accepted_upstream_evidence_for_replan(self) -> None:
-        delegate = AsyncMock(
-            side_effect=[
-                {
-                    "session_id": "native-session-contracts",
-                    "turn_id": "qiqi-turn-contracts",
-                    "state": "settled",
-                    "agent_response": "accepted contract evidence",
-                },
-                {
-                    "session_id": "native-session-backend",
-                    "turn_id": "qiqi-turn-backend",
-                    "state": "settled",
-                    "agent_response": "backend found a replan dependency",
-                },
-            ]
+        delegate = self.recording_delegate(
+            {
+                "session_id": "native-session-contracts",
+                "turn_id": "qiqi-turn-contracts",
+                "state": "settled",
+                "agent_response": "accepted contract evidence",
+            },
+            {
+                "session_id": "native-session-backend",
+                "turn_id": "qiqi-turn-backend",
+                "state": "settled",
+                "agent_response": "backend found a replan dependency",
+            },
         )
         with patch("task_graph_mcp.delegate_repo_task", delegate):
             async with Client(mcp) as client:
@@ -485,8 +535,8 @@ class TaskGraphMcpTests(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_replan_decision_blocks_current_graph_and_returns_handoff_signal(self) -> None:
-        delegate = AsyncMock(
-            return_value={
+        delegate = self.recording_delegate(
+            {
                 "session_id": "native-session-contracts",
                 "turn_id": "qiqi-turn-contracts",
                 "state": "settled",
