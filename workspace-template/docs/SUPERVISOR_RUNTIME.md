@@ -14,6 +14,12 @@ workspace: slp-control
 
 The Lead and Supervisor are independent Herdr agents. Supervisor is not a child of Lead.
 
+The persistent control-plane default model for both agents is `gpt-5.6-luna`.
+The persisted control-plane identity includes Herdr session + Lead model + Supervisor model; if
+that identity changes, the runtime closes the stale `slp-control` workspace and recreates the
+agents instead of silently reusing sessions launched with an older model.
+
+
 ## Sources of truth
 
 ```text
