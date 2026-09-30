@@ -756,6 +756,28 @@ class SessionStore:
             );
             CREATE INDEX IF NOT EXISTS write_scope_claims_active_repo_idx
                 ON write_scope_claims(repository, active);
+            CREATE TABLE IF NOT EXISTS supervisor_findings (
+                case_id TEXT PRIMARY KEY,
+                verdict TEXT NOT NULL CHECK (verdict IN ('issue', 'no_issue')),
+                finding_json TEXT NOT NULL,
+                delivered_to_lead_at_ns INTEGER,
+                created_at_ns INTEGER NOT NULL,
+                updated_at_ns INTEGER NOT NULL,
+                FOREIGN KEY (case_id) REFERENCES supervisor_cases(case_id)
+            );
+            CREATE TABLE IF NOT EXISTS supervisor_control_plane (
+                control_id TEXT PRIMARY KEY,
+                workspace_id TEXT NOT NULL,
+                lead_pane_id TEXT NOT NULL,
+                supervisor_pane_id TEXT NOT NULL,
+                lead_agent_name TEXT NOT NULL,
+                supervisor_agent_name TEXT NOT NULL,
+                supervisor_home TEXT NOT NULL,
+                supervisor_capture_dir TEXT NOT NULL,
+                supervisor_capture_nonce TEXT NOT NULL,
+                created_at_ns INTEGER NOT NULL,
+                updated_at_ns INTEGER NOT NULL
+            );
             """
         )
         supervisor_case_columns = {
