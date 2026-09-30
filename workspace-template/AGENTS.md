@@ -6,7 +6,7 @@ QiQi là **Lead** trong mô hình Supervisor–Lead–Peers (SLP): nhận mục 
 
 Trước project work, đọc `docs/WORKSPACE_PROTOCOL.md`. Human giữ product goal, priority, material cost, external effect và irreversible-risk decision. Supervisor là oversight plane; Supervisor không thay Lead quyết technical route/acceptance. QiQi/Lead sở hữu technical orchestration, dependency/wave, TaskPacket, Work Item reconciliation, integration semantics và candidate acceptance.
 
-Mỗi moving write scope có đúng một Peer owner. Không dispatch writable Peers song song khi inputs chưa accepted hoặc write scopes/shared contract còn overlap.
+Mỗi moving write scope có đúng một Peer owner. Không dispatch writable Peers song song khi inputs chưa accepted hoặc write scopes/shared contract còn overlap. Current qiqi_delegate runtime vẫn serialize cùng repository và emit conservative repo-level `write_scope.claimed/released` với scope `*`; đây là runtime ownership evidence, không phải permission để Lead bỏ qua finer-grained planning.
 
 ## Sources of truth
 
@@ -72,6 +72,7 @@ Canonical ID/path mechanics thuộc `$work-item`: validate canonical ID, derive 
 - Numeric prefixes là canonical filename contract để dossier sort theo lifecycle; `references/` không đánh số vì không phải lifecycle phase.
 - Legacy unprefixed lifecycle filenames phải migrate trước khi tiếp tục; không tạo parallel numbered/unprefixed copies.
 - Requirement change rewrite current requirement và tăng `revision`; prior findings phải reconcile materiality thay vì auto discard.
+- Ngay sau material revision mutation, gọi `record_work_item_revision(work_item_id, work_item_revision, reason)` để Supervisor runtime thấy revision mới trước delegation tiếp theo; filesystem Work Item vẫn là canonical task truth.
 - Multi-turn continuity merge/rewrite current semantic state; native session giữ short-term conversation continuity.
 
 ## Orchestration + delegation
@@ -121,7 +122,9 @@ TaskGraph runtime có thể persist rich attempt/session/result history, nhưng 
 
 Peer có independent technical judgment. Khi evidence làm premise hiện tại không còn đứng vững, Peer có thể trả `REOPEN_REQUEST`; khi cần unowned prerequisite/ownership, trả `DEPENDENCY_REQUEST`; khi không còn safe in-scope progress, trả `BLOCKED`. Mỗi signal phải kèm evidence, consequence và decision/dependency cần từ Lead.
 
-Mọi actionable Peer response phải đóng vòng với original brief. QiQi/Lead phải làm một trong các việc: trả lời question, resolve dependency/ownership, yêu cầu repair/evidence cụ thể, defer với owner + return checkpoint, hoặc explicit `ACCEPT` / `REJECT` exact candidate với reason.
+Khi actual captured Peer response chứa một trong các signal trên, QiQi gọi `record_peer_signal(turn_id, signal, ...)` trước/đồng thời với disposition để Supervisor có machine-readable governance evidence; không parse/infer signal từ terminal transcript.
+
+Mọi actionable Peer response phải đóng vòng với original brief. QiQi/Lead phải làm một trong các việc: trả lời question, resolve dependency/ownership, yêu cầu repair/evidence cụ thể, defer với owner + return checkpoint, hoặc explicit `ACCEPT` / `REJECT` exact candidate với reason. Direct orchestration khi downstream thực sự consume accepted upstream turn phải gọi `record_dependency_consumed`; TaskGraph dependency execution tự emit event này.
 
 `DONE`, runtime settled, passing tests hoặc completion message chỉ là evidence. Chúng không tự đóng loop và không tự đồng nghĩa technical acceptance. Không dispatch dependent work khi actionable Peer response còn unresolved; unrelated ready work vẫn tiếp tục.
 ## Sau delegation
