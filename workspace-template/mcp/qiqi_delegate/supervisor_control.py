@@ -233,15 +233,35 @@ def render_lead_finding(finding: dict[str, Any]) -> str:
     if finding["status"] != "issue":
         raise ValueError("only issue findings may be delivered to Lead")
     evidence_lines = "\n".join(f"- {item}" for item in finding["evidence"])
+    context = finding.get("_case_context")
+    locator_lines: list[str] = []
+    if isinstance(context, dict):
+        turn_id = context.get("turn_id")
+        if isinstance(turn_id, str) and turn_id:
+            locator_lines.append(f"peer_turn_id: {turn_id}")
+        work_item_id = context.get("work_item_id")
+        revision = context.get("work_item_revision")
+        if isinstance(work_item_id, str) and work_item_id and isinstance(revision, int):
+            locator_lines.append(f"work_item: {work_item_id}@{revision}")
+        candidate_id = context.get("candidate_id")
+        if isinstance(candidate_id, str) and candidate_id:
+            locator_lines.append(f"candidate_id: {candidate_id}")
+    locator_block = (
+        "Runtime locator:\n" + "\n".join(locator_lines) + "\n"
+        if locator_lines
+        else ""
+    )
     return (
         "[SLP Supervisor governance finding]\n"
         f"case_id: {finding['case_id']}\n"
+        f"{locator_block}"
         f"Observation: {finding['observation']}\n"
         "Evidence:\n"
         f"{evidence_lines}\n"
         f"Open question: {finding['open_question_for_lead']}\n\n"
         "This is an oversight finding, not technical acceptance/rejection or an "
         "implementation instruction. Reconcile it through normal Lead authority. "
+        "Use the exact runtime locator above when recording semantic disposition. "
         "The case will close only from new semantic runtime evidence."
     )
 
@@ -398,7 +418,8 @@ class SupervisorControlStore:
     def issue_findings_needing_delivery(self, *, limit: int = 20) -> list[dict[str, Any]]:
         with self._connect() as conn:
             rows = conn.execute(
-                "SELECT f.finding_json FROM supervisor_findings f "
+                "SELECT f.finding_json, c.turn_id, c.work_item_id, "
+                "c.work_item_revision, c.candidate_id FROM supervisor_findings f "
                 "JOIN supervisor_cases c ON c.case_id = f.case_id "
                 "WHERE f.verdict = 'issue' "
                 "AND f.delivered_to_lead_at_ns IS NULL "
@@ -406,7 +427,17 @@ class SupervisorControlStore:
                 "ORDER BY c.opened_event_seq, c.case_id LIMIT ?",
                 (limit,),
             ).fetchall()
-        return [json.loads(row["finding_json"]) for row in rows]
+        result: list[dict[str, Any]] = []
+        for row in rows:
+            finding = json.loads(row["finding_json"])
+            finding["_case_context"] = {
+                "turn_id": row["turn_id"],
+                "work_item_id": row["work_item_id"],
+                "work_item_revision": row["work_item_revision"],
+                "candidate_id": row["candidate_id"],
+            }
+            result.append(finding)
+        return result
 
     def mark_delivered_to_lead(self, case_id: str) -> bool:
         case_id = _required_text(case_id, "case_id")
