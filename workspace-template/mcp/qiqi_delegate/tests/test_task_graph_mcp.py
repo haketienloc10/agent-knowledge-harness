@@ -437,7 +437,12 @@ class TaskGraphMcpTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(disposition["attempt_id"], attempt_id)
                 self.assertEqual(
                     [event["event_type"] for event in self.slp_store.list_slp_events()],
-                    ["peer.dispatched", "peer.response", "lead.disposition"],
+                    [
+                        "peer.dispatched",
+                        "peer.response",
+                        "lead.disposition",
+                        "candidate.accepted",
+                    ],
                 )
 
         delegate.assert_awaited_once_with(
