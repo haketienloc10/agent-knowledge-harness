@@ -116,6 +116,26 @@ class SupervisorFindingContractTests(unittest.TestCase):
         self.assertNotIn("delegate_repo_task", message)
         self.assertNotIn("record_lead_disposition(", message)
 
+    def test_lead_message_includes_exact_runtime_locator(self) -> None:
+        message = render_lead_finding(
+            {
+                "case_id": "case-locator",
+                "status": "issue",
+                "observation": "The loop is incomplete.",
+                "evidence": ["disposition_state.recorded=false"],
+                "open_question_for_lead": "What explicit disposition closes this turn?",
+                "_case_context": {
+                    "turn_id": "turn-exact",
+                    "work_item_id": "e2e:008",
+                    "work_item_revision": 7,
+                    "candidate_id": "sha256:exact",
+                },
+            }
+        )
+        self.assertIn("peer_turn_id: turn-exact", message)
+        self.assertIn("work_item: e2e:008@7", message)
+        self.assertIn("candidate_id: sha256:exact", message)
+
     def test_default_supervisor_home_is_outside_workspace_project_tree(self) -> None:
         workspace = Path("/tmp/project/workspace")
         home = default_supervisor_home(
@@ -201,6 +221,10 @@ class AutonomousSupervisorRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result, {"reviewed": 1, "delivered_to_lead": 1})
         self.assertEqual(len(fake.supervisor_packets), 1)
         self.assertEqual(len(fake.lead_findings), 1)
+        self.assertEqual(
+            fake.lead_findings[0]["_case_context"]["turn_id"],
+            "turn-1",
+        )
         case = self.broker.list_cases()[0]
         self.assertEqual(case["status"], "WAITING_FOR_EVIDENCE")
         self.assertIsNone(case["closed_event_seq"])
