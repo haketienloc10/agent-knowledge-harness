@@ -121,6 +121,8 @@ for tool_name in \
 done
 
 grep -Fq 'command: codex' "$routing" || fail 'Codex must resolve the native codex CLI'
+grep -Fq 'model: gpt-5.6-luna' "$routing" || \
+  fail 'codex-balanced route must use gpt-5.6-luna'
 grep -Fq 'command: claude' "$routing" || fail 'Claude must resolve the native claude CLI'
 [[ "$(grep -Fc 'env: QIQI_WORK_ITEMS_DIR' "$routing")" -eq 2 ]] || \
   fail 'Codex and Claude must both declare QIQI_WORK_ITEMS_DIR additional_dirs'
