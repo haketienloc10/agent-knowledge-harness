@@ -424,6 +424,18 @@ class TaskGraphMcpTests(unittest.IsolatedAsyncioTestCase):
                         }
                     ],
                 )
+                disposition = self.slp_store.get_lead_disposition(
+                    "qiqi-turn-contracts"
+                )
+                self.assertIsNotNone(disposition)
+                self.assertEqual(disposition["action"], "accept")
+                self.assertEqual(disposition["graph_run_id"], run_id)
+                self.assertEqual(disposition["node_id"], "contracts")
+                self.assertEqual(disposition["attempt_id"], attempt_id)
+                self.assertEqual(
+                    [event["event_type"] for event in self.slp_store.list_slp_events()],
+                    ["peer.dispatched", "peer.response", "lead.disposition"],
+                )
 
         delegate.assert_awaited_once_with(
             repository="contracts",
