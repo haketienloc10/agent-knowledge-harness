@@ -242,6 +242,38 @@ class SupervisorBrokerTests(unittest.TestCase):
         self.broker.process_pending()
         self.assertEqual(self.cases("R5")[0]["status"], "CLOSED")
 
+    def test_r5_requirement_change_after_accept_still_opens_stale_candidate_case(self) -> None:
+        self.record_turn(
+            "turn-accepted-stale",
+            work_item_id="e2e:010",
+            revision=2,
+        )
+        self.broker.process_pending()
+        self.store.record_lead_disposition(
+            turn_id="turn-accepted-stale",
+            action="accept",
+            reason="candidate met revision 2 requirements",
+            work_item_id="e2e:010",
+            work_item_revision=2,
+            candidate_id="candidate-r2",
+        )
+        self.broker.process_pending()
+
+        self.store.record_slp_event(
+            event_type="work_item.revision_changed",
+            work_item_id="e2e:010",
+            work_item_revision=3,
+            payload={"reason": "material requirement change"},
+        )
+        self.broker.process_pending()
+
+        cases = self.cases("R5")
+        self.assertEqual(len(cases), 1)
+        self.assertEqual(cases[0]["status"], "OPEN")
+        self.assertEqual(cases[0]["turn_id"], "turn-accepted-stale")
+        self.assertEqual(cases[0]["details"]["stale_revision"], 2)
+        self.assertEqual(cases[0]["details"]["current_revision"], 3)
+
     def test_phase2_cases_store_references_not_raw_peer_response(self) -> None:
         raw = "RAW-PEER-BODY-" + ("x" * 4000)
         self.record_turn("turn-raw", response=raw)
