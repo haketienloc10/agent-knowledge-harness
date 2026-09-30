@@ -41,6 +41,61 @@ _FINDING_KEYS = frozenset(
     }
 )
 
+_RULE_CONTRACTS: dict[str, dict[str, Any]] = {
+    "R1": {
+        "predicate": (
+            "An actual Peer response exists for the exact turn and no explicit Lead "
+            "disposition is recorded for that same Peer turn."
+        ),
+        "issue_when": [
+            "peer_response_locator.turn_id is present",
+            "disposition_state.recorded is false",
+        ],
+    },
+    "R2": {
+        "predicate": (
+            "A downstream dependency was consumed before the exact upstream Peer "
+            "response had an explicit Lead ACCEPT disposition."
+        ),
+        "issue_when": [
+            "governance_facts.source_turn_id is present",
+            "the source Peer turn does not have disposition action accept",
+        ],
+    },
+    "R3": {
+        "predicate": (
+            "Two active writable ownership claims overlap within the same repository "
+            "while both claims remain active."
+        ),
+        "issue_when": [
+            "governance_facts identifies both active claim ids",
+            "governance_facts identifies the overlapping writable scope",
+        ],
+    },
+    "R4": {
+        "predicate": (
+            "A Peer REOPEN_REQUEST, DEPENDENCY_REQUEST, or BLOCKED signal remains "
+            "unresolved by subsequent Lead semantic evidence."
+        ),
+        "issue_when": [
+            "governance_facts.signal is REOPEN_REQUEST, DEPENDENCY_REQUEST, or BLOCKED",
+            "the case remains open for the exact Peer turn",
+        ],
+    },
+    "R5": {
+        "predicate": (
+            "A Peer response was produced under an older Work Item revision than the "
+            "current material requirement revision and is therefore stale for current "
+            "acceptance. A disposition recorded for the older revision does not make "
+            "that response current."
+        ),
+        "issue_when": [
+            "governance_facts.stale_revision is lower than governance_facts.current_revision",
+            "peer_response_locator.turn_id identifies the stale Peer response",
+        ],
+    },
+}
+
 SUPERVISOR_AGENTS = """# Autonomous SLP Supervisor
 
 You are the Supervisor governance plane for one SLP workspace.
@@ -57,6 +112,12 @@ Authority boundary:
 - You do not prescribe implementation.
 - You identify a concrete governance deviation, or state that the bounded evidence does
   not establish one.
+- AuditPacket.rule_contract is the normative meaning of the deterministic broker rule.
+  Evaluate whether the packet facts satisfy that predicate; do not reinterpret an opaque
+  rule id from general judgment, severity, technical quality, or implementation outcome.
+- Return status=issue when the bounded packet facts satisfy rule_contract.issue_when.
+  Return status=no_issue only when the bounded packet is missing or contradicts evidence
+  required by that rule contract.
 
 Return exactly one JSON object and no Markdown:
 {
@@ -118,6 +179,9 @@ def default_supervisor_home(
 def build_audit_packet(case: dict[str, Any]) -> dict[str, Any]:
     case_id = _required_text(case.get("case_id"), "case_id")
     rule = _required_text(case.get("rule"), "rule")
+    rule_contract = _RULE_CONTRACTS.get(rule)
+    if rule_contract is None:
+        raise ValueError(f"unsupported Supervisor rule: {rule!r}")
     turn_id = case.get("turn_id")
     if turn_id is not None:
         turn_id = _required_text(turn_id, "turn_id")
@@ -154,9 +218,13 @@ def build_audit_packet(case: dict[str, Any]) -> dict[str, Any]:
         }
 
     return {
-        "version": 1,
+        "version": 2,
         "case_id": case_id,
         "rule": rule,
+        "rule_contract": {
+            "predicate": rule_contract["predicate"],
+            "issue_when": list(rule_contract["issue_when"]),
+        },
         "work_item": work_item,
         "lead_brief_locator": (
             {"turn_id": turn_id, "source": "turns.task_packet_json"}
@@ -177,6 +245,7 @@ def build_audit_packet(case: dict[str, Any]) -> dict[str, Any]:
 def render_supervisor_prompt(packet: dict[str, Any]) -> str:
     return (
         "Audit this bounded SLP governance case. Use only the AuditPacket below. "
+        "Treat rule_contract as the normative deterministic rule meaning. "
         "Do not inspect files, terminals, transcripts, agents, or tools. "
         "Return exactly the required JSON object.\n\nAuditPacket:\n"
         + json.dumps(
