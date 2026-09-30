@@ -1,0 +1,27 @@
+{
+  "version": 59,
+  "from_ref": "1198600bfb2f63ebef0ef1f4d6e62c1323d117d5",
+  "to_ref": "99bbbb0a52622014a7c675fd23ec33ee9b7165ac",
+  "description": "correct live E2E Work Item revision semantics and Supervisor AuditPacket disposition state: reserve revision increments for material requirement/acceptance/scope changes rather than waiting/done or disposition reconciliation, keep the no-requirement-change E2E fixture on one revision, hydrate any existing exact-turn Lead disposition into bounded AuditPackets, and add regression coverage proving R5 still opens after a real post-accept requirement change",
+  "workspace": {
+    "merge": [
+      "workspace-template/AGENTS.md",
+      "workspace-template/docs/SUPERVISOR_RUNTIME.md",
+      "workspace-template/scripts/workspace-check.sh"
+    ],
+    "replace": [
+      "workspace-template/mcp/qiqi_delegate/supervisor_control.py",
+      "workspace-template/mcp/qiqi_delegate/tests/test_supervisor_broker.py",
+      "workspace-template/mcp/qiqi_delegate/tests/test_supervisor_control.py",
+      "workspace-template/scripts/e2e-autonomous-supervisor.sh"
+    ],
+    "delete": [],
+    "manual_review": []
+  },
+  "repo": {
+    "merge": [],
+    "replace": [],
+    "delete": [],
+    "manual_review": []
+  }
+}
