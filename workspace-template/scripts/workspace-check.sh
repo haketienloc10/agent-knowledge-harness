@@ -70,9 +70,11 @@ for pattern in \
   '"create",' \
   '"--label",' \
   'CONTROL_ID' \
-  '"pane", "split"' \
-  '"agent", "start"' \
-  '"agent", "prompt"' \
+  '"pane",' \
+  '"split",' \
+  '"agent",' \
+  '"start",' \
+  '"prompt",' \
   '"--sandbox",' \
   '"read-only"' \
   '"--ask-for-approval"' \
