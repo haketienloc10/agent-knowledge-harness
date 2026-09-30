@@ -18,6 +18,7 @@ required=(
   instructions/model-routing.md
   scripts/qiqi-mcp-server.sh
   scripts/qiqi-supervisor-broker.sh
+  scripts/e2e-autonomous-supervisor.sh
   scripts/migrate-work-item-filenames-v27.py
   mcp/qiqi_delegate/server.py
   mcp/qiqi_delegate/core.py
@@ -35,6 +36,7 @@ command -v python3 >/dev/null 2>&1 || fail 'missing command: python3'
 
 launcher="$workspace_root/scripts/qiqi-mcp-server.sh"
 supervisor_launcher="$workspace_root/scripts/qiqi-supervisor-broker.sh"
+supervisor_e2e="$workspace_root/scripts/e2e-autonomous-supervisor.sh"
 supervisor_broker="$mcp_project/supervisor_broker.py"
 supervisor_control="$mcp_project/supervisor_control.py"
 supervisor_runtime_doc="$workspace_root/docs/SUPERVISOR_RUNTIME.md"
@@ -103,7 +105,8 @@ for pattern in \
   'work_item.revision_changed' \
   'record_dependency_consumed' \
   'write_scope.claimed/released' \
-  'autonomous E2E-08 state-machine integration test'; do
+  'autonomous E2E-08 state-machine integration test' \
+  'bash scripts/e2e-autonomous-supervisor.sh <repository-name>'; do
   grep -Fq -- "$pattern" "$supervisor_runtime_doc" || \
     fail "SUPERVISOR_RUNTIME.md missing runtime contract: $pattern"
 done
@@ -391,6 +394,7 @@ fi
 
 bash -n "$launcher"
 bash -n "$supervisor_launcher"
+bash -n "$supervisor_e2e"
 bash -n "$workspace_root/scripts/workspace-check.sh"
 python3 -m py_compile "$workspace_root/scripts/migrate-work-item-filenames-v27.py"
 python3 -m py_compile "$supervisor_broker"
