@@ -25,7 +25,7 @@ from core import (
 CONTROL_ID = "slp-control"
 LEAD_AGENT_NAME = "lead"
 SUPERVISOR_AGENT_NAME = "supervisor"
-DEFAULT_MODEL = "gpt-5.4"
+DEFAULT_MODEL = "gpt-5.6-luna"
 HERDR_AGENT_START_TIMEOUT_MS = 60_000
 SUPERVISOR_PROMPT_TIMEOUT_MS = 120_000
 SUPERVISOR_CAPTURE_WAIT_SECONDS = 5.0
@@ -293,6 +293,9 @@ class SupervisorControlStore:
         workspace_id: str,
         lead_pane_id: str,
         supervisor_pane_id: str,
+        herdr_session: str,
+        lead_model: str,
+        supervisor_model: str,
         supervisor_home: Path,
         supervisor_capture_dir: Path,
         supervisor_capture_nonce: str,
@@ -303,6 +306,9 @@ class SupervisorControlStore:
             "supervisor_pane_id": _required_text(
                 supervisor_pane_id, "supervisor_pane_id"
             ),
+            "herdr_session": _required_text(herdr_session, "herdr_session"),
+            "lead_model": _required_text(lead_model, "lead_model"),
+            "supervisor_model": _required_text(supervisor_model, "supervisor_model"),
             "supervisor_home": str(supervisor_home.resolve()),
             "supervisor_capture_dir": str(supervisor_capture_dir.resolve()),
             "supervisor_capture_nonce": _required_text(
@@ -314,15 +320,19 @@ class SupervisorControlStore:
             conn.execute(
                 "INSERT INTO supervisor_control_plane("
                 "control_id, workspace_id, lead_pane_id, supervisor_pane_id, "
-                "lead_agent_name, supervisor_agent_name, supervisor_home, "
-                "supervisor_capture_dir, supervisor_capture_nonce, created_at_ns, updated_at_ns"
-                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "lead_agent_name, supervisor_agent_name, herdr_session, lead_model, "
+                "supervisor_model, supervisor_home, supervisor_capture_dir, "
+                "supervisor_capture_nonce, created_at_ns, updated_at_ns"
+                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT(control_id) DO UPDATE SET "
                 "workspace_id=excluded.workspace_id, "
                 "lead_pane_id=excluded.lead_pane_id, "
                 "supervisor_pane_id=excluded.supervisor_pane_id, "
                 "lead_agent_name=excluded.lead_agent_name, "
                 "supervisor_agent_name=excluded.supervisor_agent_name, "
+                "herdr_session=excluded.herdr_session, "
+                "lead_model=excluded.lead_model, "
+                "supervisor_model=excluded.supervisor_model, "
                 "supervisor_home=excluded.supervisor_home, "
                 "supervisor_capture_dir=excluded.supervisor_capture_dir, "
                 "supervisor_capture_nonce=excluded.supervisor_capture_nonce, "
@@ -334,6 +344,9 @@ class SupervisorControlStore:
                     values["supervisor_pane_id"],
                     LEAD_AGENT_NAME,
                     SUPERVISOR_AGENT_NAME,
+                    values["herdr_session"],
+                    values["lead_model"],
+                    values["supervisor_model"],
                     values["supervisor_home"],
                     values["supervisor_capture_dir"],
                     values["supervisor_capture_nonce"],
@@ -348,6 +361,13 @@ class SupervisorControlStore:
         if row is None:
             raise RuntimeError("Supervisor control-plane state was not persisted")
         return dict(row)
+
+    def clear_control_plane(self) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                "DELETE FROM supervisor_control_plane WHERE control_id = ?",
+                (CONTROL_ID,),
+            )
 
     def pending_unreviewed_cases(self, *, limit: int = 20) -> list[dict[str, Any]]:
         if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
@@ -718,6 +738,24 @@ class HerdrControlPlane:
         await self._ensure_server()
         state = self.store.get_control_plane()
         if state is not None:
+            identity_matches = (
+                state.get("herdr_session") == self.session
+                and state.get("lead_model") == self.lead_model
+                and state.get("supervisor_model") == self.supervisor_model
+            )
+            if not identity_matches:
+                stored_session = state.get("herdr_session")
+                if stored_session in {"", self.session}:
+                    await self._run(
+                        "workspace",
+                        "close",
+                        state["workspace_id"],
+                        check=False,
+                    )
+                self.store.clear_control_plane()
+                state = None
+
+        if state is not None:
             lead_info = await self._agent_info(state["lead_agent_name"])
             supervisor_info = await self._agent_info(state["supervisor_agent_name"])
             if (
@@ -787,6 +825,9 @@ class HerdrControlPlane:
             workspace_id=workspace_id,
             lead_pane_id=lead_pane_id,
             supervisor_pane_id=supervisor_pane_id,
+            herdr_session=self.session,
+            lead_model=self.lead_model,
+            supervisor_model=self.supervisor_model,
             supervisor_home=self.supervisor_home,
             supervisor_capture_dir=capture_dir,
             supervisor_capture_nonce=nonce,
