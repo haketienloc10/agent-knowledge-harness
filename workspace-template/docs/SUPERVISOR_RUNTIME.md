@@ -159,5 +159,17 @@ workspace must not claim continuous supervision.
 
 CI includes an autonomous E2E-08 state-machine integration test that proves broker case opening,
 Supervisor review, Lead wakeup, explicit Lead disposition, and semantic case closure without a
-Human relay. A real installed workspace must still run the live Herdr E2E-08 operator scenario
-before the deployment claims continuous supervision for that environment.
+Human relay.
+
+A real installed workspace must also run the live Herdr scenario before that environment claims
+continuous supervision:
+
+```bash
+bash scripts/e2e-autonomous-supervisor.sh <repository-name>
+```
+
+The live script prompts Lead once with a read-only Peer fixture and never prompts Supervisor.
+It passes only when persisted evidence shows an `issue` finding was delivered to Lead and the
+case later reached `CLOSED` through an explicit `lead_disposition`. The chosen repository
+must already be registered in `repos.yaml`, and native Herdr/Codex/QiQi integrations must be
+healthy.
