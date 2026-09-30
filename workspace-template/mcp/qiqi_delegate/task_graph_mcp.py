@@ -421,6 +421,12 @@ async def submit_decisions(
     for decision, (node_id, turn_id, attempt_id) in zip(
         parsed, disposition_links, strict=True
     ):
+        # Real TaskGraph execution delegates through delegate_repo_task, which persists
+        # the canonical raw turn before returning. Unit/integration executors may return
+        # a synthetic normalized turn_id without raw SessionStore evidence; never invent
+        # that evidence merely to satisfy SLP instrumentation.
+        if _store.get_turn(turn_id) is None:
+            continue
         reason = f"TaskGraph semantic decision: {decision.action}"
         if decision.feedback:
             reason += "; feedback=" + " | ".join(decision.feedback)
