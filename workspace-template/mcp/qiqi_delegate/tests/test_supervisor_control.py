@@ -288,8 +288,15 @@ class _RecordingHerdrControlPlane(HerdrControlPlane):
     async def _ensure_server(self) -> None:
         return None
 
-    async def _agent_exists(self, name: str) -> bool:
-        return name in self.agent_names
+    async def _agent_info(self, name: str):
+        if name not in self.agent_names:
+            return None
+        return {
+            "name": name,
+            "interactive_ready": True,
+            "agent_status": "idle",
+            "launch_pending": False,
+        }
 
     async def _run(self, *args: str, check: bool = True):
         self.commands.append(tuple(args))
@@ -311,7 +318,50 @@ class _RecordingHerdrControlPlane(HerdrControlPlane):
         raise AssertionError(f"unexpected JSON command: {args!r}")
 
 
+class _StaleNamedAgentControlPlane(_RecordingHerdrControlPlane):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.agent_names.update({"lead", "supervisor"})
+        self.ready = False
+
+    async def _agent_info(self, name: str):
+        if name not in self.agent_names:
+            return None
+        return {
+            "name": name,
+            "interactive_ready": self.ready,
+            "agent_status": "idle" if self.ready else "unknown",
+            "launch_pending": not self.ready,
+        }
+
+    async def _wait_agent_prompt_ready(self, name: str, *, timeout_ms: int = 60_000):
+        raise RuntimeError(f"stale named agent is not prompt-ready: {name}")
+
+
 class HerdrControlPlaneTopologyTests(unittest.IsolatedAsyncioTestCase):
+    async def test_stale_named_agents_do_not_count_as_ready(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            workspace = root / "workspace"
+            workspace.mkdir()
+            state_db = workspace / ".qiqi" / "state" / "qiqi_delegate.sqlite3"
+            control = _StaleNamedAgentControlPlane(
+                workspace_root=workspace,
+                state_db=state_db,
+                supervisor_home=root / "isolated-supervisor",
+            )
+            control.store.save_control_plane(
+                workspace_id="w-control",
+                lead_pane_id="w-control:p1",
+                supervisor_pane_id="w-control:p2",
+                supervisor_home=root / "isolated-supervisor",
+                supervisor_capture_dir=root / "isolated-supervisor" / "captures",
+                supervisor_capture_nonce="nonce",
+            )
+
+            with self.assertRaisesRegex(RuntimeError, "persisted slp-control topology is stale"):
+                await control.ensure_started()
+
     async def test_control_room_starts_independent_lead_and_read_only_supervisor(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
