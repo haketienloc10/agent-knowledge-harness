@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from core import SessionStore
+from supervisor_control import AutonomousSupervisorRuntime, HerdrControlPlane
 
 BROKER_ID = "slp-supervisor"
 OPEN_CASE_STATUS = "OPEN"
@@ -814,19 +815,23 @@ class SupervisorBroker:
         }
 
 
-def default_state_db() -> Path:
+def default_workspace_root() -> Path:
     workspace_root = os.environ.get("QIQI_WORKSPACE_ROOT")
-    root = (
+    return (
         Path(workspace_root).resolve()
         if isinstance(workspace_root, str) and workspace_root.strip()
         else Path(__file__).resolve().parents[2]
     )
-    return root / ".qiqi" / "state" / "qiqi_delegate.sqlite3"
+
+
+def default_state_db() -> Path:
+    return default_workspace_root() / ".qiqi" / "state" / "qiqi_delegate.sqlite3"
 
 
 async def serve(
     broker: SupervisorBroker,
     subscriber: HerdrLifecycleSubscriber,
+    runtime: AutonomousSupervisorRuntime,
     *,
     reconnect_seconds: float = 1.0,
 ) -> None:
@@ -834,14 +839,19 @@ async def serve(
         raise ValueError("reconnect_seconds must be positive")
 
     # Durable replay happens before the transient subscriber starts, then after every
-    # Herdr wakeup/reconnect. Herdr event payloads never decide SLP semantics.
+    # Herdr wakeup/reconnect. Herdr event payloads never decide SLP semantics. Phase 3
+    # then reviews newly opened cases and delivers confirmed findings through the
+    # persistent control plane. Delivery itself never closes a case.
     broker.process_pending()
+    await runtime.handle_pending_cases()
     while True:
         try:
             async for _wakeup in subscriber.stream_once():
                 broker.process_pending()
+                await runtime.handle_pending_cases()
         except (EOFError, OSError, HerdrSubscriptionError):
             broker.process_pending()
+            await runtime.handle_pending_cases()
             await asyncio.sleep(reconnect_seconds)
 
 
@@ -852,25 +862,69 @@ def _parser() -> argparse.ArgumentParser:
             "semantic governance truth is replayed from qiqi_delegate.sqlite3."
         )
     )
-    parser.add_argument("--once", action="store_true", help="process pending SQLite events and exit")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument(
+        "--once",
+        action="store_true",
+        help="process pending SQLite semantic events and exit without starting agents",
+    )
+    mode.add_argument(
+        "--supervise-once",
+        action="store_true",
+        help="replay semantic events, ensure the persistent control plane, review/deliver once, and exit",
+    )
     parser.add_argument("--db", type=Path, default=None, help="override qiqi_delegate.sqlite3")
     parser.add_argument("--session", default=None, help="Herdr named session")
     parser.add_argument("--socket-path", type=Path, default=None, help="explicit Herdr socket path")
+    parser.add_argument("--supervisor-home", type=Path, default=None)
     parser.add_argument("--reconnect-seconds", type=float, default=1.0)
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
+    workspace_root = default_workspace_root()
     db_path = (args.db or default_state_db()).expanduser().resolve()
     broker = SupervisorBroker(db_path)
     if args.once:
         print(json.dumps(broker.process_pending(), sort_keys=True))
         return 0
 
+    session = (
+        args.session
+        or os.environ.get("QIQI_HERDR_SESSION")
+        or os.environ.get("HERDR_SESSION")
+        or "qiqi-delegate"
+    )
+    control_plane = HerdrControlPlane(
+        workspace_root=workspace_root,
+        state_db=db_path,
+        session=session,
+        herdr_bin=os.environ.get("QIQI_HERDR_BIN", "herdr"),
+        supervisor_home=(
+            args.supervisor_home.expanduser().resolve()
+            if args.supervisor_home is not None
+            else None
+        ),
+    )
+    runtime = AutonomousSupervisorRuntime(
+        state_db=db_path,
+        control_plane=control_plane,
+    )
+    if args.supervise_once:
+        broker_result = broker.process_pending()
+        runtime_result = asyncio.run(runtime.handle_pending_cases())
+        print(
+            json.dumps(
+                {"broker": broker_result, "supervisor": runtime_result},
+                sort_keys=True,
+            )
+        )
+        return 0
+
     socket_path = resolve_herdr_socket(
         explicit_socket=args.socket_path,
-        session=args.session,
+        session=session,
     )
     subscriber = HerdrLifecycleSubscriber(socket_path)
     try:
@@ -878,6 +932,7 @@ def main(argv: list[str] | None = None) -> int:
             serve(
                 broker,
                 subscriber,
+                runtime,
                 reconnect_seconds=args.reconnect_seconds,
             )
         )
