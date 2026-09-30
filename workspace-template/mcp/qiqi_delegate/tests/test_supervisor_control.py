@@ -321,6 +321,14 @@ class _RecordingHerdrControlPlane(HerdrControlPlane):
         raise AssertionError(f"unexpected JSON command: {args!r}")
 
 
+class _MissingPersistedPaneControlPlane(_RecordingHerdrControlPlane):
+    async def _run(self, *args: str, check: bool = True):
+        if args[:3] == ("pane", "get", "w-old:p1"):
+            self.commands.append(tuple(args))
+            return 1, "", "pane not found"
+        return await super()._run(*args, check=check)
+
+
 class _StaleNamedAgentControlPlane(_RecordingHerdrControlPlane):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -342,6 +350,46 @@ class _StaleNamedAgentControlPlane(_RecordingHerdrControlPlane):
 
 
 class HerdrControlPlaneTopologyTests(unittest.IsolatedAsyncioTestCase):
+    async def test_missing_persisted_pane_recreates_control_room(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            workspace = root / "workspace"
+            workspace.mkdir()
+            state_db = workspace / ".qiqi" / "state" / "qiqi_delegate.sqlite3"
+            supervisor_home = root / "isolated-supervisor"
+            control = _MissingPersistedPaneControlPlane(
+                workspace_root=workspace,
+                state_db=state_db,
+                supervisor_home=supervisor_home,
+            )
+            control.store.save_control_plane(
+                workspace_id="w-old",
+                lead_pane_id="w-old:p1",
+                supervisor_pane_id="w-old:p2",
+                herdr_session="qiqi-delegate",
+                lead_model=DEFAULT_MODEL,
+                supervisor_model=DEFAULT_MODEL,
+                supervisor_home=supervisor_home,
+                supervisor_capture_dir=supervisor_home / "captures",
+                supervisor_capture_nonce="old-nonce",
+            )
+
+            state = await control.ensure_started()
+
+            self.assertEqual(state["workspace_id"], "w-control")
+            self.assertEqual(state["lead_pane_id"], "w-control:p1")
+            self.assertEqual(state["supervisor_pane_id"], "w-control:p2")
+            self.assertIn(("workspace", "close", "w-old"), control.commands)
+            self.assertTrue(
+                any(command[:3] == ("agent", "start", "lead") for command in control.commands)
+            )
+            self.assertTrue(
+                any(
+                    command[:3] == ("agent", "start", "supervisor")
+                    for command in control.commands
+                )
+            )
+
     async def test_model_identity_change_recreates_control_room(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -413,7 +461,9 @@ class HerdrControlPlaneTopologyTests(unittest.IsolatedAsyncioTestCase):
                 supervisor_capture_nonce="nonce",
             )
 
-            with self.assertRaisesRegex(RuntimeError, "persisted slp-control topology is stale"):
+            with self.assertRaisesRegex(
+                RuntimeError, "persisted slp-control topology could not be restored"
+            ):
                 await control.ensure_started()
 
     async def test_control_room_starts_independent_lead_and_read_only_supervisor(self) -> None:
