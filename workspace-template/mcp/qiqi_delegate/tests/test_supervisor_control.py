@@ -12,6 +12,7 @@ from core import SessionStore, build_task_packet  # noqa: E402
 from supervisor_broker import SupervisorBroker  # noqa: E402
 from supervisor_control import (  # noqa: E402
     AutonomousSupervisorRuntime,
+    DEFAULT_MODEL,
     HerdrControlPlane,
     SupervisorControlStore,
     build_audit_packet,
@@ -302,6 +303,8 @@ class _RecordingHerdrControlPlane(HerdrControlPlane):
         self.commands.append(tuple(args))
         if len(args) >= 3 and args[:2] == ("agent", "start"):
             self.agent_names.add(args[2])
+        if args[:2] == ("workspace", "close"):
+            self.agent_names.clear()
         return 0, "{}", ""
 
     async def _run_json(self, *args: str):
@@ -339,6 +342,54 @@ class _StaleNamedAgentControlPlane(_RecordingHerdrControlPlane):
 
 
 class HerdrControlPlaneTopologyTests(unittest.IsolatedAsyncioTestCase):
+    async def test_model_identity_change_recreates_control_room(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            workspace = root / "workspace"
+            workspace.mkdir()
+            state_db = workspace / ".qiqi" / "state" / "qiqi_delegate.sqlite3"
+            supervisor_home = root / "isolated-supervisor"
+            control = _RecordingHerdrControlPlane(
+                workspace_root=workspace,
+                state_db=state_db,
+                supervisor_home=supervisor_home,
+            )
+            control.agent_names.update({"lead", "supervisor"})
+            control.store.save_control_plane(
+                workspace_id="w-old",
+                lead_pane_id="w-old:p1",
+                supervisor_pane_id="w-old:p2",
+                herdr_session="qiqi-delegate",
+                lead_model="gpt-5.4",
+                supervisor_model="gpt-5.4",
+                supervisor_home=supervisor_home,
+                supervisor_capture_dir=supervisor_home / "captures",
+                supervisor_capture_nonce="old-nonce",
+            )
+
+            state = await control.ensure_started()
+
+            self.assertEqual(state["lead_model"], "gpt-5.6-luna")
+            self.assertEqual(state["supervisor_model"], "gpt-5.6-luna")
+            self.assertIn(
+                ("workspace", "close", "w-old"),
+                control.commands,
+            )
+            self.assertTrue(
+                any(
+                    command[:3] == ("agent", "start", "lead")
+                    and "gpt-5.6-luna" in command
+                    for command in control.commands
+                )
+            )
+            self.assertTrue(
+                any(
+                    command[:3] == ("agent", "start", "supervisor")
+                    and "gpt-5.6-luna" in command
+                    for command in control.commands
+                )
+            )
+
     async def test_stale_named_agents_do_not_count_as_ready(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -354,6 +405,9 @@ class HerdrControlPlaneTopologyTests(unittest.IsolatedAsyncioTestCase):
                 workspace_id="w-control",
                 lead_pane_id="w-control:p1",
                 supervisor_pane_id="w-control:p2",
+                herdr_session="qiqi-delegate",
+                lead_model=DEFAULT_MODEL,
+                supervisor_model=DEFAULT_MODEL,
                 supervisor_home=root / "isolated-supervisor",
                 supervisor_capture_dir=root / "isolated-supervisor" / "captures",
                 supervisor_capture_nonce="nonce",
@@ -380,6 +434,8 @@ class HerdrControlPlaneTopologyTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(state["workspace_id"], "w-control")
             self.assertEqual(state["lead_agent_name"], "lead")
             self.assertEqual(state["supervisor_agent_name"], "supervisor")
+            self.assertEqual(state["lead_model"], "gpt-5.6-luna")
+            self.assertEqual(state["supervisor_model"], "gpt-5.6-luna")
             self.assertEqual(Path(state["supervisor_home"]), supervisor_home.resolve())
             self.assertTrue((supervisor_home / "AGENTS.md").is_file())
 
@@ -413,6 +469,8 @@ class HerdrControlPlaneTopologyTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("read-only", supervisor_start)
             self.assertIn("--ask-for-approval", supervisor_start)
             self.assertIn("never", supervisor_start)
+            self.assertIn("gpt-5.6-luna", lead_start)
+            self.assertIn("gpt-5.6-luna", supervisor_start)
 
             encoded = "\n".join(" ".join(command) for command in control.commands)
             self.assertNotIn("delegate_repo_task", encoded)
