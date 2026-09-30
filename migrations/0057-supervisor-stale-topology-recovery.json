@@ -1,0 +1,23 @@
+{
+  "version": 57,
+  "from_ref": "38503a18ee92eb0b647381b27ff8f3bf279cd4aa",
+  "to_ref": "7db72313a4ecc73f23d01103bdae3f3cbccedf1f",
+  "description": "recover persistent SLP control-plane topology automatically when saved Herdr workspace/pane identifiers are stale: validate workspace and both panes before reuse, clear stale persisted control-plane state, recreate slp-control and its Lead/Supervisor panes, and retry after an agent_pane_not_found race instead of requiring manual operator cleanup",
+  "workspace": {
+    "merge": [
+      "workspace-template/docs/SUPERVISOR_RUNTIME.md"
+    ],
+    "replace": [
+      "workspace-template/mcp/qiqi_delegate/supervisor_control.py",
+      "workspace-template/mcp/qiqi_delegate/tests/test_supervisor_control.py"
+    ],
+    "delete": [],
+    "manual_review": []
+  },
+  "repo": {
+    "merge": [],
+    "replace": [],
+    "delete": [],
+    "manual_review": []
+  }
+}
