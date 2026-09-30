@@ -1,7 +1,7 @@
 {
   "version": 53,
   "from_ref": "8f5b4a68d1d63cbf15dd40816fd1e73f2af1e664",
-  "to_ref": "0eb7ef8a42cda86f478fc2c7e795d77a62fcf28e",
+  "to_ref": "f7a980a0c6235f1d5143f8a16867fb659878c437",
   "description": "complete Phase 4 semantic integration for autonomous SLP supervision: expose explicit Work Item revision, Peer signal, and direct dependency-consumption runtime APIs; automatically mirror tracked TaskPacket revisions; emit conservative repository-level write-scope claim/release events around every direct or TaskGraph repository delegation; emit candidate.accepted on explicit Lead acceptance; automatically record TaskGraph downstream consumption of captured upstream turns; add autonomous E2E-08 state-machine integration coverage; and update Lead/Supervisor runtime contracts while retaining qiqi_delegate.sqlite3 as the single runtime state database",
   "workspace": {
     "merge": [
@@ -15,6 +15,7 @@
       "workspace-template/mcp/qiqi_delegate/server.py",
       "workspace-template/mcp/qiqi_delegate/task_graph_mcp.py",
       "workspace-template/mcp/qiqi_delegate/tests/test_phase4_integration.py",
+      "workspace-template/mcp/qiqi_delegate/tests/test_slp_runtime.py",
       "workspace-template/mcp/qiqi_delegate/tests/test_task_graph_mcp.py"
     ],
     "delete": [],
