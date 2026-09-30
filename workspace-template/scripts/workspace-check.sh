@@ -11,6 +11,7 @@ required=(
   identity.md
   repos.yaml
   docs/WORKSPACE_PROTOCOL.md
+  docs/SUPERVISOR_RUNTIME.md
   work-items/.gitkeep
   instructions/supervisor.md
   instructions/agent-routing.yaml
@@ -21,6 +22,7 @@ required=(
   mcp/qiqi_delegate/server.py
   mcp/qiqi_delegate/core.py
   mcp/qiqi_delegate/supervisor_broker.py
+  mcp/qiqi_delegate/supervisor_control.py
   .codex/config.toml
 )
 for rel in "${required[@]}"; do
@@ -34,6 +36,8 @@ command -v python3 >/dev/null 2>&1 || fail 'missing command: python3'
 launcher="$workspace_root/scripts/qiqi-mcp-server.sh"
 supervisor_launcher="$workspace_root/scripts/qiqi-supervisor-broker.sh"
 supervisor_broker="$mcp_project/supervisor_broker.py"
+supervisor_control="$mcp_project/supervisor_control.py"
+supervisor_runtime_doc="$workspace_root/docs/SUPERVISOR_RUNTIME.md"
 routing="$workspace_root/instructions/agent-routing.yaml"
 config="$workspace_root/.codex/config.toml"
 agents="$workspace_root/AGENTS.md"
@@ -60,6 +64,42 @@ grep -Fq 'events.subscribe' "$supervisor_broker" || \
 if grep -Eq 'pane[.]read|agent[.]read' "$supervisor_broker"; then
   fail 'Supervisor broker must not read terminal/pane output as semantic truth'
 fi
+
+for pattern in \
+  'workspace", "create"' \
+  '"--label",' \
+  'CONTROL_ID' \
+  '"pane", "split"' \
+  '"agent", "start"' \
+  '"agent", "prompt"' \
+  '"--sandbox",' \
+  '"read-only"' \
+  '"--ask-for-approval"' \
+  '"never"'; do
+  grep -Fq -- "$pattern" "$supervisor_control" || \
+    fail "Supervisor control plane missing persistent/runtime boundary: $pattern"
+done
+if grep -Eq 'pane[.]read|agent[.]read|delegate_repo_task|record_lead_disposition' "$supervisor_control"; then
+  fail 'Supervisor control plane must not expose terminal reads, Peer delegation, or Lead disposition mutation'
+fi
+
+for pattern in \
+  'bounded AuditPacket' \
+  'read-only filesystem sandbox' \
+  'Herdr delivery' \
+  'không phải closure'; do
+  grep -Fq -- "$pattern" "$supervisor" || \
+    fail "supervisor.md missing autonomous runtime boundary: $pattern"
+done
+
+for pattern in \
+  'workspace: slp-control' \
+  'Supervisor responses are captured through the native Stop hook' \
+  'does not use `pane.read` or `agent.read`' \
+  'must not claim continuous supervision'; do
+  grep -Fq -- "$pattern" "$supervisor_runtime_doc" || \
+    fail "SUPERVISOR_RUNTIME.md missing runtime contract: $pattern"
+done
 
 grep -Fq 'command: codex' "$routing" || fail 'Codex must resolve the native codex CLI'
 grep -Fq 'command: claude' "$routing" || fail 'Claude must resolve the native claude CLI'
@@ -334,6 +374,7 @@ bash -n "$supervisor_launcher"
 bash -n "$workspace_root/scripts/workspace-check.sh"
 python3 -m py_compile "$workspace_root/scripts/migrate-work-item-filenames-v27.py"
 python3 -m py_compile "$supervisor_broker"
+python3 -m py_compile "$supervisor_control"
 
 uv run --project "$mcp_project" python -m unittest discover -s "$mcp_project/tests" -v
 
