@@ -97,10 +97,45 @@ else
 fi
 
 deadline=$((SECONDS + timeout_seconds))
-until herdr --session "$session" agent get lead >/dev/null 2>&1; do
+
+lead_prompt_ready() {
+  local payload
+  if ! payload="$(herdr --session "$session" agent get lead 2>/dev/null)"; then
+    return 1
+  fi
+  python3 - "$payload" <<'PY'
+import json
+import sys
+
+try:
+    payload = json.loads(sys.argv[1])
+except (json.JSONDecodeError, IndexError):
+    raise SystemExit(1)
+
+result = payload.get("result")
+agent = result.get("agent") if isinstance(result, dict) else None
+if not isinstance(agent, dict):
+    raise SystemExit(1)
+
+ready = (
+    agent.get("interactive_ready") is True
+    and agent.get("launch_pending") is not True
+    and agent.get("agent_status") in {"idle", "done", "working"}
+)
+raise SystemExit(0 if ready else 1)
+PY
+}
+
+until lead_prompt_ready; do
+  if [[ "$started_broker" -eq 1 ]] && ! kill -0 "$broker_pid" >/dev/null 2>&1; then
+    printf 'ERROR: Supervisor broker exited before Lead became prompt-ready.\n' >&2
+    [[ -f "$broker_log" ]] && tail -n 160 "$broker_log" >&2 || true
+    exit 71
+  fi
   if (( SECONDS >= deadline )); then
-    printf 'ERROR: Lead agent did not become addressable within %ss\n' "$timeout_seconds" >&2
-    [[ -f "$broker_log" ]] && tail -n 120 "$broker_log" >&2 || true
+    printf 'ERROR: Lead agent did not become prompt-ready within %ss\n' "$timeout_seconds" >&2
+    herdr --session "$session" agent get lead >&2 || true
+    [[ -f "$broker_log" ]] && tail -n 160 "$broker_log" >&2 || true
     exit 70
   fi
   sleep 1
@@ -131,7 +166,32 @@ EOF
 )"
 
 printf 'Prompting Lead once for Work Item %s...\n' "$work_item_id"
-herdr --session "$session" agent prompt lead "$lead_prompt" --wait --timeout 600000 >/dev/null
+
+while true; do
+  prompt_output=""
+  if prompt_output="$(herdr --session "$session" agent prompt lead "$lead_prompt" --wait --timeout 600000 2>&1)"; then
+    break
+  fi
+
+  if grep -Fq '"code":"agent_not_ready"' <<<"$prompt_output"; then
+    if [[ "$started_broker" -eq 1 ]] && ! kill -0 "$broker_pid" >/dev/null 2>&1; then
+      printf 'ERROR: Supervisor broker exited while waiting to prompt Lead.\n' >&2
+      [[ -f "$broker_log" ]] && tail -n 160 "$broker_log" >&2 || true
+      exit 71
+    fi
+    if (( SECONDS >= deadline )); then
+      printf 'ERROR: Lead remained not ready until E2E timeout.\n%s\n' "$prompt_output" >&2
+      [[ -f "$broker_log" ]] && tail -n 160 "$broker_log" >&2 || true
+      exit 70
+    fi
+    sleep 1
+    continue
+  fi
+
+  printf 'ERROR: Lead prompt failed.\n%s\n' "$prompt_output" >&2
+  [[ -f "$broker_log" ]] && tail -n 160 "$broker_log" >&2 || true
+  exit 73
+done
 
 query_case() {
   uv run --project "$project_dir" python - "$state_db" "$work_item_id" <<'PY'
