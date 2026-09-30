@@ -9,6 +9,7 @@ from typing import Annotated, Any, Literal
 from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import BaseModel, ConfigDict, Field
 
+from core import task_packet_work_item_ref
 from server import (
     STATE_DB,
     TaskContextInput,
@@ -216,6 +217,7 @@ async def _execute_repo_task(
     node: GraphNode,
     *,
     session_id: str | None,
+    graph_run_id: str | None = None,
 ) -> dict[str, Any]:
     """Adapt one GraphNode back into the existing direct delegation primitive."""
 
@@ -225,7 +227,7 @@ async def _execute_repo_task(
         )
     packet = node.task_packet
     try:
-        return await delegate_repo_task(
+        result = await delegate_repo_task(
             repository=node.repository,
             route=node.route,
             objective=packet.objective,
@@ -237,6 +239,38 @@ async def _execute_repo_task(
             known_unknowns=list(packet.known_unknowns),
             session_id=session_id,
         )
+        if graph_run_id is not None and node.depends_on:
+            consumer_turn_id = result.get("turn_id")
+            work_item_id, work_item_revision = task_packet_work_item_ref(packet)
+            for dependency_node_id in node.depends_on:
+                dependency = _graph_runtime.store.get_node(
+                    graph_run_id, dependency_node_id
+                )
+                if dependency is None:
+                    raise RuntimeError(
+                        "TaskGraph dependency state disappeared during execution: "
+                        f"{dependency_node_id!r}"
+                    )
+                source_turn_id = dependency.get("turn_id")
+                if not isinstance(source_turn_id, str) or not source_turn_id:
+                    raise RuntimeError(
+                        "TaskGraph consumed a satisfied dependency without captured "
+                        f"Peer turn evidence: {dependency_node_id!r}"
+                    )
+                _store.record_dependency_consumed(
+                    source_turn_id=source_turn_id,
+                    consumer_turn_id=(
+                        consumer_turn_id
+                        if isinstance(consumer_turn_id, str) and consumer_turn_id
+                        else None
+                    ),
+                    repository=node.repository,
+                    graph_run_id=graph_run_id,
+                    node_id=node.node_id,
+                    work_item_id=work_item_id,
+                    work_item_revision=work_item_revision,
+                )
+        return result
     except ToolError as exc:
         preserved_session_id = _preserved_session_id(exc)
         if preserved_session_id is None:
@@ -253,6 +287,24 @@ async def _start_repo_task(node: GraphNode) -> dict[str, Any]:
 
 async def _resume_repo_task(node: GraphNode, session_id: str) -> dict[str, Any]:
     return await _execute_repo_task(node, session_id=session_id)
+
+
+def _graph_executors(graph_run_id: str):
+    async def start(node: GraphNode) -> dict[str, Any]:
+        return await _execute_repo_task(
+            node,
+            session_id=None,
+            graph_run_id=graph_run_id,
+        )
+
+    async def resume(node: GraphNode, session_id: str) -> dict[str, Any]:
+        return await _execute_repo_task(
+            node,
+            session_id=session_id,
+            graph_run_id=graph_run_id,
+        )
+
+    return start, resume
 
 
 @mcp.tool()
@@ -367,10 +419,11 @@ async def delegate_next(graph_run_id: str) -> dict[str, Any]:
     node per repository enters a wave. Existing delegate_repo_task repository/session
     ownership remains the authoritative runtime conflict guard.
     """
+    executor, resume_executor = _graph_executors(graph_run_id)
     return await _graph_runtime.delegate_next(
         graph_run_id,
-        executor=_start_repo_task,
-        resume_executor=_resume_repo_task,
+        executor=executor,
+        resume_executor=resume_executor,
     )
 
 
