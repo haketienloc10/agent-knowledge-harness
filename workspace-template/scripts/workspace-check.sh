@@ -65,7 +65,9 @@ for pattern in \
   'interactive_ready' \
   'launch_pending' \
   'agent_status' \
-  '"code":"agent_not_ready"'; do
+  '"code":"agent_not_ready"' \
+  'Keep the initial Work Item revision unchanged' \
+  'MUST NOT increment revision'; do
   grep -Fq -- "$pattern" "$supervisor_e2e" || \
     fail "live Supervisor E2E missing Lead readiness guard: $pattern"
 done
@@ -98,6 +100,10 @@ if grep -Eq 'pane[.]read|agent[.]read|delegate_repo_task|record_lead_disposition
 fi
 grep -Fq 'DEFAULT_MODEL = "gpt-5.6-luna"' "$supervisor_control" || \
   fail 'persistent Lead/Supervisor control plane must use gpt-5.6-luna by default'
+grep -Fq '"recorded": True' "$supervisor_control" || \
+  fail 'Supervisor AuditPacket must expose an existing Lead disposition'
+grep -Fq 'LEFT JOIN lead_dispositions d ON d.turn_id = c.turn_id' "$supervisor_control" || \
+  fail 'Supervisor pending cases must hydrate disposition state by exact Peer turn'
 
 for pattern in \
   'bounded AuditPacket' \
@@ -134,6 +140,8 @@ done
 grep -Fq 'command: codex' "$routing" || fail 'Codex must resolve the native codex CLI'
 grep -Fq 'model: gpt-5.6-luna' "$routing" || \
   fail 'codex-balanced route must use gpt-5.6-luna'
+grep -Fq 'State/phase/progress/evidence/disposition/report reconciliation' "$agents" || \
+  fail 'Lead Work Item policy must forbid revision bumps for state-only reconciliation'
 grep -Fq 'command: claude' "$routing" || fail 'Claude must resolve the native claude CLI'
 [[ "$(grep -Fc 'env: QIQI_WORK_ITEMS_DIR' "$routing")" -eq 2 ]] || \
   fail 'Codex and Claude must both declare QIQI_WORK_ITEMS_DIR additional_dirs'
