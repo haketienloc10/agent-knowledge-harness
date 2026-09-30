@@ -562,9 +562,51 @@ class HerdrControlPlane:
             raise RuntimeError(f"Herdr response has no result.{key}")
         return value
 
+    async def _agent_info(self, name: str) -> dict[str, Any] | None:
+        returncode, stdout, _ = await self._run("agent", "get", name, check=False)
+        if returncode != 0:
+            return None
+        try:
+            payload = _json_object(stdout, f"Herdr agent get {name} response")
+        except ValueError:
+            return None
+        result = payload.get("result")
+        if not isinstance(result, dict):
+            return None
+        agent = result.get("agent")
+        return agent if isinstance(agent, dict) else None
+
+    @staticmethod
+    def _agent_prompt_ready(info: dict[str, Any] | None) -> bool:
+        if not isinstance(info, dict):
+            return False
+        status = info.get("agent_status")
+        return (
+            info.get("interactive_ready") is True
+            and status in {"idle", "done", "working"}
+            and info.get("launch_pending") is not True
+        )
+
     async def _agent_exists(self, name: str) -> bool:
-        returncode, _, _ = await self._run("agent", "get", name, check=False)
-        return returncode == 0
+        return await self._agent_info(name) is not None
+
+    async def _wait_agent_prompt_ready(
+        self,
+        name: str,
+        *,
+        timeout_ms: int = HERDR_AGENT_START_TIMEOUT_MS,
+    ) -> dict[str, Any]:
+        deadline = time.monotonic() + (timeout_ms / 1000)
+        last_info: dict[str, Any] | None = None
+        while time.monotonic() < deadline:
+            last_info = await self._agent_info(name)
+            if self._agent_prompt_ready(last_info):
+                return last_info
+            await asyncio.sleep(0.1)
+        raise RuntimeError(
+            f"Herdr named agent {name!r} exists but is not prompt-ready after "
+            f"{timeout_ms}ms; last_info={last_info!r}"
+        )
 
     def _prepare_supervisor_home(self) -> tuple[Path, str]:
         self.supervisor_home.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -650,8 +692,13 @@ class HerdrControlPlane:
         pane_id: str,
         args: list[str],
     ) -> None:
-        if await self._agent_exists(name):
+        existing = await self._agent_info(name)
+        if existing is not None:
+            if self._agent_prompt_ready(existing):
+                return
+            await self._wait_agent_prompt_ready(name)
             return
+
         await self._run(
             "agent",
             "start",
@@ -665,14 +712,18 @@ class HerdrControlPlane:
             "--",
             *args,
         )
+        await self._wait_agent_prompt_ready(name)
 
     async def ensure_started(self) -> dict[str, Any]:
         await self._ensure_server()
         state = self.store.get_control_plane()
         if state is not None:
-            lead_exists = await self._agent_exists(state["lead_agent_name"])
-            supervisor_exists = await self._agent_exists(state["supervisor_agent_name"])
-            if lead_exists and supervisor_exists:
+            lead_info = await self._agent_info(state["lead_agent_name"])
+            supervisor_info = await self._agent_info(state["supervisor_agent_name"])
+            if (
+                self._agent_prompt_ready(lead_info)
+                and self._agent_prompt_ready(supervisor_info)
+            ):
                 return state
             try:
                 await self._start_agent(
