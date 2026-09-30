@@ -109,9 +109,9 @@ done
 lead_prompt="$(cat <<EOF
 Run the live autonomous Supervisor E2E-08 fixture.
 
-Create a tracked Work Item with exact canonical id `$work_item_id`.
+Create a tracked Work Item with exact canonical id: $work_item_id.
 
-Use repository `$repository`.
+Use repository: $repository.
 
 Delegate exactly one READ-ONLY repo-local Peer task:
 - report the current Git HEAD commit hash;
