@@ -63,7 +63,7 @@ Supervisor receives the smallest sufficient governance packet:
 - Work Item id + revision when present;
 - Lead-brief locator by captured turn id;
 - Peer-response locator by captured turn id;
-- current disposition state;
+- current disposition state, hydrated from `lead_dispositions` for the exact Peer turn when one exists;
 - candidate identity when present;
 - deterministic rule facts.
 
@@ -122,7 +122,10 @@ security claim against a malicious local process with independent host access.
 The runtime now emits/records the semantic inputs consumed by the deterministic broker:
 
 - tracked TaskPacket observation records `work_item.revision_changed` idempotently;
-- canonical Work Item mutation must call `record_work_item_revision` immediately;
+- Work Item `revision` changes only for a material requirement/acceptance/scope change; state,
+  phase, evidence, disposition, report reconciliation, waiting, or done transitions do not bump it;
+- after an actual material revision change, canonical Work Item mutation must call
+  `record_work_item_revision` immediately;
 - direct Peer signals are recorded with `record_peer_signal`;
 - direct downstream consumption uses `record_dependency_consumed`;
 - TaskGraph downstream execution automatically records each accepted upstream dependency turn;
@@ -180,7 +183,9 @@ bash scripts/e2e-autonomous-supervisor.sh <repository-name>
 ```
 
 The live script prompts Lead once with a read-only Peer fixture and never prompts Supervisor.
-It passes only when persisted evidence shows an `issue` finding was delivered to Lead and the
-case later reached `CLOSED` through an explicit `lead_disposition`. The chosen repository
+The fixture has no requirement change, so its initial Work Item revision remains stable while
+status/evidence move through waiting, Lead disposition, and done. It passes only when persisted
+evidence shows an `issue` finding was delivered to Lead and the case later reached `CLOSED`
+through an explicit `lead_disposition`. The chosen repository
 must already be registered in `repos.yaml`, and native Herdr/Codex/QiQi integrations must be
 healthy.
