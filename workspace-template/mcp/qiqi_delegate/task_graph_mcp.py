@@ -13,6 +13,7 @@ from server import (
     STATE_DB,
     TaskContextInput,
     _load_repo_registry,
+    _store,
     delegate_repo_task,
     mcp,
 )
@@ -31,6 +32,12 @@ _PRESERVED_SESSION_PATTERN = re.compile(
     r"native session ownership was preserved and can be resumed with "
     r"session_id=(?P<literal>'(?:\\.|[^'])*'|\"(?:\\.|[^\"])*\")"
 )
+_GRAPH_DISPOSITION_ACTIONS = {
+    "accept": "accept",
+    "retry": "repair",
+    "replan": "defer",
+    "block": "defer",
+}
 
 
 class TaskPacketInput(BaseModel):
@@ -384,13 +391,48 @@ async def submit_decisions(
     wave. `replan` fails closed until QiQi calls `reconcile_graph` with an explicitly
     authored replacement graph and the current revision.
     """
-    return _graph_runtime.submit_decisions(
+    parsed = decisions_from_payload(
+        [decision.model_dump(exclude_none=True, exclude_defaults=True) for decision in decisions]
+    )
+    disposition_links: list[tuple[str, str, str]] = []
+    for decision in parsed:
+        node = _graph_runtime.store.get_node(graph_run_id, decision.node_id)
+        if node is None:
+            raise RuntimeError(
+                f"persisted graph run is missing node state for {decision.node_id!r}"
+            )
+        turn_id = node.get("turn_id")
+        attempt_id = node.get("current_attempt_id")
+        if not isinstance(turn_id, str) or not turn_id:
+            raise RuntimeError(
+                f"TaskGraph decision for {decision.node_id!r} has no captured Peer turn_id"
+            )
+        if not isinstance(attempt_id, str) or not attempt_id:
+            raise RuntimeError(
+                f"TaskGraph decision for {decision.node_id!r} has no current attempt_id"
+            )
+        disposition_links.append((decision.node_id, turn_id, attempt_id))
+
+    result = _graph_runtime.submit_decisions(
         graph_run_id,
-        decisions_from_payload(
-            [decision.model_dump(exclude_none=True, exclude_defaults=True) for decision in decisions]
-        ),
+        parsed,
         expected_revision=expected_revision,
     )
+    for decision, (node_id, turn_id, attempt_id) in zip(
+        parsed, disposition_links, strict=True
+    ):
+        reason = f"TaskGraph semantic decision: {decision.action}"
+        if decision.feedback:
+            reason += "; feedback=" + " | ".join(decision.feedback)
+        _store.record_lead_disposition(
+            turn_id=turn_id,
+            action=_GRAPH_DISPOSITION_ACTIONS[decision.action],
+            reason=reason,
+            graph_run_id=graph_run_id,
+            node_id=node_id,
+            attempt_id=attempt_id,
+        )
+    return result
 
 
 if __name__ == "__main__":
