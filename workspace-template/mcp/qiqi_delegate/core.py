@@ -735,10 +735,6 @@ class SessionStore:
                 FOREIGN KEY (opened_event_seq) REFERENCES slp_events(seq),
                 FOREIGN KEY (closed_event_seq) REFERENCES slp_events(seq)
             );
-            CREATE INDEX IF NOT EXISTS supervisor_cases_status_rule_idx
-                ON supervisor_cases(status, rule);
-            CREATE INDEX IF NOT EXISTS supervisor_cases_turn_idx
-                ON supervisor_cases(turn_id, status);
             CREATE TABLE IF NOT EXISTS supervisor_broker_state (
                 broker_id TEXT PRIMARY KEY,
                 last_processed_seq INTEGER NOT NULL DEFAULT 0
