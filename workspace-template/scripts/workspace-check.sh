@@ -66,7 +66,8 @@ if grep -Eq 'pane[.]read|agent[.]read' "$supervisor_broker"; then
 fi
 
 for pattern in \
-  'workspace", "create"' \
+  '"workspace",' \
+  '"create",' \
   '"--label",' \
   'CONTROL_ID' \
   '"pane", "split"' \
