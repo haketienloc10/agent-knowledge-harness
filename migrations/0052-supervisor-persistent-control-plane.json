@@ -1,7 +1,7 @@
 {
   "version": 52,
   "from_ref": "62de7266ee8385101fb224279c8b5888ee5d4c02",
-  "to_ref": "6c1fa5fed9eca0513916305e97a9aafa74e6cec8",
+  "to_ref": "7b035d1788f9df948de9d5742f8bea333623087f",
   "description": "add the Phase 3 persistent Herdr SLP control plane and Supervisor-to-Lead wakeup: keep independently addressable Lead and Supervisor agents in a persistent slp-control workspace, run Supervisor from an isolated non-project control cwd with read-only/no-escalation Codex permissions, capture Supervisor semantic output through the native Stop hook rather than terminal reads, validate a bounded governance-only issue/no_issue schema, persist structured findings, deliver confirmed findings to Lead with Herdr agent prompt without treating delivery or acknowledgement as closure, and document/check the runtime authority boundary",
   "workspace": {
     "merge": [
