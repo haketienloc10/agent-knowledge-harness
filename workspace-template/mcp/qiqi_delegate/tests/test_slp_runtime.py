@@ -128,8 +128,12 @@ class SlpRuntimeStoreTests(unittest.TestCase):
             ["peer.response", "lead.disposition", "candidate.accepted"],
         )
         self.assertEqual(
-            events[-1]["payload"],
+            events[1]["payload"],
             {"action": "accept", "disposition_id": first["disposition_id"]},
+        )
+        self.assertEqual(
+            events[2]["payload"],
+            {"disposition_id": first["disposition_id"]},
         )
 
         with self.assertRaisesRegex(RuntimeError, "different Lead disposition"):
