@@ -610,6 +610,43 @@ class HerdrControlPlane:
     async def _agent_exists(self, name: str) -> bool:
         return await self._agent_info(name) is not None
 
+    async def _workspace_exists(self, workspace_id: str) -> bool:
+        returncode, _, _ = await self._run(
+            "workspace", "get", workspace_id, check=False
+        )
+        return returncode == 0
+
+    async def _pane_exists(self, pane_id: str) -> bool:
+        returncode, _, _ = await self._run("pane", "get", pane_id, check=False)
+        return returncode == 0
+
+    async def _discard_stale_control_plane(
+        self,
+        state: dict[str, Any],
+        *,
+        require_close_success: bool,
+    ) -> None:
+        workspace_id = _required_text(state.get("workspace_id"), "workspace_id")
+        workspace_exists = await self._workspace_exists(workspace_id)
+        if workspace_exists:
+            close_code, _, close_err = await self._run(
+                "workspace",
+                "close",
+                workspace_id,
+                check=False,
+            )
+            if require_close_success and close_code != 0:
+                raise RuntimeError(
+                    "cannot replace stale slp-control topology because Herdr workspace "
+                    f"close failed: {close_err.strip() or close_code}"
+                )
+            if close_code != 0:
+                raise RuntimeError(
+                    "cannot recover stale slp-control topology because Herdr workspace "
+                    f"close failed: {close_err.strip() or close_code}"
+                )
+        self.store.clear_control_plane()
+
     async def _wait_agent_prompt_ready(
         self,
         name: str,
@@ -746,18 +783,25 @@ class HerdrControlPlane:
             if not identity_matches:
                 stored_session = state.get("herdr_session")
                 if stored_session in {"", self.session}:
-                    close_code, _, close_err = await self._run(
-                        "workspace",
-                        "close",
-                        state["workspace_id"],
-                        check=False,
+                    await self._discard_stale_control_plane(
+                        state,
+                        require_close_success=True,
                     )
-                    if close_code != 0:
-                        raise RuntimeError(
-                            "cannot replace stale slp-control model identity because "
-                            f"Herdr workspace close failed: {close_err.strip() or close_code}"
-                        )
-                self.store.clear_control_plane()
+                else:
+                    self.store.clear_control_plane()
+                state = None
+
+        if state is not None:
+            workspace_ok = await self._workspace_exists(state["workspace_id"])
+            lead_pane_ok = await self._pane_exists(state["lead_pane_id"])
+            supervisor_pane_ok = await self._pane_exists(
+                state["supervisor_pane_id"]
+            )
+            if not (workspace_ok and lead_pane_ok and supervisor_pane_ok):
+                await self._discard_stale_control_plane(
+                    state,
+                    require_close_success=False,
+                )
                 state = None
 
         if state is not None:
@@ -783,11 +827,17 @@ class HerdrControlPlane:
                     ),
                 )
             except RuntimeError as exc:
-                raise RuntimeError(
-                    "persisted slp-control topology is stale; close the stale Herdr "
-                    "workspace or restore its shell panes before restarting the broker"
-                ) from exc
-            return self.store.get_control_plane() or state
+                if "agent_pane_not_found" not in str(exc):
+                    raise RuntimeError(
+                        "persisted slp-control topology could not be restored"
+                    ) from exc
+                await self._discard_stale_control_plane(
+                    state,
+                    require_close_success=False,
+                )
+                state = None
+            else:
+                return self.store.get_control_plane() or state
 
         capture_dir, nonce = self._prepare_supervisor_home()
         created = await self._run_json(
