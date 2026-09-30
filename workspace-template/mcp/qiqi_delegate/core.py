@@ -723,12 +723,69 @@ class SessionStore:
                 opened_event_seq INTEGER NOT NULL,
                 closed_event_seq INTEGER,
                 finding_fingerprint TEXT NOT NULL UNIQUE,
+                subject_key TEXT NOT NULL DEFAULT '',
+                turn_id TEXT,
+                work_item_id TEXT,
+                work_item_revision INTEGER
+                    CHECK (work_item_revision IS NULL OR work_item_revision >= 0),
+                candidate_id TEXT,
+                details_json TEXT NOT NULL DEFAULT '{}',
                 created_at_ns INTEGER NOT NULL,
                 updated_at_ns INTEGER NOT NULL,
                 FOREIGN KEY (opened_event_seq) REFERENCES slp_events(seq),
                 FOREIGN KEY (closed_event_seq) REFERENCES slp_events(seq)
             );
+            CREATE INDEX IF NOT EXISTS supervisor_cases_status_rule_idx
+                ON supervisor_cases(status, rule);
+            CREATE INDEX IF NOT EXISTS supervisor_cases_turn_idx
+                ON supervisor_cases(turn_id, status);
+            CREATE TABLE IF NOT EXISTS supervisor_broker_state (
+                broker_id TEXT PRIMARY KEY,
+                last_processed_seq INTEGER NOT NULL DEFAULT 0
+                    CHECK (last_processed_seq >= 0),
+                updated_at_ns INTEGER NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS write_scope_claims (
+                claim_id TEXT PRIMARY KEY,
+                claimed_event_seq INTEGER NOT NULL UNIQUE,
+                released_event_seq INTEGER,
+                repository TEXT NOT NULL,
+                owner TEXT NOT NULL,
+                scope_json TEXT NOT NULL,
+                active INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0, 1)),
+                created_at_ns INTEGER NOT NULL,
+                updated_at_ns INTEGER NOT NULL,
+                FOREIGN KEY (claimed_event_seq) REFERENCES slp_events(seq),
+                FOREIGN KEY (released_event_seq) REFERENCES slp_events(seq)
+            );
+            CREATE INDEX IF NOT EXISTS write_scope_claims_active_repo_idx
+                ON write_scope_claims(repository, active);
             """
+        )
+        supervisor_case_columns = {
+            row["name"] if isinstance(row, sqlite3.Row) else row[1]
+            for row in conn.execute("PRAGMA table_info(supervisor_cases)").fetchall()
+        }
+        supervisor_case_additions = {
+            "subject_key": "TEXT NOT NULL DEFAULT ''",
+            "turn_id": "TEXT",
+            "work_item_id": "TEXT",
+            "work_item_revision": "INTEGER",
+            "candidate_id": "TEXT",
+            "details_json": "TEXT NOT NULL DEFAULT '{}'",
+        }
+        for column, definition in supervisor_case_additions.items():
+            if column not in supervisor_case_columns:
+                conn.execute(
+                    f"ALTER TABLE supervisor_cases ADD COLUMN {column} {definition}"
+                )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS supervisor_cases_status_rule_idx "
+            "ON supervisor_cases(status, rule)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS supervisor_cases_turn_idx "
+            "ON supervisor_cases(turn_id, status)"
         )
 
     @staticmethod
