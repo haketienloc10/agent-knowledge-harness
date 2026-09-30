@@ -148,6 +148,10 @@ Create a tracked Work Item with exact canonical id: $work_item_id.
 
 Use repository: $repository.
 
+This fixture does not change requirements. Keep the initial Work Item revision unchanged
+throughout the fixture. Status/evidence transitions such as waiting, Lead disposition, and
+done MUST NOT increment revision and MUST NOT record a new work_item.revision_changed event.
+
 Delegate exactly one READ-ONLY repo-local Peer task:
 - report the current Git HEAD commit hash;
 - report whether the working tree is clean or dirty;
@@ -155,7 +159,7 @@ Delegate exactly one READ-ONLY repo-local Peer task:
 - return concise verification evidence.
 
 After the actual Peer response returns:
-- reconcile the Work Item with the Peer response locator/evidence;
+- reconcile the Work Item with the Peer response locator/evidence without changing revision;
 - set current state to waiting / awaiting Lead disposition;
 - intentionally DO NOT call record_lead_disposition;
 - do not ACCEPT, REJECT, repair, defer, or resolve that Peer response in this turn;
