@@ -746,12 +746,17 @@ class HerdrControlPlane:
             if not identity_matches:
                 stored_session = state.get("herdr_session")
                 if stored_session in {"", self.session}:
-                    await self._run(
+                    close_code, _, close_err = await self._run(
                         "workspace",
                         "close",
                         state["workspace_id"],
                         check=False,
                     )
+                    if close_code != 0:
+                        raise RuntimeError(
+                            "cannot replace stale slp-control model identity because "
+                            f"Herdr workspace close failed: {close_err.strip() or close_code}"
+                        )
                 self.store.clear_control_plane()
                 state = None
 
