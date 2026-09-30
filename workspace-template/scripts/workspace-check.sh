@@ -98,7 +98,7 @@ done
 for pattern in \
   'workspace: slp-control' \
   'Supervisor responses are captured through the native Stop hook' \
-  'does not use `pane.read` or `agent.read`' \
+  '`pane.read` or `agent.read` as semantic input.' \
   'must not claim continuous supervision'; do
   grep -Fq -- "$pattern" "$supervisor_runtime_doc" || \
     fail "SUPERVISOR_RUNTIME.md missing runtime contract: $pattern"
