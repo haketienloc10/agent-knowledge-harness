@@ -39,7 +39,7 @@ LEAD_DISPOSITION_ACTIONS = frozenset({"accept", "reject", "repair", "defer", "re
 SUPERVISOR_CASE_STATUSES = frozenset(
     {"OPEN", "DELIVERED_TO_LEAD", "WAITING_FOR_EVIDENCE", "CLOSED", "ESCALATED_TO_HUMAN"}
 )
-_WORK_ITEM_REF_RE = re.compile(r"(?:^|;\\s*)id=([^;]+);\\s*revision=(\\d+)(?:;|$)")
+_WORK_ITEM_REF_RE = re.compile(r"(?:^|;\s*)id=([^;]+);\s*revision=(\d+)(?:;|$)")
 
 
 def active_capture_filename(adapter: str, repo: Path) -> str:
