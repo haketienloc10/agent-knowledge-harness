@@ -137,6 +137,22 @@ def build_audit_packet(case: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(details, dict):
         details = {}
 
+    disposition = case.get("lead_disposition")
+    if isinstance(disposition, dict) and disposition:
+        disposition_state = {
+            "recorded": True,
+            "source": "lead_dispositions",
+            "disposition_id": disposition.get("disposition_id"),
+            "action": disposition.get("action"),
+            "work_item_revision": disposition.get("work_item_revision"),
+            "candidate_id": disposition.get("candidate_id"),
+        }
+    else:
+        disposition_state = {
+            "recorded": False,
+            "source": "lead_dispositions",
+        }
+
     return {
         "version": 1,
         "case_id": case_id,
@@ -152,10 +168,7 @@ def build_audit_packet(case: dict[str, Any]) -> dict[str, Any]:
             if turn_id
             else None
         ),
-        "disposition_state": {
-            "recorded": False,
-            "source": "lead_dispositions",
-        },
+        "disposition_state": disposition_state,
         "candidate_id": case.get("candidate_id"),
         "governance_facts": details,
     }
@@ -374,8 +387,13 @@ class SupervisorControlStore:
             raise ValueError("limit must be an integer between 1 and 100")
         with self._connect() as conn:
             rows = conn.execute(
-                "SELECT c.* FROM supervisor_cases c "
+                "SELECT c.*, d.disposition_id AS disposition_id, "
+                "d.action AS disposition_action, "
+                "d.work_item_revision AS disposition_work_item_revision, "
+                "d.candidate_id AS disposition_candidate_id "
+                "FROM supervisor_cases c "
                 "LEFT JOIN supervisor_findings f ON f.case_id = c.case_id "
+                "LEFT JOIN lead_dispositions d ON d.turn_id = c.turn_id "
                 "WHERE c.status = 'OPEN' AND f.case_id IS NULL "
                 "ORDER BY c.opened_event_seq, c.case_id LIMIT ?",
                 (limit,),
@@ -384,6 +402,17 @@ class SupervisorControlStore:
         for row in rows:
             item = dict(row)
             item["details"] = json.loads(item.pop("details_json"))
+            disposition_id = item.pop("disposition_id")
+            disposition_action = item.pop("disposition_action")
+            disposition_revision = item.pop("disposition_work_item_revision")
+            disposition_candidate_id = item.pop("disposition_candidate_id")
+            if isinstance(disposition_id, str) and disposition_id:
+                item["lead_disposition"] = {
+                    "disposition_id": disposition_id,
+                    "action": disposition_action,
+                    "work_item_revision": disposition_revision,
+                    "candidate_id": disposition_candidate_id,
+                }
             result.append(item)
         return result
 
