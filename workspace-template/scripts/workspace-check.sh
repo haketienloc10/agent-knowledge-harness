@@ -61,6 +61,15 @@ for pattern in \
   grep -Fq -- "$pattern" "$supervisor_launcher" || fail "Supervisor launcher missing runtime contract: $pattern"
 done
 
+for pattern in \
+  'interactive_ready' \
+  'launch_pending' \
+  'agent_status' \
+  '"code":"agent_not_ready"'; do
+  grep -Fq -- "$pattern" "$supervisor_e2e" || \
+    fail "live Supervisor E2E missing Lead readiness guard: $pattern"
+done
+
 grep -Fq 'events.subscribe' "$supervisor_broker" || \
   fail 'Supervisor broker must use Herdr events.subscribe as its primary wakeup stream'
 if grep -Eq 'pane[.]read|agent[.]read' "$supervisor_broker"; then
