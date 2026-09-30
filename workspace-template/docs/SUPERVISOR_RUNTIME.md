@@ -60,6 +60,8 @@ a case. Closure is driven by the semantic event store.
 Supervisor receives the smallest sufficient governance packet:
 
 - case id and rule;
+- normative `rule_contract` for the exact deterministic R1-R5 predicate and its bounded
+  `issue_when` facts;
 - Work Item id + revision when present;
 - Lead-brief locator by captured turn id;
 - Peer-response locator by captured turn id;
@@ -69,6 +71,18 @@ Supervisor receives the smallest sufficient governance packet:
 
 The packet intentionally does not contain raw Peer responses, TaskPacket bodies, transcripts,
 terminal output, source trees, or Work Item filesystem paths.
+
+Rule ids are not opaque to the Supervisor. The packet carries the deterministic meaning:
+
+- R1: actual Peer response exists without an explicit Lead disposition for that exact turn;
+- R2: downstream dependency was consumed before explicit ACCEPT of the upstream Peer turn;
+- R3: active writable ownership claims overlap in the same repository;
+- R4: REOPEN_REQUEST / DEPENDENCY_REQUEST / BLOCKED remains unresolved;
+- R5: a Peer response belongs to an older material Work Item revision than the current revision.
+
+Supervisor evaluates the bounded packet against that exact contract. It must not reinterpret a
+rule from perceived severity, implementation quality, or technical outcome. A prior disposition
+on an older revision does not by itself make an R5 candidate current.
 
 ## Supervisor response boundary
 
