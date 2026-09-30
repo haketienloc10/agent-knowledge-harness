@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import sqlite3
 import time
 import uuid
@@ -20,6 +21,25 @@ CAPTURE_LATEST_ACCEPT_RATIO = 0.35
 CAPTURE_HOUSEKEEPING_REJECT_RATIO = 0.15
 CAPTURE_MIN_SIGNIFICANT_DROP_CHARS = 600
 SUPPORTED_HOOK_ADAPTERS = {"claude", "codex"}
+SLP_EVENT_TYPES = frozenset(
+    {
+        "peer.dispatched",
+        "peer.response",
+        "peer.signal",
+        "peer.capture_ambiguous",
+        "lead.disposition",
+        "candidate.accepted",
+        "dependency.consumed",
+        "write_scope.claimed",
+        "write_scope.released",
+        "work_item.revision_changed",
+    }
+)
+LEAD_DISPOSITION_ACTIONS = frozenset({"accept", "reject", "repair", "defer", "resolve"})
+SUPERVISOR_CASE_STATUSES = frozenset(
+    {"OPEN", "DELIVERED_TO_LEAD", "WAITING_FOR_EVIDENCE", "CLOSED", "ESCALATED_TO_HUMAN"}
+)
+_WORK_ITEM_REF_RE = re.compile(r"(?:^|;\\s*)id=([^;]+);\\s*revision=(\\d+)(?:;|$)")
 
 
 def active_capture_filename(adapter: str, repo: Path) -> str:
@@ -127,6 +147,33 @@ class TaskPacket:
 
     def to_json(self) -> str:
         return json.dumps(self.as_dict(), ensure_ascii=False, separators=(",", ":"))
+
+
+def _work_item_ref_from_payload(payload: dict[str, Any]) -> tuple[str | None, int | None]:
+    context = payload.get("context")
+    if not isinstance(context, dict):
+        return None, None
+    trusted_facts = context.get("trusted_facts")
+    if not isinstance(trusted_facts, list):
+        return None, None
+    for item in trusted_facts:
+        if not isinstance(item, dict):
+            continue
+        fact = item.get("fact")
+        if not isinstance(fact, str) or "work_item_path=" not in fact:
+            continue
+        match = _WORK_ITEM_REF_RE.search(fact)
+        if match is None:
+            continue
+        work_item_id = match.group(1).strip()
+        if not work_item_id:
+            continue
+        return work_item_id, int(match.group(2))
+    return None, None
+
+
+def task_packet_work_item_ref(packet: TaskPacket) -> tuple[str | None, int | None]:
+    return _work_item_ref_from_payload(packet.as_dict())
 
 
 def _clean_required_text(value: Any, label: str) -> str:
@@ -621,8 +668,357 @@ class SessionStore:
                 PRIMARY KEY (capture_review_id, sequence),
                 FOREIGN KEY (capture_review_id) REFERENCES capture_reviews(capture_review_id)
             );
+            CREATE TABLE IF NOT EXISTS slp_events (
+                seq INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_type TEXT NOT NULL,
+                turn_id TEXT,
+                capture_review_id TEXT,
+                session_id TEXT,
+                repository TEXT,
+                route TEXT,
+                graph_run_id TEXT,
+                node_id TEXT,
+                attempt_id TEXT,
+                work_item_id TEXT,
+                work_item_revision INTEGER
+                    CHECK (work_item_revision IS NULL OR work_item_revision >= 0),
+                candidate_id TEXT,
+                payload_json TEXT NOT NULL,
+                created_at_ns INTEGER NOT NULL,
+                FOREIGN KEY (capture_review_id) REFERENCES capture_reviews(capture_review_id)
+            );
+            CREATE INDEX IF NOT EXISTS slp_events_type_seq_idx
+                ON slp_events(event_type, seq);
+            CREATE INDEX IF NOT EXISTS slp_events_turn_seq_idx
+                ON slp_events(turn_id, seq);
+            CREATE TABLE IF NOT EXISTS lead_dispositions (
+                disposition_id TEXT PRIMARY KEY,
+                event_seq INTEGER NOT NULL UNIQUE,
+                turn_id TEXT NOT NULL UNIQUE,
+                action TEXT NOT NULL
+                    CHECK (action IN ('accept', 'reject', 'repair', 'defer', 'resolve')),
+                work_item_id TEXT,
+                work_item_revision INTEGER
+                    CHECK (work_item_revision IS NULL OR work_item_revision >= 0),
+                candidate_id TEXT,
+                reason TEXT NOT NULL,
+                graph_run_id TEXT,
+                node_id TEXT,
+                attempt_id TEXT,
+                created_at_ns INTEGER NOT NULL,
+                FOREIGN KEY (event_seq) REFERENCES slp_events(seq),
+                FOREIGN KEY (turn_id) REFERENCES turns(turn_id)
+            );
+            CREATE TABLE IF NOT EXISTS supervisor_cases (
+                case_id TEXT PRIMARY KEY,
+                rule TEXT NOT NULL,
+                status TEXT NOT NULL
+                    CHECK (status IN (
+                        'OPEN',
+                        'DELIVERED_TO_LEAD',
+                        'WAITING_FOR_EVIDENCE',
+                        'CLOSED',
+                        'ESCALATED_TO_HUMAN'
+                    )),
+                opened_event_seq INTEGER NOT NULL,
+                closed_event_seq INTEGER,
+                finding_fingerprint TEXT NOT NULL UNIQUE,
+                created_at_ns INTEGER NOT NULL,
+                updated_at_ns INTEGER NOT NULL,
+                FOREIGN KEY (opened_event_seq) REFERENCES slp_events(seq),
+                FOREIGN KEY (closed_event_seq) REFERENCES slp_events(seq)
+            );
             """
         )
+
+    @staticmethod
+    def _optional_runtime_text(value: str | None, label: str) -> str | None:
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            raise ValueError(f"{label} must be a string when present")
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError(f"{label} must not be empty when present")
+        return cleaned
+
+    @staticmethod
+    def _optional_work_item_revision(value: int | None) -> int | None:
+        if value is None:
+            return None
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise ValueError("work_item_revision must be a non-negative integer when present")
+        return value
+
+    @staticmethod
+    def _slp_payload_json(payload: dict[str, Any] | None) -> str:
+        if payload is None:
+            payload = {}
+        if not isinstance(payload, dict):
+            raise ValueError("SLP event payload must be an object")
+        try:
+            return json.dumps(
+                payload,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+                allow_nan=False,
+            )
+        except (TypeError, ValueError) as exc:
+            raise ValueError("SLP event payload must be JSON-serializable") from exc
+
+    @classmethod
+    def _insert_slp_event(
+        cls,
+        conn: sqlite3.Connection,
+        *,
+        event_type: str,
+        turn_id: str | None = None,
+        capture_review_id: str | None = None,
+        session_id: str | None = None,
+        repository: str | None = None,
+        route: str | None = None,
+        graph_run_id: str | None = None,
+        node_id: str | None = None,
+        attempt_id: str | None = None,
+        work_item_id: str | None = None,
+        work_item_revision: int | None = None,
+        candidate_id: str | None = None,
+        payload: dict[str, Any] | None = None,
+        created_at_ns: int | None = None,
+    ) -> int:
+        if not isinstance(event_type, str) or event_type not in SLP_EVENT_TYPES:
+            raise ValueError(f"unsupported SLP event type: {event_type!r}")
+        clean_turn_id = cls._optional_runtime_text(turn_id, "turn_id")
+        clean_capture_review_id = cls._optional_runtime_text(
+            capture_review_id, "capture_review_id"
+        )
+        clean_session_id = cls._optional_runtime_text(session_id, "session_id")
+        clean_repository = cls._optional_runtime_text(repository, "repository")
+        clean_route = cls._optional_runtime_text(route, "route")
+        clean_graph_run_id = cls._optional_runtime_text(graph_run_id, "graph_run_id")
+        clean_node_id = cls._optional_runtime_text(node_id, "node_id")
+        clean_attempt_id = cls._optional_runtime_text(attempt_id, "attempt_id")
+        clean_work_item_id = cls._optional_runtime_text(work_item_id, "work_item_id")
+        clean_work_item_revision = cls._optional_work_item_revision(work_item_revision)
+        if (clean_work_item_id is None) != (clean_work_item_revision is None):
+            raise ValueError("work_item_id and work_item_revision must be provided together")
+        clean_candidate_id = cls._optional_runtime_text(candidate_id, "candidate_id")
+        payload_json = cls._slp_payload_json(payload)
+        now = created_at_ns if created_at_ns is not None else time.time_ns()
+        cursor = conn.execute(
+            "INSERT INTO slp_events("
+            "event_type, turn_id, capture_review_id, session_id, repository, route, "
+            "graph_run_id, node_id, attempt_id, work_item_id, work_item_revision, "
+            "candidate_id, payload_json, created_at_ns"
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                event_type,
+                clean_turn_id,
+                clean_capture_review_id,
+                clean_session_id,
+                clean_repository,
+                clean_route,
+                clean_graph_run_id,
+                clean_node_id,
+                clean_attempt_id,
+                clean_work_item_id,
+                clean_work_item_revision,
+                clean_candidate_id,
+                payload_json,
+                now,
+            ),
+        )
+        return int(cursor.lastrowid)
+
+    def record_slp_event(
+        self,
+        *,
+        event_type: str,
+        turn_id: str | None = None,
+        capture_review_id: str | None = None,
+        session_id: str | None = None,
+        repository: str | None = None,
+        route: str | None = None,
+        graph_run_id: str | None = None,
+        node_id: str | None = None,
+        attempt_id: str | None = None,
+        work_item_id: str | None = None,
+        work_item_revision: int | None = None,
+        candidate_id: str | None = None,
+        payload: dict[str, Any] | None = None,
+    ) -> int:
+        with self._connect() as conn:
+            return self._insert_slp_event(
+                conn,
+                event_type=event_type,
+                turn_id=turn_id,
+                capture_review_id=capture_review_id,
+                session_id=session_id,
+                repository=repository,
+                route=route,
+                graph_run_id=graph_run_id,
+                node_id=node_id,
+                attempt_id=attempt_id,
+                work_item_id=work_item_id,
+                work_item_revision=work_item_revision,
+                candidate_id=candidate_id,
+                payload=payload,
+            )
+
+    def list_slp_events(
+        self, *, after_seq: int = 0, limit: int = 100
+    ) -> list[dict[str, Any]]:
+        if isinstance(after_seq, bool) or not isinstance(after_seq, int) or after_seq < 0:
+            raise ValueError("after_seq must be a non-negative integer")
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 1000:
+            raise ValueError("limit must be an integer between 1 and 1000")
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM slp_events WHERE seq > ? ORDER BY seq ASC LIMIT ?",
+                (after_seq, limit),
+            ).fetchall()
+        result: list[dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            item["payload"] = json.loads(item.pop("payload_json"))
+            result.append(item)
+        return result
+
+    def record_lead_disposition(
+        self,
+        *,
+        turn_id: str,
+        action: str,
+        reason: str,
+        work_item_id: str | None = None,
+        work_item_revision: int | None = None,
+        candidate_id: str | None = None,
+        graph_run_id: str | None = None,
+        node_id: str | None = None,
+        attempt_id: str | None = None,
+    ) -> dict[str, Any]:
+        clean_turn_id = self._optional_runtime_text(turn_id, "turn_id")
+        if clean_turn_id is None:
+            raise ValueError("turn_id must not be empty")
+        if not isinstance(action, str):
+            raise ValueError("action must be a string")
+        clean_action = action.strip().lower()
+        if clean_action not in LEAD_DISPOSITION_ACTIONS:
+            raise ValueError(f"unsupported Lead disposition action: {action!r}")
+        if not isinstance(reason, str) or not reason.strip():
+            raise ValueError("reason must not be empty")
+        clean_reason = reason.strip()
+        clean_work_item_id = self._optional_runtime_text(work_item_id, "work_item_id")
+        clean_work_item_revision = self._optional_work_item_revision(work_item_revision)
+        if (clean_work_item_id is None) != (clean_work_item_revision is None):
+            raise ValueError("work_item_id and work_item_revision must be provided together")
+        clean_candidate_id = self._optional_runtime_text(candidate_id, "candidate_id")
+        clean_graph_run_id = self._optional_runtime_text(graph_run_id, "graph_run_id")
+        clean_node_id = self._optional_runtime_text(node_id, "node_id")
+        clean_attempt_id = self._optional_runtime_text(attempt_id, "attempt_id")
+
+        with self._connect() as conn:
+            turn = conn.execute(
+                "SELECT turn_id, session_id, repository, route, task_packet_json "
+                "FROM turns WHERE turn_id = ?",
+                (clean_turn_id,),
+            ).fetchone()
+            if turn is None:
+                raise RuntimeError(
+                    "Lead disposition requires an existing captured Peer turn: "
+                    f"unknown turn_id={clean_turn_id!r}"
+                )
+            if clean_work_item_id is None:
+                packet_payload = json.loads(turn["task_packet_json"])
+                inferred_id, inferred_revision = _work_item_ref_from_payload(packet_payload)
+                clean_work_item_id = inferred_id
+                clean_work_item_revision = inferred_revision
+
+            existing = conn.execute(
+                "SELECT * FROM lead_dispositions WHERE turn_id = ?",
+                (clean_turn_id,),
+            ).fetchone()
+            if existing is not None:
+                same = (
+                    existing["action"] == clean_action
+                    and existing["reason"] == clean_reason
+                    and existing["work_item_id"] == clean_work_item_id
+                    and existing["work_item_revision"] == clean_work_item_revision
+                    and existing["candidate_id"] == clean_candidate_id
+                    and existing["graph_run_id"] == clean_graph_run_id
+                    and existing["node_id"] == clean_node_id
+                    and existing["attempt_id"] == clean_attempt_id
+                )
+                if not same:
+                    raise RuntimeError(
+                        "Peer turn already has a different Lead disposition; "
+                        "a single actionable Peer response may not be dispositioned twice"
+                    )
+                result = dict(existing)
+                result["idempotent"] = True
+                return result
+
+            disposition_id = str(uuid.uuid4())
+            now = time.time_ns()
+            event_seq = self._insert_slp_event(
+                conn,
+                event_type="lead.disposition",
+                turn_id=clean_turn_id,
+                session_id=turn["session_id"],
+                repository=turn["repository"],
+                route=turn["route"],
+                graph_run_id=clean_graph_run_id,
+                node_id=clean_node_id,
+                attempt_id=clean_attempt_id,
+                work_item_id=clean_work_item_id,
+                work_item_revision=clean_work_item_revision,
+                candidate_id=clean_candidate_id,
+                payload={
+                    "disposition_id": disposition_id,
+                    "action": clean_action,
+                },
+                created_at_ns=now,
+            )
+            conn.execute(
+                "INSERT INTO lead_dispositions("
+                "disposition_id, event_seq, turn_id, action, work_item_id, "
+                "work_item_revision, candidate_id, reason, graph_run_id, node_id, "
+                "attempt_id, created_at_ns"
+                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    disposition_id,
+                    event_seq,
+                    clean_turn_id,
+                    clean_action,
+                    clean_work_item_id,
+                    clean_work_item_revision,
+                    clean_candidate_id,
+                    clean_reason,
+                    clean_graph_run_id,
+                    clean_node_id,
+                    clean_attempt_id,
+                    now,
+                ),
+            )
+            row = conn.execute(
+                "SELECT * FROM lead_dispositions WHERE disposition_id = ?",
+                (disposition_id,),
+            ).fetchone()
+        result = dict(row)
+        result["idempotent"] = False
+        return result
+
+    def get_lead_disposition(self, turn_id: str) -> dict[str, Any] | None:
+        clean_turn_id = self._optional_runtime_text(turn_id, "turn_id")
+        if clean_turn_id is None:
+            raise ValueError("turn_id must not be empty")
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM lead_dispositions WHERE turn_id = ?",
+                (clean_turn_id,),
+            ).fetchone()
+        return dict(row) if row is not None else None
 
     def get_session(self, session_id: str) -> dict[str, Any] | None:
         with self._connect() as conn:
@@ -695,6 +1091,7 @@ class SessionStore:
             raise ValueError("agent_response must not be empty")
         now = time.time_ns()
         packet_json = packet.to_json()
+        work_item_id, work_item_revision = task_packet_work_item_ref(packet)
         with self._connect() as conn:
             row = conn.execute(
                 "SELECT repository, agent FROM sessions WHERE session_id = ?",
@@ -729,6 +1126,18 @@ class SessionStore:
                     agent_response,
                     now,
                 ),
+            )
+            self._insert_slp_event(
+                conn,
+                event_type="peer.response",
+                turn_id=turn_id,
+                session_id=session_id,
+                repository=repository,
+                route=route,
+                work_item_id=work_item_id,
+                work_item_revision=work_item_revision,
+                payload={"runtime_state": state},
+                created_at_ns=now,
             )
 
     def record_capture_review(
@@ -800,6 +1209,16 @@ class SessionStore:
                         int(event.get("captured_at_ns") or 0),
                     ),
                 )
+            self._insert_slp_event(
+                conn,
+                event_type="peer.capture_ambiguous",
+                capture_review_id=capture_review_id,
+                session_id=session_id,
+                repository=repository,
+                route=route,
+                payload={"candidate_count": len(distinct_responses)},
+                created_at_ns=now,
+            )
 
     def get_capture_review(self, capture_review_id: str) -> dict[str, Any] | None:
         with self._connect() as conn:
