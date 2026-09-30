@@ -775,6 +775,9 @@ class SessionStore:
                 supervisor_pane_id TEXT NOT NULL,
                 lead_agent_name TEXT NOT NULL,
                 supervisor_agent_name TEXT NOT NULL,
+                herdr_session TEXT NOT NULL DEFAULT '',
+                lead_model TEXT NOT NULL DEFAULT '',
+                supervisor_model TEXT NOT NULL DEFAULT '',
                 supervisor_home TEXT NOT NULL,
                 supervisor_capture_dir TEXT NOT NULL,
                 supervisor_capture_nonce TEXT NOT NULL,
@@ -808,6 +811,20 @@ class SessionStore:
             "CREATE INDEX IF NOT EXISTS supervisor_cases_turn_idx "
             "ON supervisor_cases(turn_id, status)"
         )
+        supervisor_control_columns = {
+            row["name"] if isinstance(row, sqlite3.Row) else row[1]
+            for row in conn.execute("PRAGMA table_info(supervisor_control_plane)").fetchall()
+        }
+        supervisor_control_additions = {
+            "herdr_session": "TEXT NOT NULL DEFAULT ''",
+            "lead_model": "TEXT NOT NULL DEFAULT ''",
+            "supervisor_model": "TEXT NOT NULL DEFAULT ''",
+        }
+        for column, definition in supervisor_control_additions.items():
+            if column not in supervisor_control_columns:
+                conn.execute(
+                    f"ALTER TABLE supervisor_control_plane ADD COLUMN {column} {definition}"
+                )
 
     @staticmethod
     def _optional_runtime_text(value: str | None, label: str) -> str | None:
