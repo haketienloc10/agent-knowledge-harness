@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import hashlib
+import fcntl
 import json
 import os
 import re
@@ -38,6 +39,44 @@ HERDR_GLOBAL_SUBSCRIPTIONS = (
     "pane.agent_detected",
 )
 HERDR_SESSION_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+
+
+class BrokerInstanceLock:
+    """Process-lifetime non-blocking singleton lock for one Supervisor state DB."""
+
+    def __init__(self, state_db: Path):
+        self.state_db = state_db.resolve()
+        self.path = self.state_db.with_name(
+            self.state_db.name + ".supervisor-broker.lock"
+        )
+        self._handle = None
+
+    def acquire(self) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        handle = self.path.open("a+", encoding="utf-8")
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            handle.close()
+            raise RuntimeError(
+                "another Supervisor broker already owns this state DB: "
+                f"{self.state_db}"
+            ) from exc
+        handle.seek(0)
+        handle.truncate()
+        handle.write(str(os.getpid()) + "\n")
+        handle.flush()
+        self._handle = handle
+
+    def release(self) -> None:
+        handle = self._handle
+        if handle is None:
+            return
+        self._handle = None
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        finally:
+            handle.close()
 
 
 class HerdrSubscriptionError(RuntimeError):
@@ -1102,6 +1141,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.once:
         print(json.dumps(broker.process_pending(), sort_keys=True))
         return 0
+
+    instance_lock = BrokerInstanceLock(db_path)
+    instance_lock.acquire()
 
     session = (
         args.session
