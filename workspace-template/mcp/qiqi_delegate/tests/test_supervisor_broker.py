@@ -497,7 +497,9 @@ class HerdrLifecycleSubscriberTests(unittest.IsolatedAsyncioTestCase):
         server = await asyncio.start_unix_server(handler, path=str(socket_path))
         async with server:
             subscriber = HerdrLifecycleSubscriber(socket_path)
-            stream = subscriber.stream_once()
+            stream = subscriber.stream_once(yield_ready=True)
+            ready = await anext(stream)
+            self.assertEqual(ready["event"], "subscription_started")
             event = await anext(stream)
             self.assertEqual(event["event"], "workspace_created")
             await stream.aclose()
@@ -518,6 +520,68 @@ class HerdrLifecycleSubscriberTests(unittest.IsolatedAsyncioTestCase):
             },
             subscriptions,
         )
+
+    async def test_subscription_readiness_is_emitted_only_after_ack(self) -> None:
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        socket_path = Path(temp.name) / "herdr.sock"
+        acknowledged = asyncio.Event()
+        release_event = asyncio.Event()
+
+        async def handler(
+            reader: asyncio.StreamReader,
+            writer: asyncio.StreamWriter,
+        ) -> None:
+            snapshot = json.loads((await reader.readline()).decode("utf-8"))
+            writer.write(
+                (
+                    json.dumps({"id": snapshot["id"], "result": {"workspaces": []}})
+                    + "\n"
+                ).encode("utf-8")
+            )
+            await writer.drain()
+            subscribe = json.loads((await reader.readline()).decode("utf-8"))
+            writer.write(
+                (
+                    json.dumps(
+                        {
+                            "id": subscribe["id"],
+                            "result": {"type": "subscription_started"},
+                        }
+                    )
+                    + "\n"
+                ).encode("utf-8")
+            )
+            await writer.drain()
+            acknowledged.set()
+            await release_event.wait()
+            writer.write(
+                (
+                    json.dumps(
+                        {
+                            "event": "workspace_created",
+                            "data": {"workspace_id": "w-after-ready"},
+                        }
+                    )
+                    + "\n"
+                ).encode("utf-8")
+            )
+            await writer.drain()
+            await reader.read()
+            writer.close()
+            await writer.wait_closed()
+
+        server = await asyncio.start_unix_server(handler, path=str(socket_path))
+        async with server:
+            subscriber = HerdrLifecycleSubscriber(socket_path)
+            stream = subscriber.stream_once(yield_ready=True)
+            ready = await anext(stream)
+            self.assertTrue(acknowledged.is_set())
+            self.assertEqual(ready["event"], "subscription_started")
+            release_event.set()
+            event = await anext(stream)
+            self.assertEqual(event["data"]["workspace_id"], "w-after-ready")
+            await stream.aclose()
 
     async def test_events_lost_fails_to_reconnect_path_instead_of_guessing(self) -> None:
         temp = tempfile.TemporaryDirectory()
