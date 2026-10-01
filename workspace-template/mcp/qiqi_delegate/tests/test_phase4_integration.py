@@ -339,7 +339,7 @@ class DirectDelegationPhase4IntegrationTests(unittest.IsolatedAsyncioTestCase):
                         ),
                     )
                 )
-                with self.assertRaisesRegex(RuntimeError, "transient close failure"):
+                with self.assertRaisesRegex(ToolError, "transient close failure"):
                     await server.delegate_repo_task(
                         repository="repo-a",
                         route="claude-balanced",
