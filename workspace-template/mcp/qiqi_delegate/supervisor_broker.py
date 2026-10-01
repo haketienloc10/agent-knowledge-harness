@@ -323,10 +323,45 @@ class SupervisorBroker:
         now = time.time_ns()
         conn.execute(
             "INSERT OR IGNORE INTO supervisor_broker_state("
-            "broker_id, last_processed_seq, updated_at_ns"
-            ") VALUES (?, 0, ?)",
+            "broker_id, last_processed_seq, health_status, last_error, "
+            "last_error_at_ns, updated_at_ns"
+            ") VALUES (?, 0, 'healthy', NULL, NULL, ?)",
             (self.broker_id, now),
         )
+
+    def mark_retrying(self, error: BaseException) -> None:
+        message = f"{type(error).__name__}: {error}"
+        with self._connect() as conn:
+            self._ensure_state(conn)
+            now = time.time_ns()
+            conn.execute(
+                "UPDATE supervisor_broker_state SET health_status = 'retrying', "
+                "last_error = ?, last_error_at_ns = ?, updated_at_ns = ? "
+                "WHERE broker_id = ?",
+                (message, now, now, self.broker_id),
+            )
+
+    def mark_healthy(self) -> None:
+        with self._connect() as conn:
+            self._ensure_state(conn)
+            conn.execute(
+                "UPDATE supervisor_broker_state SET health_status = 'healthy', "
+                "last_error = NULL, last_error_at_ns = NULL, updated_at_ns = ? "
+                "WHERE broker_id = ?",
+                (time.time_ns(), self.broker_id),
+            )
+
+    def health_state(self) -> dict[str, Any]:
+        with self._connect() as conn:
+            self._ensure_state(conn)
+            row = conn.execute(
+                "SELECT health_status, last_error, last_error_at_ns, updated_at_ns "
+                "FROM supervisor_broker_state WHERE broker_id = ?",
+                (self.broker_id,),
+            ).fetchone()
+        if row is None:
+            raise RuntimeError("Supervisor broker state was not persisted")
+        return dict(row)
 
     def last_processed_seq(self) -> int:
         with self._connect() as conn:
@@ -1061,10 +1096,25 @@ def default_state_db() -> Path:
 async def _drain_durable(
     broker: SupervisorBroker,
     runtime: AutonomousSupervisorRuntime,
-) -> None:
+) -> dict[str, Any]:
+    broker_totals = {"processed": 0, "opened": 0, "closed": 0}
+    supervisor_totals = {
+        "reviewed": 0,
+        "delivered_to_lead": 0,
+        "review_attempted": 0,
+        "delivery_attempted": 0,
+        "review_failures": 0,
+        "delivery_failures": 0,
+    }
+    last_broker_result: dict[str, int] | None = None
     while True:
         broker_result = broker.process_pending(limit=BROKER_BATCH_LIMIT)
         runtime_result = await runtime.handle_pending_cases(limit=SUPERVISOR_BATCH_LIMIT)
+        last_broker_result = broker_result
+        for key in broker_totals:
+            broker_totals[key] += int(broker_result[key])
+        for key in supervisor_totals:
+            supervisor_totals[key] += int(runtime_result[key])
         if runtime_result["review_failures"] or runtime_result["delivery_failures"]:
             raise RuntimeError(
                 "Supervisor processing left retryable case/delivery failures"
@@ -1074,7 +1124,17 @@ async def _drain_durable(
             and runtime_result["review_attempted"] < SUPERVISOR_BATCH_LIMIT
             and runtime_result["delivery_attempted"] < SUPERVISOR_BATCH_LIMIT
         ):
-            return
+            broker.mark_healthy()
+            assert last_broker_result is not None
+            return {
+                "broker": {
+                    **broker_totals,
+                    "from_seq": last_broker_result["from_seq"],
+                    "last_processed_seq": last_broker_result["last_processed_seq"],
+                },
+                "supervisor": supervisor_totals,
+                "health": broker.health_state(),
+            }
 
 
 async def serve(
@@ -1110,7 +1170,14 @@ async def serve(
             HerdrSubscriptionError,
             RuntimeError,
             ValueError,
-        ):
+        ) as exc:
+            broker.mark_retrying(exc)
+            print(
+                "[slp-supervisor] retrying after supervision failure: "
+                f"{type(exc).__name__}: {exc}",
+                file=sys.stderr,
+                flush=True,
+            )
             await asyncio.sleep(reconnect_seconds)
 
 
@@ -1174,14 +1241,18 @@ def main(argv: list[str] | None = None) -> int:
         control_plane=control_plane,
     )
     if args.supervise_once:
-        broker_result = broker.process_pending()
-        runtime_result = asyncio.run(runtime.handle_pending_cases())
-        print(
-            json.dumps(
-                {"broker": broker_result, "supervisor": runtime_result},
-                sort_keys=True,
+        try:
+            result = asyncio.run(_drain_durable(broker, runtime))
+        except (RuntimeError, ValueError, OSError) as exc:
+            broker.mark_retrying(exc)
+            print(
+                "[slp-supervisor] supervise-once failed: "
+                f"{type(exc).__name__}: {exc}",
+                file=sys.stderr,
+                flush=True,
             )
-        )
+            raise
+        print(json.dumps(result, sort_keys=True))
         return 0
 
     socket_path = resolve_herdr_socket(
