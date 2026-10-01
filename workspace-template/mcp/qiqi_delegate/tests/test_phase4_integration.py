@@ -3,6 +3,7 @@ from __future__ import annotations
 import sys
 import tempfile
 import unittest
+from contextlib import ExitStack
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -240,66 +241,104 @@ class DirectDelegationPhase4IntegrationTests(unittest.IsolatedAsyncioTestCase):
             repo_path.mkdir()
             store = SessionStore(root / "qiqi_delegate.sqlite3")
             capture_path = root / "capture.json"
+            release = AsyncMock()
 
-            with (
-                patch.object(server, "_store", store),
-                patch.object(server, "_resolve_repo", return_value=repo_path),
-                patch.object(
-                    server,
-                    "_resolve_route",
-                    return_value=(
-                        "claude",
-                        {"adapter": "claude", "command": "claude"},
-                        {"model": "sonnet", "args": []},
-                    ),
-                ),
-                patch.object(server.shutil, "which", return_value="/bin/true"),
-                patch.object(server, "_ensure_herdr_server", new=AsyncMock()),
-                patch.object(server, "_require_current_integration", new=AsyncMock()),
-                patch.object(server, "_claim_resources", new=AsyncMock()),
-                patch.object(server, "_release_resources", new=AsyncMock()) as release,
-                patch.object(server, "_register_active_capture", return_value=capture_path),
-                patch.object(server, "_remove_active_capture"),
-                patch.object(server, "_build_handoff_args", return_value=[]),
-                patch.object(server, "_build_interactive_args", return_value=[]),
-                patch.object(
-                    server,
-                    "_create_herdr_workspace",
-                    new=AsyncMock(return_value=("workspace-1", "pane-1")),
-                ),
-                patch.object(
-                    server,
-                    "_start_interactive_agent",
-                    new=AsyncMock(return_value=("agent-1", {})),
-                ),
-                patch.object(server, "_validate_reported_session_if_present"),
-                patch.object(
-                    server,
-                    "_prompt_and_wait",
-                    new=AsyncMock(return_value=("settled", {})),
-                ),
-                patch.object(
-                    server,
-                    "_wait_for_native_session",
-                    new=AsyncMock(return_value="native-session-1"),
-                ),
-                patch.object(
-                    server,
-                    "_wait_for_result_capture",
-                    new=AsyncMock(
-                        return_value={
-                            "state": "settled",
-                            "native_turn_id": "native-turn-1",
-                            "agent_response": "peer final response",
-                        }
-                    ),
-                ),
-                patch.object(
-                    server,
-                    "_close_herdr_workspace",
-                    new=AsyncMock(side_effect=RuntimeError("transient close failure")),
-                ),
-            ):
+            with ExitStack() as stack:
+                stack.enter_context(patch.object(server, "_store", store))
+                stack.enter_context(
+                    patch.object(server, "_resolve_repo", return_value=repo_path)
+                )
+                stack.enter_context(
+                    patch.object(
+                        server,
+                        "_resolve_route",
+                        return_value=(
+                            "claude",
+                            {"adapter": "claude", "command": "claude"},
+                            {"model": "sonnet", "args": []},
+                        ),
+                    )
+                )
+                stack.enter_context(
+                    patch.object(server.shutil, "which", return_value="/bin/true")
+                )
+                stack.enter_context(
+                    patch.object(server, "_ensure_herdr_server", new=AsyncMock())
+                )
+                stack.enter_context(
+                    patch.object(server, "_require_current_integration", new=AsyncMock())
+                )
+                stack.enter_context(
+                    patch.object(server, "_claim_resources", new=AsyncMock())
+                )
+                stack.enter_context(
+                    patch.object(server, "_release_resources", new=release)
+                )
+                stack.enter_context(
+                    patch.object(
+                        server, "_register_active_capture", return_value=capture_path
+                    )
+                )
+                stack.enter_context(patch.object(server, "_remove_active_capture"))
+                stack.enter_context(
+                    patch.object(server, "_build_handoff_args", return_value=[])
+                )
+                stack.enter_context(
+                    patch.object(server, "_build_interactive_args", return_value=[])
+                )
+                stack.enter_context(
+                    patch.object(
+                        server,
+                        "_create_herdr_workspace",
+                        new=AsyncMock(return_value=("workspace-1", "pane-1")),
+                    )
+                )
+                stack.enter_context(
+                    patch.object(
+                        server,
+                        "_start_interactive_agent",
+                        new=AsyncMock(return_value=("agent-1", {})),
+                    )
+                )
+                stack.enter_context(
+                    patch.object(server, "_validate_reported_session_if_present")
+                )
+                stack.enter_context(
+                    patch.object(
+                        server,
+                        "_prompt_and_wait",
+                        new=AsyncMock(return_value=("settled", {})),
+                    )
+                )
+                stack.enter_context(
+                    patch.object(
+                        server,
+                        "_wait_for_native_session",
+                        new=AsyncMock(return_value="native-session-1"),
+                    )
+                )
+                stack.enter_context(
+                    patch.object(
+                        server,
+                        "_wait_for_result_capture",
+                        new=AsyncMock(
+                            return_value={
+                                "state": "settled",
+                                "native_turn_id": "native-turn-1",
+                                "agent_response": "peer final response",
+                            }
+                        ),
+                    )
+                )
+                stack.enter_context(
+                    patch.object(
+                        server,
+                        "_close_herdr_workspace",
+                        new=AsyncMock(
+                            side_effect=RuntimeError("transient close failure")
+                        ),
+                    )
+                )
                 with self.assertRaisesRegex(RuntimeError, "transient close failure"):
                     await server.delegate_repo_task(
                         repository="repo-a",
