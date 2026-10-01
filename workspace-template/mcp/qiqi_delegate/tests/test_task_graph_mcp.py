@@ -251,8 +251,20 @@ class TaskGraphMcpTests(unittest.IsolatedAsyncioTestCase):
             for variant in variants
         }
         self.assertEqual(set(by_action), {"accept", "retry", "replan", "block"})
-        for action in ("accept", "replan", "block"):
-            self.assertEqual(set(by_action[action]["properties"]), {"node_id", "action"})
+        self.assertEqual(
+            set(by_action["accept"]["properties"]),
+            {"node_id", "action"},
+        )
+        self.assertFalse(by_action["accept"].get("additionalProperties", True))
+        for action in ("replan", "block"):
+            self.assertEqual(
+                set(by_action[action]["properties"]),
+                {"node_id", "action", "owner", "return_checkpoint"},
+            )
+            self.assertEqual(
+                set(by_action[action]["required"]),
+                {"node_id", "action", "owner", "return_checkpoint"},
+            )
             self.assertFalse(by_action[action].get("additionalProperties", True))
         retry = by_action["retry"]
         self.assertEqual(
@@ -577,7 +589,12 @@ class TaskGraphMcpTests(unittest.IsolatedAsyncioTestCase):
                     "submit_decisions",
                     {
                         "graph_run_id": started["graph_run_id"],
-                        "decisions": [{"node_id": "contracts", "action": "replan"}],
+                        "decisions": [{
+                            "node_id": "contracts",
+                            "action": "replan",
+                            "owner": "lead",
+                            "return_checkpoint": "after replacement graph is authored",
+                        }],
                         "expected_revision": reviewable["revision"],
                     },
                 )
@@ -588,6 +605,20 @@ class TaskGraphMcpTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload["replan_required_nodes"], ["contracts"])
         self.assertEqual(payload["nodes"][0]["semantic_state"], "blocked")
         self.assertEqual(payload["review_required"], [])
+        disposition = self.slp_store.get_lead_disposition("qiqi-turn-contracts")
+        self.assertIsNotNone(disposition)
+        self.assertIn("owner=lead", disposition["reason"])
+        self.assertIn(
+            "return_checkpoint=after replacement graph is authored",
+            disposition["reason"],
+        )
+        self.assertEqual(
+            payload["decision_outcomes"][0]["defer"],
+            {
+                "owner": "lead",
+                "return_checkpoint": "after replacement graph is authored",
+            },
+        )
 
     async def test_blocked_direct_result_is_persisted_for_qiqi_review(self) -> None:
         delegate = AsyncMock(
