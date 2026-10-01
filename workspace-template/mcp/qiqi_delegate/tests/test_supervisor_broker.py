@@ -17,6 +17,7 @@ from supervisor_broker import (  # noqa: E402
     BrokerInstanceLock,
     HerdrEventsLost,
     HerdrLifecycleSubscriber,
+    HerdrSubscriptionError,
     SupervisorBroker,
     _drain_durable,
     main,
@@ -688,6 +689,78 @@ class HerdrLifecycleSubscriberTests(unittest.IsolatedAsyncioTestCase):
             event = await anext(stream)
             self.assertEqual(event["data"]["workspace_id"], "w-after-ready")
             await stream.aclose()
+
+    async def test_snapshot_handshake_times_out_instead_of_stalling(self) -> None:
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        socket_path = Path(temp.name) / "herdr.sock"
+        completed = asyncio.Event()
+
+        async def handler(
+            reader: asyncio.StreamReader,
+            writer: asyncio.StreamWriter,
+        ) -> None:
+            try:
+                await reader.readline()
+                await reader.read()
+            finally:
+                writer.close()
+                await writer.wait_closed()
+                completed.set()
+
+        server = await asyncio.start_unix_server(handler, path=str(socket_path))
+        async with server:
+            subscriber = HerdrLifecycleSubscriber(
+                socket_path,
+                handshake_timeout_seconds=0.05,
+            )
+            stream = subscriber.stream_once(yield_ready=True)
+            with self.assertRaisesRegex(
+                HerdrSubscriptionError,
+                "session.snapshot timed out",
+            ):
+                await anext(stream)
+            await asyncio.wait_for(completed.wait(), timeout=2)
+
+    async def test_subscribe_handshake_times_out_instead_of_stalling(self) -> None:
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        socket_path = Path(temp.name) / "herdr.sock"
+        completed = asyncio.Event()
+
+        async def handler(
+            reader: asyncio.StreamReader,
+            writer: asyncio.StreamWriter,
+        ) -> None:
+            try:
+                snapshot = json.loads((await reader.readline()).decode("utf-8"))
+                writer.write(
+                    (
+                        json.dumps({"id": snapshot["id"], "result": {"workspaces": []}})
+                        + "\n"
+                    ).encode("utf-8")
+                )
+                await writer.drain()
+                await reader.readline()
+                await reader.read()
+            finally:
+                writer.close()
+                await writer.wait_closed()
+                completed.set()
+
+        server = await asyncio.start_unix_server(handler, path=str(socket_path))
+        async with server:
+            subscriber = HerdrLifecycleSubscriber(
+                socket_path,
+                handshake_timeout_seconds=0.05,
+            )
+            stream = subscriber.stream_once(yield_ready=True)
+            with self.assertRaisesRegex(
+                HerdrSubscriptionError,
+                "events.subscribe timed out",
+            ):
+                await anext(stream)
+            await asyncio.wait_for(completed.wait(), timeout=2)
 
     async def test_events_lost_fails_to_reconnect_path_instead_of_guessing(self) -> None:
         temp = tempfile.TemporaryDirectory()
