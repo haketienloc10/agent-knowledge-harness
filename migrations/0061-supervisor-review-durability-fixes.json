@@ -1,0 +1,32 @@
+{
+  "version": 61,
+  "from_ref": "267738c3b6c89eff0f36b580b0c6a9c6c206b6ab",
+  "to_ref": "1a8d03b037d28e0dba68833c58de567770e49ab1",
+  "description": "fix Codex review findings in the autonomous Supervisor runtime: make runtime-blocked R4 cases closable from same-session response evidence, preserve bounded Peer signal details, release durable write claims despite Herdr cleanup failure, record TaskGraph dependency consumption at dispatch, fully drain durable broker/Supervisor batches before waiting for wakeups, isolate and retry transient supervision failures without terminating the daemon, validate named-agent pane topology before reuse, and require explicit candidate.reconciled evidence for exact R5 stale-candidate closure",
+  "workspace": {
+    "merge": [
+      "workspace-template/AGENTS.md",
+      "workspace-template/docs/SUPERVISOR_RUNTIME.md",
+      "workspace-template/scripts/workspace-check.sh"
+    ],
+    "replace": [
+      "workspace-template/.codex/config.toml",
+      "workspace-template/mcp/qiqi_delegate/core.py",
+      "workspace-template/mcp/qiqi_delegate/server.py",
+      "workspace-template/mcp/qiqi_delegate/task_graph_mcp.py",
+      "workspace-template/mcp/qiqi_delegate/supervisor_broker.py",
+      "workspace-template/mcp/qiqi_delegate/supervisor_control.py",
+      "workspace-template/mcp/qiqi_delegate/tests/test_phase4_integration.py",
+      "workspace-template/mcp/qiqi_delegate/tests/test_supervisor_broker.py",
+      "workspace-template/mcp/qiqi_delegate/tests/test_supervisor_control.py"
+    ],
+    "delete": [],
+    "manual_review": []
+  },
+  "repo": {
+    "merge": [],
+    "replace": [],
+    "delete": [],
+    "manual_review": []
+  }
+}
