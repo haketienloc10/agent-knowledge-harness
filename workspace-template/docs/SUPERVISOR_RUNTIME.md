@@ -158,7 +158,8 @@ The runtime now emits/records the semantic inputs consumed by the deterministic 
   transport can fail;
 - every direct/TaskGraph repository delegation uses the existing repository ownership lock and
   emits conservative `write_scope.claimed/released` events with scope `["*"]`; durable release
-  is attempted even if Herdr workspace cleanup fails;
+  is attempted both when pre-dispatch semantic recording fails after the claim and when later Herdr
+  workspace cleanup fails;
 - explicit Lead `accept` also emits `candidate.accepted`;
 - R5 stale candidates do not close merely because another current-revision Peer response appears.
   Lead records exact stale-candidate reconciliation with `record_candidate_reconciliation`, which
@@ -170,10 +171,13 @@ planning.
 
 ## Herdr wakeup contract
 
-The broker uses raw `events.subscribe` only as a wakeup stream. On startup, reconnect, topology
-change, or event loss, it repeatedly drains bounded SQLite event/case batches before waiting for a
-new wakeup. A transient Supervisor/control-plane failure is isolated from other cases and retried
-with backoff; it does not terminate the long-lived broker.
+The broker uses raw `events.subscribe` only as a wakeup stream. On startup/reconnect it first
+drains durable SQLite truth, opens the Herdr subscription, waits for the explicit
+`subscription_started` acknowledgement, then performs a second full durable drain before waiting
+for lifecycle wakeups. This closes the commit-to-subscribe race: any wakeup created during the
+second drain is already buffered by the active subscription. Topology change or event loss causes
+reconnect and the same durable replay sequence. A transient Supervisor/control-plane failure is
+isolated from other cases and retried with backoff; it does not terminate the long-lived broker.
 
 Supervisor responses are captured through the native Stop hook. The broker does not use
 `pane.read` or `agent.read` as semantic input.
