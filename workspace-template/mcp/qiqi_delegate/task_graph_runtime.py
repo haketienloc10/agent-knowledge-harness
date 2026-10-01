@@ -1054,6 +1054,7 @@ class GraphRuntime:
         decisions: tuple[ReviewDecision, ...],
         *,
         expected_revision: int,
+        lead_dispositions: tuple[dict[str, Any], ...] = (),
     ) -> dict[str, Any]:
         graph, snapshot, revision = self._snapshot(graph_run_id)
         if isinstance(expected_revision, bool) or not isinstance(expected_revision, int):
@@ -1105,10 +1106,11 @@ class GraphRuntime:
                 feedback=decision.feedback,
             )
 
-        self.store.save_snapshot(
+        self.store.save_snapshot_with_dispositions(
             graph_run_id,
             updated,
             expected_revision=expected_revision,
+            dispositions=lead_dispositions,
         )
         # The current authored graph remains unchanged. Retry plans are process-owned
         # execution metadata, matching the current process-owned graph-definition boundary.
