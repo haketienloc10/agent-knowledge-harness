@@ -95,7 +95,7 @@ for pattern in \
   grep -Fq -- "$pattern" "$supervisor_control" || \
     fail "Supervisor control plane missing persistent/runtime boundary: $pattern"
 done
-if grep -Eq 'pane[.]read|agent[.]read|delegate_repo_task|record_lead_disposition|record_work_item_revision|record_peer_signal|record_dependency_consumed' "$supervisor_control"; then
+if grep -Eq 'pane[.]read|agent[.]read|delegate_repo_task|record_lead_disposition|record_work_item_revision|record_peer_signal|record_peer_signal_resolution|record_candidate_reconciliation|record_dependency_consumed' "$supervisor_control"; then
   fail 'Supervisor control plane must not expose terminal reads, Peer delegation, Work Item/runtime mutation, or Lead disposition mutation'
 fi
 grep -Fq 'DEFAULT_MODEL = "gpt-5.6-luna"' "$supervisor_control" || \
