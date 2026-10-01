@@ -428,6 +428,26 @@ class SupervisorBroker:
             for b in right
         )
 
+    @classmethod
+    def _overlap_pairs(
+        cls,
+        left: list[str],
+        right: list[str],
+        *,
+        limit: int = 20,
+    ) -> tuple[list[dict[str, str]], bool]:
+        pairs: list[dict[str, str]] = []
+        truncated = False
+        for left_item in left:
+            for right_item in right:
+                if not cls._scope_items_overlap(left_item, right_item):
+                    continue
+                if len(pairs) >= limit:
+                    truncated = True
+                    return pairs, truncated
+                pairs.append({"left": left_item, "right": right_item})
+        return pairs, truncated
+
     @staticmethod
     def _scope_payload(payload: dict[str, Any]) -> list[str] | None:
         scope = payload.get("scope")
@@ -530,24 +550,50 @@ class SupervisorBroker:
         disposition = self._lead_disposition(conn, source_turn_id)
         if disposition is not None and disposition["action"] == "accept":
             return 0, 0
-        subject = (
-            f"source-turn:{source_turn_id}:consumer:{event.get('turn_id') or ''}"
-            if source_turn_id
-            else f"event:{event['seq']}"
-        )
+
+        source_event = None
+        if source_turn_id:
+            source_event = conn.execute(
+                "SELECT work_item_id, work_item_revision, candidate_id "
+                "FROM slp_events WHERE event_type = 'peer.response' AND turn_id = ? "
+                "ORDER BY seq DESC LIMIT 1",
+                (source_turn_id,),
+            ).fetchone()
+
         opened = self._open_case(
             conn,
             event=event,
             rule="R2",
-            subject_key=subject,
+            subject_key=(
+                f"source-turn:{source_turn_id}:consume-event:{event['seq']}"
+                if source_turn_id
+                else f"event:{event['seq']}"
+            ),
             details={
                 "source_turn_id": source_turn_id,
                 "consumer_turn_id": event.get("turn_id"),
+                "consumer_repository": event.get("repository"),
+                "consumer_graph_run_id": event.get("graph_run_id"),
+                "consumer_node_id": event.get("node_id"),
+                "consumer_work_item_id": event.get("work_item_id"),
+                "consumer_work_item_revision": event.get("work_item_revision"),
             },
-            turn_id=event.get("turn_id"),
-            work_item_id=event.get("work_item_id"),
-            work_item_revision=event.get("work_item_revision"),
-            candidate_id=event.get("candidate_id"),
+            turn_id=source_turn_id,
+            work_item_id=(
+                source_event["work_item_id"]
+                if source_event is not None
+                else event.get("work_item_id")
+            ),
+            work_item_revision=(
+                source_event["work_item_revision"]
+                if source_event is not None
+                else event.get("work_item_revision")
+            ),
+            candidate_id=(
+                source_event["candidate_id"]
+                if source_event is not None
+                else event.get("candidate_id")
+            ),
         )
         return int(opened), 0
 
@@ -611,6 +657,9 @@ class SupervisorBroker:
             if not self._scopes_overlap(scope, other_scope):
                 continue
             pair = sorted([claim_id, other["claim_id"]])
+            overlap_pairs, overlap_pairs_truncated = self._overlap_pairs(
+                scope, other_scope
+            )
             opened += int(
                 self._open_case(
                     conn,
@@ -621,6 +670,8 @@ class SupervisorBroker:
                         "claim_ids": pair,
                         "repository": repository,
                         "overlap": True,
+                        "overlap_pairs": overlap_pairs,
+                        "overlap_pairs_truncated": overlap_pairs_truncated,
                     },
                     work_item_id=event.get("work_item_id"),
                     work_item_revision=event.get("work_item_revision"),
@@ -699,6 +750,31 @@ class SupervisorBroker:
         )
         return int(opened), 0
 
+    def _process_peer_signal_resolved(
+        self,
+        conn: sqlite3.Connection,
+        event: dict[str, Any],
+    ) -> tuple[int, int]:
+        turn_id = event.get("turn_id")
+        signal = self._normalize_signal(event["payload"].get("signal"))
+        if (
+            not isinstance(turn_id, str)
+            or not turn_id
+            or signal not in AUDIT_SIGNALS
+        ):
+            return 0, 0
+        closed = self._close_cases(
+            conn,
+            event_seq=int(event["seq"]),
+            predicate=lambda case: (
+                case["rule"] == "R4"
+                and case.get("turn_id") == turn_id
+                and case["details"].get("signal") == signal
+                and case["details"].get("runtime_blocked") is not True
+            ),
+        )
+        return 0, closed
+
     def _process_work_item_revision(
         self,
         conn: sqlite3.Connection,
@@ -712,35 +788,63 @@ class SupervisorBroker:
             or not isinstance(current_revision, int)
         ):
             return 0, 0
-        stale = conn.execute(
+        stale_rows = conn.execute(
             "SELECT * FROM slp_events "
             "WHERE event_type = 'peer.response' AND work_item_id = ? "
             "AND seq < ? AND work_item_revision < ? "
-            "ORDER BY seq DESC LIMIT 1",
+            "ORDER BY seq ASC",
             (work_item_id, int(event["seq"]), current_revision),
-        ).fetchone()
-        if stale is None:
-            return 0, 0
-        stale_event = dict(stale)
-        turn_id = stale_event.get("turn_id")
-        if not isinstance(turn_id, str) or not turn_id:
-            return 0, 0
-        opened = self._open_case(
-            conn,
-            event=event,
-            rule="R5",
-            subject_key=f"turn:{turn_id}:revision:{current_revision}",
-            details={
-                "turn_id": turn_id,
-                "stale_revision": stale_event.get("work_item_revision"),
-                "current_revision": current_revision,
-            },
-            turn_id=turn_id,
-            work_item_id=work_item_id,
-            work_item_revision=current_revision,
-            candidate_id=stale_event.get("candidate_id"),
-        )
-        return int(opened), 0
+        ).fetchall()
+        opened = 0
+        for stale in stale_rows:
+            stale_event = dict(stale)
+            turn_id = stale_event.get("turn_id")
+            if not isinstance(turn_id, str) or not turn_id:
+                continue
+
+            reconciliation_rows = conn.execute(
+                "SELECT work_item_revision, payload_json FROM slp_events "
+                "WHERE event_type = 'candidate.reconciled' AND turn_id = ? "
+                "AND work_item_id = ? AND seq < ? ORDER BY seq DESC",
+                (turn_id, work_item_id, int(event["seq"])),
+            ).fetchall()
+            reconciled = False
+            for reconciliation in reconciliation_rows:
+                payload = json.loads(reconciliation["payload_json"])
+                resolution = payload.get("resolution")
+                if resolution in {"superseded", "abandoned"}:
+                    reconciled = True
+                    break
+                if (
+                    resolution == "revalidated"
+                    and isinstance(reconciliation["work_item_revision"], int)
+                    and int(reconciliation["work_item_revision"]) >= current_revision
+                ):
+                    reconciled = True
+                    break
+                # A lower-revision revalidation does not make this candidate current.
+                break
+            if reconciled:
+                continue
+
+            opened += int(
+                self._open_case(
+                    conn,
+                    event=event,
+                    rule="R5",
+                    subject_key=f"turn:{turn_id}:revision:{current_revision}",
+                    details={
+                        "turn_id": turn_id,
+                        "stale_revision": stale_event.get("work_item_revision"),
+                        "current_revision": current_revision,
+                    },
+                    turn_id=turn_id,
+                    work_item_id=work_item_id,
+                    work_item_revision=current_revision,
+                    candidate_id=stale_event.get("candidate_id"),
+                )
+            )
+        return opened, 0
 
     def _process_candidate_reconciled(
         self,
@@ -832,6 +936,8 @@ class SupervisorBroker:
             return self._process_write_scope_release(conn, event)
         if event_type == "peer.signal":
             return self._process_peer_signal(conn, event)
+        if event_type == "peer.signal_resolved":
+            return self._process_peer_signal_resolved(conn, event)
         if event_type == "work_item.revision_changed":
             return self._process_work_item_revision(conn, event)
         return 0, 0
