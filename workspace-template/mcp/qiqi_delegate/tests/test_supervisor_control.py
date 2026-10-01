@@ -590,7 +590,48 @@ class _StaleNamedAgentControlPlane(_RecordingHerdrControlPlane):
         raise RuntimeError(f"stale named agent is not prompt-ready: {name}")
 
 
+class _PartialCreateFailureControlPlane(_RecordingHerdrControlPlane):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.fail_supervisor_once = True
+
+    async def _start_agent(
+        self,
+        name: str,
+        pane_id: str,
+        args: list[str],
+    ) -> None:
+        if name == "supervisor" and self.fail_supervisor_once:
+            self.fail_supervisor_once = False
+            raise RuntimeError("simulated supervisor start failure")
+        await super()._start_agent(name, pane_id, args)
+
+
 class HerdrControlPlaneTopologyTests(unittest.IsolatedAsyncioTestCase):
+    async def test_partial_initial_creation_is_closed_before_retry(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            workspace = root / "workspace"
+            workspace.mkdir()
+            state_db = workspace / ".qiqi" / "state" / "qiqi_delegate.sqlite3"
+            control = _PartialCreateFailureControlPlane(
+                workspace_root=workspace,
+                state_db=state_db,
+                supervisor_home=root / "isolated-supervisor",
+            )
+
+            with self.assertRaisesRegex(RuntimeError, "simulated supervisor start failure"):
+                await control.ensure_started()
+
+            self.assertIsNone(control.store.get_control_plane())
+            self.assertIn(("workspace", "close", "w-control"), control.commands)
+            self.assertEqual(control.agent_names, set())
+
+            state = await control.ensure_started()
+            self.assertEqual(state["workspace_id"], "w-control")
+            self.assertEqual(state["lead_agent_name"], "lead")
+            self.assertEqual(state["supervisor_agent_name"], "supervisor")
+
     async def test_missing_persisted_pane_recreates_control_room(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
