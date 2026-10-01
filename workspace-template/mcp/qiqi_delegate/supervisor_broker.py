@@ -181,8 +181,20 @@ class HerdrLifecycleSubscriber:
     Every wakeup causes the broker to replay durable slp_events from SQLite.
     """
 
-    def __init__(self, socket_path: Path):
+    def __init__(
+        self,
+        socket_path: Path,
+        *,
+        handshake_timeout_seconds: float = 10.0,
+    ):
+        if (
+            isinstance(handshake_timeout_seconds, bool)
+            or not isinstance(handshake_timeout_seconds, (int, float))
+            or handshake_timeout_seconds <= 0
+        ):
+            raise ValueError("handshake_timeout_seconds must be a positive number")
         self.socket_path = socket_path
+        self.handshake_timeout_seconds = float(handshake_timeout_seconds)
 
     @staticmethod
     async def _send(
@@ -201,6 +213,22 @@ class HerdrLifecycleSubscriber:
         if not raw:
             raise EOFError("Herdr event socket closed")
         return _json_object(raw.decode("utf-8"))
+
+    async def _read_handshake(
+        self,
+        reader: asyncio.StreamReader,
+        *,
+        context: str,
+    ) -> dict[str, Any]:
+        try:
+            return await asyncio.wait_for(
+                self._read(reader),
+                timeout=self.handshake_timeout_seconds,
+            )
+        except asyncio.TimeoutError as exc:
+            raise HerdrSubscriptionError(
+                f"{context} timed out after {self.handshake_timeout_seconds:g}s"
+            ) from exc
 
     @staticmethod
     def _raise_error(message: dict[str, Any], *, context: str) -> None:
@@ -236,7 +264,10 @@ class HerdrLifecycleSubscriber:
                 writer,
                 {"id": snapshot_id, "method": "session.snapshot", "params": {}},
             )
-            snapshot = await self._read(reader)
+            snapshot = await self._read_handshake(
+                reader,
+                context="Herdr session.snapshot",
+            )
             self._raise_error(snapshot, context="Herdr session.snapshot")
             if snapshot.get("id") != snapshot_id:
                 raise HerdrSubscriptionError(
@@ -262,7 +293,10 @@ class HerdrLifecycleSubscriber:
                     "params": {"subscriptions": subscriptions},
                 },
             )
-            acknowledgement = await self._read(reader)
+            acknowledgement = await self._read_handshake(
+                reader,
+                context="Herdr events.subscribe",
+            )
             self._raise_error(
                 acknowledgement,
                 context="Herdr events.subscribe",
