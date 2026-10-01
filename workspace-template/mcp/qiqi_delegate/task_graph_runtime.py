@@ -25,7 +25,9 @@ _NODE_FIELDS = frozenset(
     {"node_id", "kind", "repository", "route", "depends_on", "task_packet"}
 )
 _NODE_REQUIRED_FIELDS = frozenset({"node_id", "repository", "task_packet"})
-_DECISION_FIELDS = frozenset({"node_id", "action", "resume_session", "feedback"})
+_DECISION_FIELDS = frozenset(
+    {"node_id", "action", "resume_session", "feedback", "owner", "return_checkpoint"}
+)
 _DECISION_REQUIRED_FIELDS = frozenset({"node_id", "action"})
 _EXECUTION_TERMINAL_STATES = frozenset({"settled", "failed", "blocked", "capture_ambiguous"})
 _RETRY_FEEDBACK_SOURCE = "QiQi semantic review"
@@ -43,6 +45,8 @@ class ReviewDecision:
     action: str
     resume_session: bool = False
     feedback: tuple[str, ...] = ()
+    owner: str | None = None
+    return_checkpoint: str | None = None
 
 
 @dataclass(frozen=True)
@@ -147,6 +151,14 @@ def _feedback_from_payload(value: Any, label: str) -> tuple[str, ...]:
             raise ValueError(f"graph {label}[{index}] must not be empty")
         result.append(cleaned)
     return tuple(result)
+
+
+def _optional_decision_text(value: Any, label: str) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"graph {label} must be a non-empty string")
+    return value.strip()
 
 
 def _retry_task_packet(packet: TaskPacket, feedback: tuple[str, ...]) -> TaskPacket:
@@ -306,15 +318,31 @@ def decisions_from_payload(payload: Any) -> tuple[ReviewDecision, ...]:
 
         action = decision["action"]
         has_retry_metadata = "resume_session" in decision or "feedback" in decision
+        has_defer_metadata = "owner" in decision or "return_checkpoint" in decision
         if action != "retry" and has_retry_metadata:
             raise ValueError(
                 f"graph {label} retry metadata is only valid for action='retry'"
+            )
+        if action not in {"replan", "block"} and has_defer_metadata:
+            raise ValueError(
+                f"graph {label} defer metadata is only valid for action='replan' or 'block'"
             )
 
         resume_session = decision.get("resume_session", False)
         if not isinstance(resume_session, bool):
             raise ValueError(f"graph {label}.resume_session must be a boolean")
         feedback = _feedback_from_payload(decision.get("feedback"), f"{label}.feedback")
+        owner = _optional_decision_text(decision.get("owner"), f"{label}.owner")
+        return_checkpoint = _optional_decision_text(
+            decision.get("return_checkpoint"),
+            f"{label}.return_checkpoint",
+        )
+        if action in {"replan", "block"} and (
+            owner is None or return_checkpoint is None
+        ):
+            raise ValueError(
+                f"graph {label} action={action!r} requires owner and return_checkpoint"
+            )
 
         decisions.append(
             ReviewDecision(
@@ -322,6 +350,8 @@ def decisions_from_payload(payload: Any) -> tuple[ReviewDecision, ...]:
                 action=action,
                 resume_session=resume_session,
                 feedback=feedback,
+                owner=owner,
+                return_checkpoint=return_checkpoint,
             )
         )
     if not decisions:
@@ -1134,6 +1164,11 @@ class GraphRuntime:
                     "resume_session": plan.resume_session,
                     "session_id": plan.session_id,
                     "feedback": list(plan.feedback),
+                }
+            if decision.action in {"replan", "block"}:
+                outcome["defer"] = {
+                    "owner": decision.owner,
+                    "return_checkpoint": decision.return_checkpoint,
                 }
             outcomes.append(outcome)
 
