@@ -106,10 +106,14 @@ class RetryDecisionInput(_DecisionInput):
 
 class ReplanDecisionInput(_DecisionInput):
     action: Literal["replan"]
+    owner: str = Field(min_length=1)
+    return_checkpoint: str = Field(min_length=1)
 
 
 class BlockDecisionInput(_DecisionInput):
     action: Literal["block"]
+    owner: str = Field(min_length=1)
+    return_checkpoint: str = Field(min_length=1)
 
 
 GraphDecisionInput = Annotated[
@@ -433,7 +437,9 @@ async def submit_decisions(
 ) -> dict[str, Any]:
     """Apply QiQi per-node semantic review decisions and recompute graph state.
 
-    Supported actions are `accept`, `retry`, `replan`, and `block`. For `retry`, QiQi may
+    Supported actions are `accept`, `retry`, `replan`, and `block`. `replan` and `block`
+    require explicit `owner` and `return_checkpoint` so a persisted defer remains actionable.
+    For `retry`, QiQi may
     set `resume_session=true` to continue the exact prior native session and may provide
     `feedback=[...]`; feedback is carried into a fresh TaskPacket snapshot through the
     existing context.claims_to_investigate contract. Omit/false `resume_session` for a
@@ -479,6 +485,13 @@ async def submit_decisions(
         reason = f"TaskGraph semantic decision: {decision.action}"
         if decision.feedback:
             reason += "; feedback=" + " | ".join(decision.feedback)
+        if decision.action in {"replan", "block"}:
+            assert decision.owner is not None
+            assert decision.return_checkpoint is not None
+            reason += (
+                f"; owner={decision.owner}; "
+                f"return_checkpoint={decision.return_checkpoint}"
+            )
         lead_dispositions.append(
             {
                 "turn_id": turn_id,
