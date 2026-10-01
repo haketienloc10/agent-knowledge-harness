@@ -1,7 +1,7 @@
 {
   "version": 64,
   "from_ref": "fd51fd47819b8a6f68a6bc3342920ac27e538ff7",
-  "to_ref": "e2952b8b5f8308253114b6507fef20efe307448c",
+  "to_ref": "6a6deb31210083060cd8d3938f94dcafe78f2836",
   "description": "fix fourth Codex review of autonomous Supervisor/TaskGraph durability: atomically commit TaskGraph graph-state decisions and exact Lead dispositions in one SQLite transaction, reject TaskGraph ACCEPT when the current attempt has no canonical captured Peer turn, clean up partially created Herdr control-plane workspaces before retry, and enforce one long-lived Supervisor runtime per exact state database with a process-lifetime POSIX file lock",
   "workspace": {
     "merge": [
@@ -18,7 +18,8 @@
       "workspace-template/mcp/qiqi_delegate/task_graph_store.py",
       "workspace-template/mcp/qiqi_delegate/tests/test_supervisor_broker.py",
       "workspace-template/mcp/qiqi_delegate/tests/test_supervisor_control.py",
-      "workspace-template/mcp/qiqi_delegate/tests/test_task_graph_mcp.py"
+      "workspace-template/mcp/qiqi_delegate/tests/test_task_graph_mcp.py",
+      "workspace-template/mcp/qiqi_delegate/tests/test_task_graph_parallel_wave.py"
     ],
     "delete": [],
     "manual_review": []
