@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from core import SessionStore, build_task_packet  # noqa: E402
 from supervisor_broker import (  # noqa: E402
+    BrokerInstanceLock,
     HerdrEventsLost,
     HerdrLifecycleSubscriber,
     SupervisorBroker,
@@ -391,6 +392,26 @@ class SupervisorBrokerTests(unittest.TestCase):
                 for value in row
             )
         self.assertNotIn(raw, stored)
+
+
+@unittest.skipIf(os.name == "nt", "broker singleton uses POSIX flock")
+class BrokerInstanceLockTests(unittest.TestCase):
+    def test_second_lock_for_same_state_db_fails_until_first_releases(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            state_db = Path(temp) / "qiqi_delegate.sqlite3"
+            first = BrokerInstanceLock(state_db)
+            second = BrokerInstanceLock(state_db)
+            first.acquire()
+            try:
+                with self.assertRaisesRegex(
+                    RuntimeError, "another Supervisor broker already owns this state DB"
+                ):
+                    second.acquire()
+            finally:
+                first.release()
+
+            second.acquire()
+            second.release()
 
 
 class DurableDrainTests(unittest.IsolatedAsyncioTestCase):
