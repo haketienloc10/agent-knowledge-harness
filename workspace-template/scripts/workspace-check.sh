@@ -180,8 +180,10 @@ grep -Fq 'record_lead_disposition_in_transaction' "$mcp_project/core.py" || \
   fail 'SessionStore must expose transactional Lead disposition persistence'
 grep -Fq 'cannot be accepted without' "$mcp_project/task_graph_mcp.py" || \
   fail 'TaskGraph accept must require an exact captured Peer turn'
-grep -Fq 'flock -n 9' "$workspace_root/scripts/qiqi-supervisor-broker.sh" || \
-  fail 'Supervisor broker launcher must enforce one process per workspace'
+grep -Fq 'class BrokerInstanceLock' "$supervisor_broker" || \
+  fail 'Supervisor broker must enforce one process per state database'
+grep -Fq 'instance_lock.acquire()' "$supervisor_broker" || \
+  fail 'Supervisor broker main path must acquire the singleton lock'
 grep -Fq 'partially created slp-control workspace' "$supervisor_control" || \
   fail 'Supervisor control-plane creation must clean up provisional topology on failure'
 grep -Fq 'write_claim_recorded = False' "$mcp_project/server.py" || \
