@@ -184,6 +184,18 @@ grep -Fq 'class BrokerInstanceLock' "$supervisor_broker" || \
   fail 'Supervisor broker must enforce one process per state database'
 grep -Fq 'instance_lock.acquire()' "$supervisor_broker" || \
   fail 'Supervisor broker main path must acquire the singleton lock'
+grep -Fq 'health_status = '\''retrying'\''' "$supervisor_broker" || \
+  fail 'Supervisor broker must persist retrying health state'
+grep -Fq 'retrying after supervision failure' "$supervisor_broker" || \
+  fail 'Supervisor broker must surface retry failures on stderr'
+grep -Fq 'result = asyncio.run(_drain_durable(broker, runtime))' "$supervisor_broker" || \
+  fail '--supervise-once must use the full durable drain loop'
+grep -Fq 'backfilled_from' "$mcp_project/core.py" || \
+  fail 'SessionStore schema upgrade must backfill legacy turns into peer.response events'
+grep -Fq 'does not match the captured Peer turn' "$mcp_project/core.py" || \
+  fail 'Lead disposition must reject Work Item provenance mismatches'
+grep -Fq 'requires owner and return_checkpoint' "$mcp_project/task_graph_runtime.py" || \
+  fail 'TaskGraph replan/block decisions must require owner + return checkpoint'
 grep -Fq 'partially created slp-control workspace' "$supervisor_control" || \
   fail 'Supervisor control-plane creation must clean up provisional topology on failure'
 grep -Fq 'write_claim_recorded = False' "$mcp_project/server.py" || \
