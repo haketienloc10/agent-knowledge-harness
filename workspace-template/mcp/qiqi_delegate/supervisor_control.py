@@ -948,7 +948,8 @@ class HerdrControlPlane:
             except RuntimeError as exc:
                 if "agent_pane_not_found" not in str(exc):
                     raise RuntimeError(
-                        "persisted slp-control topology could not be restored"
+                        "persisted slp-control topology could not be restored: "
+                        f"{exc}"
                     ) from exc
                 await self._discard_stale_control_plane(
                     state,
