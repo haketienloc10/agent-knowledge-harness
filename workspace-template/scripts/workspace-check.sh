@@ -138,6 +138,7 @@ for pattern in \
   'work_item.revision_changed' \
   'record_dependency_consumed' \
   'record_candidate_reconciliation' \
+  'record_peer_signal_resolution' \
   'write_scope.claimed/released' \
   'autonomous E2E-08 state-machine integration test' \
   'normative `rule_contract`' \
@@ -151,10 +152,19 @@ for tool_name in \
   'record_lead_disposition' \
   'record_work_item_revision' \
   'record_peer_signal' \
+  'record_peer_signal_resolution' \
   'record_candidate_reconciliation' \
   'record_dependency_consumed'; do
   grep -Fq -- "$tool_name" "$config" || \
     fail "QiQi config missing SLP semantic runtime tool: $tool_name"
+done
+
+for invocation in \
+  'bash scripts/qiqi-supervisor-broker.sh' \
+  'bash scripts/qiqi-supervisor-broker.sh --supervise-once' \
+  'bash scripts/qiqi-supervisor-broker.sh --once'; do
+  grep -Fq -- "$invocation" "$supervisor_runtime_doc" || \
+    fail "SUPERVISOR_RUNTIME.md must invoke the non-executable broker launcher through bash: $invocation"
 done
 
 grep -Fq 'command: codex' "$routing" || fail 'Codex must resolve the native codex CLI'
@@ -243,6 +253,7 @@ for pattern in \
   'explicit `ACCEPT` / `REJECT`' \
   'record_work_item_revision' \
   'record_peer_signal' \
+  'record_peer_signal_resolution' \
   'record_candidate_reconciliation' \
   'record_dependency_consumed' \
   'write_scope.claimed/released'; do
