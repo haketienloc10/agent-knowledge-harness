@@ -108,6 +108,30 @@ class ResultHookTests(unittest.TestCase):
         finally:
             temp.cleanup()
 
+    def test_direct_hook_capture_is_independent_of_changed_cwd(self):
+        response = "DIRECT-CAPTURE-OK"
+        temp, sink, completed = self.run_direct_hook(
+            "claude",
+            {
+                "hook_event_name": "Stop",
+                "session_id": "claude-session",
+                "cwd": "/repo/nested/package",
+                "last_assistant_message": response,
+                "background_tasks": [],
+            },
+        )
+        try:
+            self.assertEqual(completed.returncode, 0)
+            self.assertEqual(completed.stdout.strip(), "{}")
+            files = list(sink.glob("event-*.json"))
+            self.assertEqual(len(files), 1)
+            event = json.loads(files[0].read_text(encoding="utf-8"))
+            self.assertEqual(event["agent_response"], response)
+            self.assertEqual(event["cwd"], "/repo/nested/package")
+            self.assertEqual(event["state"], "settled")
+        finally:
+            temp.cleanup()
+
     def test_static_hook_routes_through_active_capture_descriptor(self):
         response = "STATIC-BEGIN\nTiếng Việt ✓\nSTATIC-END"
         temp, sink, completed = self.run_static_hook(
@@ -237,14 +261,21 @@ class ResultHookTests(unittest.TestCase):
         finally:
             temp.cleanup()
 
-    def test_malformed_hook_input_does_not_block_agent(self):
+    def test_malformed_direct_hook_input_persists_failure_without_blocking_agent(self):
         temp, sink, completed = self.run_direct_hook(
-            "claude", {"hook_event_name": "Stop"}
+            "claude", {"hook_event_name": "Stop", "cwd": "/repo/nested"}
         )
         try:
             self.assertEqual(completed.returncode, 0)
             self.assertEqual(completed.stdout.strip(), "{}")
-            self.assertEqual(list(sink.glob("event-*.json")), [])
+            files = list(sink.glob("event-*.json"))
+            self.assertEqual(len(files), 1)
+            event = json.loads(files[0].read_text(encoding="utf-8"))
+            self.assertEqual(event["state"], "capture_error")
+            self.assertTrue(event["hook_failure"])
+            self.assertIsNone(event["session_id"])
+            self.assertEqual(event["cwd"], "/repo/nested")
+            self.assertIn("missing session_id", event["error"])
             self.assertIn("capture failed", completed.stderr)
         finally:
             temp.cleanup()
