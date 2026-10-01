@@ -54,6 +54,17 @@ class QiQiDelegateMcpErrorTransportTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("upgrade Claude Code", text)
         self.assertIn("RESUME", text)
 
+    def test_direct_hook_failure_names_structured_recovery(self) -> None:
+        error = _delegation_tool_error(
+            RuntimeError(
+                "native result hook capture failed: ValueError: hook payload is missing session_id"
+            )
+        )
+        text = str(error)
+        self.assertIn("code=native_result_hook_failed", text)
+        self.assertIn("missing session_id", text)
+        self.assertIn("RESUME", text)
+
     async def test_unknown_repository_is_model_visible(self) -> None:
         with patch(
             "server._resolve_repo",

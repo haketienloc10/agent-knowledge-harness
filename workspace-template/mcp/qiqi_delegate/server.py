@@ -50,7 +50,7 @@ HERDR_SESSION = (
 HERDR_AGENT_START_TIMEOUT_MS = 60_000
 HERDR_SHELL_READY_TIMEOUT_SECONDS = 10.0
 NATIVE_SESSION_WAIT_SECONDS = 15.0
-NATIVE_RESULT_WAIT_SECONDS = 5.0
+NATIVE_RESULT_WAIT_SECONDS = 15.0
 NATIVE_PENDING_RESULT_WAIT_SECONDS = 3600.0
 CLAUDE_PROMPT_RETRY_EFFECT_SECONDS = 5.0
 SUPPORTED_ADAPTERS = {"codex", "claude"}
@@ -122,8 +122,9 @@ mcp = MCPServer(
         "omitted assignment semantics. Allowed repository/runtime/Knowledge tools may still "
         "be used for execution evidence or reusable implementation knowledge under stable "
         "policy. The MCP launches/resumes the native Codex or Claude session through Herdr "
-        "and captures native assistant Stop responses through a static result-hook command "
-        "routed to MCP-owned active-capture state; it never scrapes terminal scrollback or "
+        "and captures native assistant Stop responses through a per-delegation result-hook "
+        "command with an explicit sink/nonce; capture routing does not depend on mutable hook "
+        "cwd. It never scrapes terminal scrollback or "
         "parses agent transcripts. Root Stop responses are preserved as a bounded capture window. "
         "Runtime quiescence decides when that window closes. Within one closed capture window, "
         "response selection uses only Stop order and response length: the latest response wins "
@@ -214,6 +215,12 @@ def _delegation_tool_error(exc: ValueError | RuntimeError) -> ToolError:
     elif "unknown capture_review_id" in lowered:
         code = "capture_review_not_found"
         action = "use the exact capture_review_id returned by delegate_repo_task"
+    elif "native result hook capture failed" in lowered:
+        code = "native_result_hook_failed"
+        action = (
+            "inspect the structured hook failure in this error, repair the reported hook "
+            "condition, then retry or RESUME the preserved session"
+        )
     elif "native final response was not captured" in lowered:
         code = "native_result_capture_failed"
         action = "use the preserved session_id in this error to RESUME the exact native session after repairing result capture"
@@ -481,17 +488,26 @@ def _build_interactive_args(
     return argv
 
 
-def _result_hook_command(adapter: str) -> str:
-    return shlex.join(
-        [
-            sys.executable,
-            str(RESULT_HOOK_PATH),
-            "--adapter",
-            adapter,
-            "--state-root",
-            str(STATE_DB.parent),
-        ]
-    )
+def _result_hook_command(
+    adapter: str,
+    *,
+    sink: Path | None = None,
+    nonce: str | None = None,
+) -> str:
+    if (sink is None) != (nonce is None):
+        raise RuntimeError("result hook sink and nonce must be provided together")
+    argv = [
+        sys.executable,
+        str(RESULT_HOOK_PATH),
+        "--adapter",
+        adapter,
+    ]
+    if sink is not None and nonce is not None:
+        argv.extend(["--sink", str(sink), "--nonce", nonce])
+    else:
+        # Compatibility path for static hook tests and older callers.
+        argv.extend(["--state-root", str(STATE_DB.parent)])
+    return shlex.join(argv)
 
 
 def _toml_string(value: str) -> str:
@@ -525,8 +541,13 @@ def _codex_session_hook_key() -> str:
     return f"{source}:stop:0:0"
 
 
-def _build_handoff_args(adapter: str) -> list[str]:
-    command = _result_hook_command(adapter)
+def _build_handoff_args(
+    adapter: str,
+    *,
+    sink: Path | None = None,
+    nonce: str | None = None,
+) -> list[str]:
+    command = _result_hook_command(adapter, sink=sink, nonce=nonce)
     if adapter == "claude":
         settings = {
             "hooks": {
@@ -1030,6 +1051,29 @@ async def _wait_for_result_capture(
     last_error: Exception | None = None
     while True:
         events = load_capture_events(sink, nonce)
+        hook_failures = [
+            event
+            for event in events
+            if event.get("version") == 1
+            and event.get("adapter") == adapter
+            and event.get("state") == "capture_error"
+            and event.get("hook_failure") is True
+            and event.get("session_id") in {None, "", native_session_id}
+        ]
+        if hook_failures:
+            latest_failure = max(
+                hook_failures,
+                key=lambda item: int(item.get("captured_at_ns") or 0),
+            )
+            detail = latest_failure.get("error")
+            raise RuntimeError(
+                "native result hook capture failed: "
+                + (
+                    detail
+                    if isinstance(detail, str) and detail
+                    else "unspecified hook failure"
+                )
+            )
         try:
             resolution = resolve_capture_events(
                 events, adapter=adapter, session_id=native_session_id
@@ -1185,22 +1229,19 @@ async def delegate_repo_task(
     await _claim_resources(repo, session_id)
 
     workspace_id: str | None = None
-    capture_path: Path | None = None
     qiqi_turn_id = new_turn_id()
     try:
         with tempfile.TemporaryDirectory(prefix="qiqi-handoff-") as temp_dir:
             sink = Path(temp_dir).resolve()
             os.chmod(sink, 0o700)
             nonce = uuid.uuid4().hex
-            capture_path = _register_active_capture(
-                adapter=adapter,
-                repo=repo,
+            # Route this delegated turn directly to its private sink. Hook payload cwd
+            # can change during Claude execution, so it must not be used as capture identity.
+            handoff_args = _build_handoff_args(
+                adapter,
                 sink=sink,
                 nonce=nonce,
-                expected_session_id=session_id,
-                qiqi_turn_id=qiqi_turn_id,
             )
-            handoff_args = _build_handoff_args(adapter)
             label = f"qiqi:{repository}:{qiqi_turn_id[:8]}"
             workspace_id, pane_id = await _create_herdr_workspace(repo, label)
             interactive_args = _build_interactive_args(
@@ -1285,7 +1326,6 @@ async def delegate_repo_task(
                 "agent_response": response,
             }
     finally:
-        _remove_active_capture(capture_path)
         if workspace_id:
             await _close_herdr_workspace(workspace_id)
         await _release_resources(repo, session_id)
