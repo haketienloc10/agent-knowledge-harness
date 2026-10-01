@@ -1,0 +1,26 @@
+{
+  "version": 63,
+  "from_ref": "81b6c04f822dfd5bb2e0ce489cf9b0b0216b33c0",
+  "to_ref": "fd51fd47819b8a6f68a6bc3342920ac27e538ff7",
+  "description": "fix third Codex review of autonomous Supervisor durability: close the SQLite commit-to-Herdr-subscribe race by waiting for subscription_started and performing a second full durable drain with the subscription already active, and release an already-persisted write_scope claim when peer.dispatched semantic recording fails before delegation enters the normal cleanup block",
+  "workspace": {
+    "merge": [
+      "workspace-template/docs/SUPERVISOR_RUNTIME.md",
+      "workspace-template/scripts/workspace-check.sh"
+    ],
+    "replace": [
+      "workspace-template/mcp/qiqi_delegate/server.py",
+      "workspace-template/mcp/qiqi_delegate/supervisor_broker.py",
+      "workspace-template/mcp/qiqi_delegate/tests/test_phase4_integration.py",
+      "workspace-template/mcp/qiqi_delegate/tests/test_supervisor_broker.py"
+    ],
+    "delete": [],
+    "manual_review": []
+  },
+  "repo": {
+    "merge": [],
+    "replace": [],
+    "delete": [],
+    "manual_review": []
+  }
+}
