@@ -4,9 +4,13 @@ on:
   pull_request:
     paths:
       - '.github/workflows/qiqi-delegate-contract.yml'
+      - 'README.md'
+      - 'docs/WORKSPACE_INSTALLER.md'
+      - 'scripts/setup-workspace.sh'
       - 'workspace-template/**'
       - 'repo-template/**'
       - 'work-item-template/**'
+      - 'knowledge-template/**'
       - 'migrations/**'
       - 'scripts/migrate_workspace.py'
       - 'scripts/tests/**'
@@ -109,7 +113,12 @@ jobs:
           bash repo-template/scripts/repo-check.sh
       - name: Check managed shell syntax
         run: |
+          bash -n scripts/setup-workspace.sh
           bash -n workspace-template/scripts/qiqi-mcp-server.sh
+          bash -n workspace-template/scripts/setup-claude.sh
+          bash -n workspace-template/scripts/workspace-check.sh
           bash -n work-item-template/scripts/install-workspace-skill.sh
           bash -n work-item-template/scripts/install-user-skill.sh
           bash -n work-item-template/scripts/remove-legacy-user-mcp.sh
+          bash -n knowledge-template/scripts/install-user-mcp.sh
+          bash -n knowledge-template/scripts/install-user-skill.sh

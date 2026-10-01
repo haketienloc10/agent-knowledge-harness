@@ -5,15 +5,21 @@ home="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 project="$home/mcp/knowledge"
 store_root="$home/store"
 bin_dir="${HOME}/.local/bin"
+clients="available"
 
 usage() {
   cat <<'EOF'
-Usage: install-user-mcp.sh [--store-root PATH] [--bin-dir PATH]
+Usage: install-user-mcp.sh [--clients available|claude|codex|both] [--store-root PATH] [--bin-dir PATH]
 
 Installs the user-level Shared Knowledge runtime:
-- managed `knowledge-distill` skill for Codex and Claude Code user scope;
+- managed `knowledge-distill` skill for selected Codex/Claude clients;
 - stable `agent-knowledge-mcp` wrapper;
-- MCP registration named `knowledge` for available Codex/Claude CLIs.
+- MCP registration named `knowledge` for selected clients.
+
+Default `--clients available` preserves the historical behavior: install the shared
+skill for both client families and register the MCP in each CLI currently available.
+Explicit `claude`, `codex`, or `both` selections are strict and fail if a selected
+CLI is missing.
 
 The installer initializes then integrity-checks the target Knowledge store before changing
 user-scope skill/wrapper/MCP registration. If an existing store is incompatible with the
@@ -24,8 +30,23 @@ installation fails instead of silently replacing user configuration.
 EOF
 }
 
+normalize_clients() {
+  case "$1" in
+    available|claude|codex|both) printf '%s\n' "$1" ;;
+    *) return 1 ;;
+  esac
+}
+
 while (($#)); do
   case "$1" in
+    --clients)
+      [[ $# -ge 2 ]] || { usage >&2; exit 64; }
+      clients="$(normalize_clients "$2")" || {
+        printf 'ERROR: invalid --clients value: %s\n' "$2" >&2
+        exit 64
+      }
+      shift 2
+      ;;
     --store-root)
       [[ $# -ge 2 ]] || { usage >&2; exit 64; }
       store_root="$2"
@@ -60,15 +81,9 @@ command -v python3 >/dev/null 2>&1 || {
 store_root="$(python3 -c 'import os,sys; print(os.path.abspath(os.path.expanduser(sys.argv[1])))' "$store_root")"
 bin_dir="$(python3 -c 'import os,sys; print(os.path.abspath(os.path.expanduser(sys.argv[1])))' "$bin_dir")"
 
-# Install MCP/core dependencies before invoking the maintenance CLI because the CLI
-# imports the same filelock/PyYAML-backed core as the server.
 uv sync --project "$project"
 uv run --project "$project" python "$home/scripts/knowledge.py" init --root "$store_root" >/dev/null
 
-# Public Knowledge contract changes may make formerly inert reserved-prefix text become
-# canonical section syntax. Validate the entire existing store before changing any
-# user-facing skill/wrapper/MCP registration so an incompatible legacy store never gets
-# activated and only fails later in a fresh agent session.
 if ! uv run --project "$project" python "$home/scripts/knowledge.py" check --root "$store_root"; then
   printf 'ERROR: Knowledge store compatibility preflight failed: %s\n' "$store_root" >&2
   printf 'Repair the reported canonical documents before enabling the new runtime.\n' >&2
@@ -77,10 +92,9 @@ if ! uv run --project "$project" python "$home/scripts/knowledge.py" check --roo
   exit 78
 fi
 
-# Distillation is agent semantic policy, not MCP storage behavior. Install the same
-# user-scoped skill for both supported agent families so QiQi and Herdr-launched
-# children can discover it independent of current repository/CWD.
-bash "$home/scripts/install-user-skill.sh"
+skill_clients="$clients"
+[[ "$skill_clients" == "available" ]] && skill_clients="both"
+bash "$home/scripts/install-user-skill.sh" --clients "$skill_clients"
 
 mkdir -p "$bin_dir"
 wrapper="$bin_dir/agent-knowledge-mcp"
@@ -118,41 +132,61 @@ verify_existing_target() {
   fi
 }
 
+client_selected() {
+  local client="$1"
+  [[ "$clients" == "available" || "$clients" == "both" || "$clients" == "$client" ]]
+}
+
+client_required() {
+  [[ "$clients" != "available" ]]
+}
+
 registered=0
-if command -v codex >/dev/null 2>&1; then
-  if existing="$(codex mcp get knowledge 2>&1)"; then
-    verify_existing_target 'Codex' "$existing"
-    printf 'Codex MCP `knowledge` already points to the stable wrapper; keeping registration.\n'
+if client_selected codex; then
+  if command -v codex >/dev/null 2>&1; then
+    if existing="$(codex mcp get knowledge 2>&1)"; then
+      verify_existing_target 'Codex' "$existing"
+      printf 'Codex MCP `knowledge` already points to the stable wrapper; keeping registration.\n'
+    else
+      codex mcp add knowledge -- "$wrapper"
+    fi
+    verified="$(codex mcp get knowledge 2>&1)"
+    verify_existing_target 'Codex' "$verified"
+    registered=$((registered + 1))
+  elif client_required; then
+    printf 'ERROR: selected Knowledge client is not installed: codex\n' >&2
+    exit 69
   else
-    codex mcp add knowledge -- "$wrapper"
+    printf 'WARN: codex not found; skipped Codex global MCP registration.\n' >&2
   fi
-  verified="$(codex mcp get knowledge 2>&1)"
-  verify_existing_target 'Codex' "$verified"
-  registered=$((registered + 1))
-else
-  printf 'WARN: codex not found; skipped Codex global MCP registration.\n' >&2
 fi
 
-if command -v claude >/dev/null 2>&1; then
-  if existing="$(claude mcp get knowledge 2>&1)"; then
-    verify_existing_target 'Claude' "$existing"
-    printf 'Claude MCP `knowledge` already points to the stable wrapper; keeping registration.\n'
+if client_selected claude; then
+  if command -v claude >/dev/null 2>&1; then
+    if existing="$(claude mcp get knowledge 2>&1)"; then
+      verify_existing_target 'Claude' "$existing"
+      printf 'Claude MCP `knowledge` already points to the stable wrapper; keeping registration.\n'
+    else
+      claude mcp add knowledge --scope user "$wrapper"
+    fi
+    verified="$(claude mcp get knowledge 2>&1)"
+    verify_existing_target 'Claude' "$verified"
+    registered=$((registered + 1))
+  elif client_required; then
+    printf 'ERROR: selected Knowledge client is not installed: claude\n' >&2
+    exit 69
   else
-    claude mcp add knowledge --scope user "$wrapper"
+    printf 'WARN: claude not found; skipped Claude user MCP registration.\n' >&2
   fi
-  verified="$(claude mcp get knowledge 2>&1)"
-  verify_existing_target 'Claude' "$verified"
-  registered=$((registered + 1))
-else
-  printf 'WARN: claude not found; skipped Claude user MCP registration.\n' >&2
 fi
 
 if ((registered == 0)); then
-  printf 'ERROR: neither codex nor claude was available for MCP registration.\n' >&2
+  printf 'ERROR: no selected/available client was available for Knowledge MCP registration.\n' >&2
   exit 69
 fi
 
 printf 'Knowledge MCP wrapper: %s\n' "$wrapper"
 printf 'Knowledge store root: %s\n' "$store_root"
+printf 'Knowledge clients: %s\n' "$clients"
 printf 'Knowledge distillation skill: knowledge-distill\n'
 printf 'Open a fresh agent session to load the user/global MCP registration and skill.\n'

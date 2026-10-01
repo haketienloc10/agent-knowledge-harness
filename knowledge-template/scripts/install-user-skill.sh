@@ -5,19 +5,35 @@ home="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source_skill="$home/skills/knowledge-distill"
 codex_root="${HOME}/.agents/skills"
 claude_root="${HOME}/.claude/skills"
+clients="both"
 
 usage() {
   cat <<'EOF'
-Usage: install-user-skill.sh [--codex-root PATH] [--claude-root PATH]
+Usage: install-user-skill.sh [--clients claude|codex|both] [--codex-root PATH] [--claude-root PATH]
 
 Installs the managed `knowledge-distill` Agent Skill for user-scope discovery by
-Codex and Claude Code. Existing unrelated skills with the same name are not
-silently overwritten.
+the selected Codex and/or Claude Code clients. Default: --clients both.
+Existing unrelated skills with the same name are not silently overwritten.
 EOF
+}
+
+normalize_clients() {
+  case "$1" in
+    claude|codex|both) printf '%s\n' "$1" ;;
+    *) return 1 ;;
+  esac
 }
 
 while (($#)); do
   case "$1" in
+    --clients)
+      [[ $# -ge 2 ]] || { usage >&2; exit 64; }
+      clients="$(normalize_clients "$2")" || {
+        printf 'ERROR: invalid --clients value: %s\n' "$2" >&2
+        exit 64
+      }
+      shift 2
+      ;;
     --codex-root)
       [[ $# -ge 2 ]] || { usage >&2; exit 64; }
       codex_root="$2"
@@ -56,6 +72,11 @@ normalize_path() {
 
 codex_root="$(normalize_path "$codex_root")"
 claude_root="$(normalize_path "$claude_root")"
+
+client_enabled() {
+  local client="$1"
+  [[ "$clients" == "both" || "$clients" == "$client" ]]
+}
 
 install_skill() {
   local client="$1"
@@ -97,7 +118,12 @@ install_skill() {
   printf '%s skill installed: %s/SKILL.md\n' "$client" "$target"
 }
 
-install_skill 'Codex' "$codex_root"
-install_skill 'Claude' "$claude_root"
+if client_enabled codex; then
+  install_skill 'Codex' "$codex_root"
+fi
+if client_enabled claude; then
+  install_skill 'Claude' "$claude_root"
+fi
 
+printf 'Knowledge distillation skill configured for: %s\n' "$clients"
 printf 'Open a fresh agent session if the skill is not already visible in the skills list.\n'

@@ -14,6 +14,7 @@ required=(
   instructions/agent-routing.yaml
   instructions/model-routing.md
   scripts/qiqi-mcp-server.sh
+  scripts/setup-claude.sh
   scripts/migrate-work-item-filenames-v27.py
   mcp/qiqi_delegate/server.py
   mcp/qiqi_delegate/core.py
@@ -28,10 +29,12 @@ command -v uv >/dev/null 2>&1 || fail 'missing command: uv'
 command -v python3 >/dev/null 2>&1 || fail 'missing command: python3'
 
 launcher="$workspace_root/scripts/qiqi-mcp-server.sh"
+claude_setup="$workspace_root/scripts/setup-claude.sh"
 routing="$workspace_root/instructions/agent-routing.yaml"
 config="$workspace_root/.codex/config.toml"
 agents="$workspace_root/AGENTS.md"
 model_routing="$workspace_root/instructions/model-routing.md"
+local_config="$workspace_root/.qiqi/config.local.json"
 
 for pattern in \
   'work_items_dir="$workspace_root/work-items"' \
@@ -80,7 +83,8 @@ for pattern in \
   '90_report.textile' \
   'Requirement change rewrite current requirement' \
   'TaskPacket phải là smallest sufficient' \
-  'Default delegation route = `claude-balanced`' \
+  '.qiqi/config.local.json.default_route' \
+  'fallback = `claude-balanced`' \
   'just-in-time ngay trước route decision' \
   'Nếu `state="blocked"`' \
   'giữ exact returned `session_id`'; do
@@ -89,8 +93,10 @@ done
 
 grep -Fq 'đọc file này ngay trước route decision' "$model_routing" || \
   fail 'model-routing.md must require just-in-time route policy hydration'
-grep -Fq 'Default delegation route = claude-balanced' "$model_routing" || \
-  fail 'model-routing.md must preserve claude-balanced default'
+grep -Fq '.qiqi/config.local.json' "$model_routing" || \
+  fail 'model-routing.md must honor machine-local execution selection'
+grep -Fq 'fallback = claude-balanced' "$model_routing" || \
+  fail 'model-routing.md must preserve claude-balanced fallback without local config'
 
 # Validate the canonical repository/dependency registry. The harness template itself
 # contains {{...}} placeholders, so CI sets QIQI_TEMPLATE_CHECK=1 and validates
@@ -202,6 +208,47 @@ if not template_mode:
     assert len(roots) == len(set(roots)), "multiple repositories resolve to the same Git root"
 PY
 
+# Machine-local setup preference is optional for backward compatibility. When present,
+# validate it against the current route registry before it can affect runtime readiness.
+if [[ -f "$local_config" ]]; then
+  uv run --project "$mcp_project" python - "$local_config" "$routing" <<'PY'
+import json
+from pathlib import Path
+import sys
+import yaml
+
+config_path = Path(sys.argv[1])
+routing_path = Path(sys.argv[2])
+config = json.loads(config_path.read_text(encoding="utf-8"))
+routing = yaml.safe_load(routing_path.read_text(encoding="utf-8")) or {}
+
+assert isinstance(config, dict), "local config must be a JSON object"
+assert config.get("version") == 1, "local config version must be 1"
+allowed_clients = {"claude", "codex"}
+for key in ("coordinators", "execution_agents"):
+    value = config.get(key)
+    assert isinstance(value, list) and value, f"{key} must be a non-empty list"
+    assert all(isinstance(item, str) and item in allowed_clients for item in value), (
+        f"{key} must contain only claude/codex"
+    )
+    assert len(value) == len(set(value)), f"{key} must not contain duplicates"
+
+agents = routing.get("agents") or {}
+routes = routing.get("routes") or {}
+for name in config["execution_agents"]:
+    assert name in agents, f"execution agent is not present in agent-routing.yaml: {name}"
+
+default_route = config.get("default_route")
+assert isinstance(default_route, str) and default_route in routes, (
+    "default_route must exist in agent-routing.yaml"
+)
+default_agent = routes[default_route].get("agent")
+assert default_agent in config["execution_agents"], (
+    "default_route must belong to an enabled execution agent"
+)
+PY
+fi
+
 # Real workspaces must be fully migrated to the ordered Work Item filename contract.
 # Template CI has only work-items/.gitkeep and intentionally skips runtime dossiers.
 if [[ "$template_mode" != "1" ]]; then
@@ -250,17 +297,28 @@ for dossier in sorted(root.iterdir(), key=lambda p: p.name.casefold()):
 PY
 fi
 
-# On a real workspace, verification is also a runtime-readiness check. The template
-# CI cannot install machine-local Herdr integrations, so it explicitly opts out.
+# On a real workspace, verification is also a runtime-readiness check. With local
+# setup config only selected execution agents are required; legacy workspaces without
+# it keep the previous behavior and verify every adapter present in the route registry.
 if [[ "$template_mode" != "1" ]]; then
   command -v herdr >/dev/null 2>&1 || fail 'missing command: herdr'
   integration_status="$(herdr integration status 2>&1 || true)"
   mapfile -t adapters < <(
-    uv run --project "$mcp_project" python - "$routing" <<'PY'
+    uv run --project "$mcp_project" python - "$routing" "$local_config" <<'PY'
 from pathlib import Path
-import sys, yaml
-data = yaml.safe_load(Path(sys.argv[1]).read_text(encoding="utf-8")) or {}
-print("\n".join(sorted({cfg["adapter"] for cfg in data.get("agents", {}).values()})))
+import json
+import sys
+import yaml
+
+routing = yaml.safe_load(Path(sys.argv[1]).read_text(encoding="utf-8")) or {}
+agents = routing.get("agents", {})
+config_path = Path(sys.argv[2])
+if config_path.is_file():
+    local = json.loads(config_path.read_text(encoding="utf-8"))
+    enabled = local["execution_agents"]
+else:
+    enabled = list(agents)
+print("\n".join(sorted({agents[name]["adapter"] for name in enabled})))
 PY
   )
   for adapter in "${adapters[@]}"; do
@@ -270,6 +328,7 @@ PY
 fi
 
 bash -n "$launcher"
+bash -n "$claude_setup"
 bash -n "$workspace_root/scripts/workspace-check.sh"
 python3 -m py_compile "$workspace_root/scripts/migrate-work-item-filenames-v27.py"
 

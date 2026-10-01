@@ -14,17 +14,26 @@ runtime configuration thay đổi, chỉ registry machine-readable phải đổi
 
 File này **không phải mandatory startup material**.
 
-Always-on default invariant nằm ở `AGENTS.md`:
+Always-on invariant nằm ở `AGENTS.md`:
 
 ```text
-Default delegation route = claude-balanced.
+Default delegation route được resolve just-in-time từ machine-local setup;
+fallback = claude-balanced khi local config không tồn tại.
 ```
 
-Turn không delegate **không đọc** file này chỉ để hoàn thành startup.
+Turn không delegate **không đọc** file này hoặc `.qiqi/config.local.json` chỉ để hoàn thành startup.
 
-Khi một turn thực sự cần delegation, QiQi **đọc file này ngay trước route decision** rồi mới phân loại task vào fast/balanced/deep/verifier/Codex. Không yêu cầu always-on policy tự nhận diện trước các exception signal mà file này định nghĩa.
+Khi một turn thực sự cần delegation, QiQi **đọc file này ngay trước route decision** rồi:
 
-`claude-balanced` vẫn là deterministic default/fallback khi sau khi áp dụng policy không có lý do rõ để chọn route khác. User/project explicit route selection vẫn phải được kiểm tra theo policy và route registry trước delegation.
+1. nếu `.qiqi/config.local.json` tồn tại, đọc file đó và yêu cầu:
+   - `version == 1`;
+   - `execution_agents` là non-empty list chỉ gồm `claude`/`codex`;
+   - `default_route` tồn tại trong `agent-routing.yaml` và route đó thuộc một agent đã enable;
+2. chỉ xét route thuộc `execution_agents` đã enable;
+3. nếu local config không tồn tại, coi cả route registry là available và dùng `claude-balanced` làm fallback;
+4. user/project explicit route vẫn phải tồn tại trong registry **và** thuộc enabled execution agents khi local config có mặt.
+
+`.qiqi/config.local.json` là machine-local execution preference/capability selection, không phải product/task truth và không được copy vào Work Item hay TaskPacket.
 
 Mục tiêu của activation rule là tránh fixed context tax cho status-only/answer-only
 turn nhưng không đánh đổi route-selection correctness ở các turn thực sự delegate.
@@ -42,14 +51,14 @@ Dùng cho task nhỏ, cơ học và có phạm vi rõ, khi:
 
 ### `claude-balanced`
 
-Route mặc định cho phần lớn repo-local implementation, gồm:
+Balanced route cho phần lớn repo-local implementation khi Claude được enable, gồm:
 
 - feature/bugfix thông thường;
 - refactor có phạm vi vừa;
 - test hoặc docs kỹ thuật gắn với implementation;
 - investigation cần reasoning ở mức vừa nhưng chưa phải bài toán kiến trúc sâu.
 
-Khi không có lý do rõ để chọn route khác, ưu tiên `claude-balanced`.
+Khi Claude là enabled default agent và không có lý do rõ cho fast/deep/verifier, dùng `claude-balanced`.
 
 ### `claude-deep`
 
@@ -84,28 +93,25 @@ theo; verifier không mặc nhiên trở thành implementation route.
 
 ### `codex-balanced`
 
-Dùng khi **Codex được yêu cầu hoặc ưu tiên có chủ đích**, chẳng hạn:
+Balanced route cho repo-local work khi Codex được enable hoặc được chọn làm machine-local default. Dùng khi:
 
+- `.qiqi/config.local.json.default_route` là `codex-balanced`;
 - người dùng hoặc project policy chỉ định Codex;
-- task phụ thuộc capability/integration đã được xác minh là phù hợp riêng với
-  Codex;
-- QiQi có lý do cụ thể để giữ execution trên Codex thay vì route Claude mặc định.
+- task phụ thuộc capability/integration đã được xác minh là phù hợp riêng với Codex.
 
 Không chọn Codex chỉ để retry một environment/runtime failure của route khác.
 
 ## Quy tắc chọn route
 
-1. Xác định outcome, scope, risk và uncertainty của repo-local task.
-2. Chọn route nhẹ nhất vẫn đủ tin cậy để hoàn thành task.
-3. Ưu tiên `claude-balanced` khi không có tín hiệu rõ cho fast/deep/verifier hoặc
-   Codex.
-4. Truyền **exact route name** vào `delegate_repo_task`; không truyền profile name.
-5. Không đặt executable, model ID, permission mode, effort, hook config hoặc raw CLI
-   flags vào TaskPacket hay public MCP arguments.
-6. Nếu route không tồn tại trong `agent-routing.yaml`, route đó không khả dụng dù
-   được nhắc ở tài liệu hay ví dụ khác.
-7. Không đổi route chỉ để né blocker về environment, dependency, permission hoặc
-   product decision; giải quyết blocker thực tế trước.
+1. Resolve enabled execution agents/default route theo Activation ở trên.
+2. Xác định outcome, scope, risk và uncertainty của repo-local task.
+3. Chọn route nhẹ nhất vẫn đủ tin cậy trong tập route đã enable.
+4. Nếu không có tín hiệu rõ cho route specialized, dùng exact machine-local `default_route`; nếu local config không tồn tại thì dùng `claude-balanced`.
+5. Truyền **exact route name** vào `delegate_repo_task`; không truyền profile name.
+6. Không đặt executable, model ID, permission mode, effort, hook config hoặc raw CLI flags vào TaskPacket hay public MCP arguments.
+7. Nếu route không tồn tại trong `agent-routing.yaml`, route đó không khả dụng dù được nhắc ở tài liệu hay ví dụ khác.
+8. Nếu local config có mặt nhưng route thuộc agent không nằm trong `execution_agents`, route đó không khả dụng.
+9. Không đổi route chỉ để né blocker về environment, dependency, permission hoặc product decision; giải quyết blocker thực tế trước.
 
 ## Boundary
 
