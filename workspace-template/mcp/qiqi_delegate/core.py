@@ -26,6 +26,7 @@ SLP_EVENT_TYPES = frozenset(
         "peer.dispatched",
         "peer.response",
         "peer.signal",
+        "peer.signal_resolved",
         "peer.capture_ambiguous",
         "lead.disposition",
         "candidate.accepted",
@@ -1110,6 +1111,72 @@ class SessionStore:
                 work_item_id=clean_work_item_id,
                 work_item_revision=clean_work_item_revision,
                 payload=payload,
+            )
+
+    def record_peer_signal_resolution(
+        self,
+        *,
+        turn_id: str,
+        signal: str,
+        reason: str,
+        work_item_id: str | None = None,
+        work_item_revision: int | None = None,
+    ) -> int:
+        clean_turn = self._optional_runtime_text(turn_id, "turn_id")
+        if clean_turn is None:
+            raise ValueError("turn_id must not be empty")
+        if not isinstance(signal, str):
+            raise ValueError("signal must be a string")
+        clean_signal = signal.strip()
+        if clean_signal not in {"REOPEN_REQUEST", "DEPENDENCY_REQUEST", "BLOCKED"}:
+            raise ValueError(f"unsupported Peer signal resolution: {signal!r}")
+        clean_reason = self._optional_runtime_text(reason, "reason")
+        if clean_reason is None:
+            raise ValueError("reason must not be empty")
+        clean_work_item_id = self._optional_runtime_text(work_item_id, "work_item_id")
+        clean_work_item_revision = self._optional_work_item_revision(work_item_revision)
+        if (clean_work_item_id is None) != (clean_work_item_revision is None):
+            raise ValueError("work_item_id and work_item_revision must be provided together")
+
+        with self._connect() as conn:
+            turn = conn.execute(
+                "SELECT session_id, repository, route, task_packet_json FROM turns "
+                "WHERE turn_id = ?",
+                (clean_turn,),
+            ).fetchone()
+            if turn is None:
+                raise RuntimeError(
+                    "Peer signal resolution requires an existing captured Peer turn: "
+                    f"unknown turn_id={clean_turn!r}"
+                )
+            signal_rows = conn.execute(
+                "SELECT payload_json FROM slp_events "
+                "WHERE event_type = 'peer.signal' AND turn_id = ? ORDER BY seq",
+                (clean_turn,),
+            ).fetchall()
+            if not any(
+                json.loads(row["payload_json"]).get("signal") == clean_signal
+                for row in signal_rows
+            ):
+                raise RuntimeError(
+                    "Peer signal resolution requires a matching prior explicit Peer signal: "
+                    f"turn_id={clean_turn!r}, signal={clean_signal!r}"
+                )
+            if clean_work_item_id is None:
+                packet_payload = json.loads(turn["task_packet_json"])
+                clean_work_item_id, clean_work_item_revision = _work_item_ref_from_payload(
+                    packet_payload
+                )
+            return self._insert_slp_event(
+                conn,
+                event_type="peer.signal_resolved",
+                turn_id=clean_turn,
+                session_id=turn["session_id"],
+                repository=turn["repository"],
+                route=turn["route"],
+                work_item_id=clean_work_item_id,
+                work_item_revision=clean_work_item_revision,
+                payload={"signal": clean_signal, "reason": clean_reason},
             )
 
     def record_candidate_reconciliation(
