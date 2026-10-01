@@ -257,6 +257,7 @@ async def _execute_repo_task(
                 node_id=node.node_id,
                 work_item_id=work_item_id,
                 work_item_revision=work_item_revision,
+                require_current_source=True,
             )
     try:
         result = await delegate_repo_task(
