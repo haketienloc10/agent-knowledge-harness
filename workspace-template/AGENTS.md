@@ -125,7 +125,7 @@ Peer có independent technical judgment. Khi evidence làm premise hiện tại 
 
 Khi actual captured Peer response chứa một trong các signal trên, QiQi gọi `record_peer_signal(turn_id, signal, ...)` trước/đồng thời với disposition để Supervisor có machine-readable governance evidence; không parse/infer signal từ terminal transcript.
 
-Mọi actionable Peer response phải đóng vòng với original brief. QiQi/Lead phải làm một trong các việc: trả lời question, resolve dependency/ownership, yêu cầu repair/evidence cụ thể, defer với owner + return checkpoint, hoặc explicit `ACCEPT` / `REJECT` exact candidate với reason. Direct orchestration khi downstream thực sự consume accepted upstream turn phải gọi `record_dependency_consumed`; TaskGraph dependency execution tự emit event này.
+Mọi actionable Peer response phải đóng vòng với original brief. QiQi/Lead phải làm một trong các việc: trả lời question, resolve dependency/ownership, yêu cầu repair/evidence cụ thể, defer với owner + return checkpoint, hoặc explicit `ACCEPT` / `REJECT` exact candidate với reason. Direct orchestration khi downstream thực sự consume accepted upstream turn phải gọi `record_dependency_consumed`; TaskGraph dependency execution tự emit event này tại dispatch boundary, không chờ final-response transport.
 
 `DONE`, runtime settled, passing tests hoặc completion message chỉ là evidence. Chúng không tự đóng loop và không tự đồng nghĩa technical acceptance. Không dispatch dependent work khi actionable Peer response còn unresolved; unrelated ready work vẫn tiếp tục.
 ## Sau delegation
@@ -133,7 +133,7 @@ Mọi actionable Peer response phải đóng vòng với original brief. QiQi/Le
 1. Inspect runtime `state` trước khi đọc semantic handoff.
 2. Nếu `state="blocked"`, `agent_response` có thể là `null`: giữ exact returned `session_id`, không invent blocker/content, và chỉ RESUME exact session khi interactive continuity còn material; START/redelegate/hỏi user vẫn hợp lệ nếu không cần exact continuity.
 3. Nếu turn có native `agent_response`, đọc exact response; runtime settled/failed không tự đồng nghĩa semantic completion.
-4. Với tracked task, so delegated Work Item revision với current revision trong `00_WORK_ITEM.md`; nếu đổi revision, reconcile finding-by-finding với effective requirement mới trước khi promote.
+4. Với tracked task, so delegated Work Item revision với current revision trong `00_WORK_ITEM.md`; nếu đổi revision, reconcile finding-by-finding với effective requirement mới trước khi promote. Khi một stale candidate đã có historical disposition hoặc không thể được disposition lại, Lead phải gọi `record_candidate_reconciliation(stale_turn_id, ...)` cho exact stale turn; một unrelated current-revision Peer response không tự đóng R5.
 5. Persist chỉ material current-state facts/decisions/evidence/acceptance; không lưu execution transcript.
 6. Tiếp tục wave/RESUME/redelegate/hỏi user hoặc complete theo current truth.
 
