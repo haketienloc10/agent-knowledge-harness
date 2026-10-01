@@ -214,8 +214,8 @@ The broker must remain running for continuous supervision. The Python broker ent
 non-blocking process-lifetime file lock derived from the exact state DB
 (`qiqi_delegate.sqlite3.supervisor-broker.lock` by default); a second broker for the same DB exits
 instead of allowing duplicate Supervisor/Lead prompts. This also protects direct Python invocation,
-not only the shell launcher. If the broker is absent or unhealthy, the workspace must not claim
-continuous supervision.
+not only the shell launcher. If the broker is absent or unhealthy, the workspace
+must not claim continuous supervision.
 
 CI includes an autonomous E2E-08 state-machine integration test that proves broker case opening,
 Supervisor review, Lead wakeup, explicit Lead disposition, and semantic case closure without a
