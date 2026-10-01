@@ -1111,9 +1111,10 @@ async def record_lead_disposition(
 
     This is runtime communication-loop state, not a replacement for the canonical Work
     Item. The exact Peer response remains only in turns.agent_response. For tracked work,
-    work_item_id/work_item_revision may be supplied explicitly; when omitted, the store
-    derives them only from the canonical Work Item locator already present in the captured
-    TaskPacket. Repeating the exact same disposition is idempotent; attempting a different
+    work_item_id/work_item_revision may be supplied explicitly only when they exactly match
+    the canonical Work Item locator already present in the captured TaskPacket; omitted values
+    are derived from that same locator. Repeating the exact same disposition is idempotent;
+    attempting a different
     second disposition for the same Peer turn fails closed.
     """
     return _store.record_lead_disposition(
