@@ -7,6 +7,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from mcp.server.mcpserver.exceptions import ToolError
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import server  # noqa: E402
@@ -231,6 +233,89 @@ class DirectDelegationPhase4IntegrationTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(release_event["work_item_revision"], 4)
 
 
+    async def test_write_scope_release_survives_herdr_workspace_close_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            repo_path = root / "repo-a"
+            repo_path.mkdir()
+            store = SessionStore(root / "qiqi_delegate.sqlite3")
+            capture_path = root / "capture.json"
+
+            with (
+                patch.object(server, "_store", store),
+                patch.object(server, "_resolve_repo", return_value=repo_path),
+                patch.object(
+                    server,
+                    "_resolve_route",
+                    return_value=(
+                        "claude",
+                        {"adapter": "claude", "command": "claude"},
+                        {"model": "sonnet", "args": []},
+                    ),
+                ),
+                patch.object(server.shutil, "which", return_value="/bin/true"),
+                patch.object(server, "_ensure_herdr_server", new=AsyncMock()),
+                patch.object(server, "_require_current_integration", new=AsyncMock()),
+                patch.object(server, "_claim_resources", new=AsyncMock()),
+                patch.object(server, "_release_resources", new=AsyncMock()) as release,
+                patch.object(server, "_register_active_capture", return_value=capture_path),
+                patch.object(server, "_remove_active_capture"),
+                patch.object(server, "_build_handoff_args", return_value=[]),
+                patch.object(server, "_build_interactive_args", return_value=[]),
+                patch.object(
+                    server,
+                    "_create_herdr_workspace",
+                    new=AsyncMock(return_value=("workspace-1", "pane-1")),
+                ),
+                patch.object(
+                    server,
+                    "_start_interactive_agent",
+                    new=AsyncMock(return_value=("agent-1", {})),
+                ),
+                patch.object(server, "_validate_reported_session_if_present"),
+                patch.object(
+                    server,
+                    "_prompt_and_wait",
+                    new=AsyncMock(return_value=("settled", {})),
+                ),
+                patch.object(
+                    server,
+                    "_wait_for_native_session",
+                    new=AsyncMock(return_value="native-session-1"),
+                ),
+                patch.object(
+                    server,
+                    "_wait_for_result_capture",
+                    new=AsyncMock(
+                        return_value={
+                            "state": "settled",
+                            "native_turn_id": "native-turn-1",
+                            "agent_response": "peer final response",
+                        }
+                    ),
+                ),
+                patch.object(
+                    server,
+                    "_close_herdr_workspace",
+                    new=AsyncMock(side_effect=RuntimeError("transient close failure")),
+                ),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "transient close failure"):
+                    await server.delegate_repo_task(
+                        repository="repo-a",
+                        route="claude-balanced",
+                        objective="Implement one change.",
+                        scope=["pricing"],
+                        acceptance_criteria=["tests pass"],
+                    )
+
+            release.assert_awaited_once()
+            self.assertIn(
+                "write_scope.released",
+                [event["event_type"] for event in store.list_slp_events()],
+            )
+
+
 class TaskGraphPhase4IntegrationTests(unittest.IsolatedAsyncioTestCase):
     async def test_downstream_execution_emits_dependency_consumed_from_upstream_turn(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -312,11 +397,75 @@ class TaskGraphPhase4IntegrationTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(len(dependency_events), 1)
             event = dependency_events[0]
             self.assertEqual(event["payload"]["source_turn_id"], "turn-upstream")
-            self.assertEqual(event["turn_id"], "turn-downstream")
+            self.assertIsNone(event["turn_id"])
             self.assertEqual(event["graph_run_id"], "graph-1")
             self.assertEqual(event["node_id"], "downstream")
             self.assertEqual(event["work_item_id"], "e2e:008")
             self.assertEqual(event["work_item_revision"], 5)
+
+
+    async def test_dependency_consumed_is_persisted_before_downstream_transport_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            store = SessionStore(Path(temp) / "qiqi_delegate.sqlite3")
+            source_packet = build_task_packet(
+                objective="Produce upstream contract.",
+                scope=["contract"],
+                acceptance_criteria=["contract evidence"],
+            )
+            store.record_turn(
+                turn_id="turn-upstream-failure",
+                session_id="session-upstream-failure",
+                repository="upstream",
+                agent="claude",
+                route="claude-balanced",
+                state="settled",
+                native_turn_id=None,
+                packet=source_packet,
+                agent_response="upstream evidence",
+            )
+            consumer_packet = build_task_packet(
+                objective="Consume upstream contract.",
+                scope=["downstream"],
+                acceptance_criteria=["downstream evidence"],
+            )
+            node = GraphNode(
+                node_id="downstream",
+                repository="downstream",
+                task_packet=consumer_packet,
+                depends_on=("upstream",),
+                route="claude-balanced",
+            )
+            graph_store = MagicMock()
+            graph_store.get_node.return_value = {"turn_id": "turn-upstream-failure"}
+            graph_runtime = SimpleNamespace(store=graph_store)
+
+            with (
+                patch.object(task_graph_mcp, "_store", store),
+                patch.object(task_graph_mcp, "_graph_runtime", graph_runtime),
+                patch.object(
+                    task_graph_mcp,
+                    "delegate_repo_task",
+                    AsyncMock(side_effect=ToolError("final response transport failed")),
+                ),
+            ):
+                with self.assertRaises(ToolError):
+                    await task_graph_mcp._execute_repo_task(
+                        node,
+                        session_id=None,
+                        graph_run_id="graph-failure",
+                    )
+
+            events = [
+                event
+                for event in store.list_slp_events()
+                if event["event_type"] == "dependency.consumed"
+            ]
+            self.assertEqual(len(events), 1)
+            self.assertEqual(
+                events[0]["payload"]["source_turn_id"],
+                "turn-upstream-failure",
+            )
+            self.assertIsNone(events[0]["turn_id"])
 
 
 class _AutonomousE2EControlPlane:
@@ -394,7 +543,14 @@ class AutonomousSupervisorE2E08Tests(unittest.IsolatedAsyncioTestCase):
 
             self.assertEqual(
                 autonomous,
-                {"reviewed": 1, "delivered_to_lead": 1},
+                {
+                    "reviewed": 1,
+                    "delivered_to_lead": 1,
+                    "review_attempted": 1,
+                    "delivery_attempted": 1,
+                    "review_failures": 0,
+                    "delivery_failures": 0,
+                },
             )
             self.assertEqual(control.supervisor_wake_count, 1)
             self.assertEqual(control.lead_wake_count, 1)
