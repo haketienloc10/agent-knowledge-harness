@@ -103,6 +103,7 @@ RepositoryName = Annotated[
     ),
 ]
 LeadDispositionAction = Literal["accept", "reject", "repair", "defer", "resolve"]
+CandidateReconciliation = Literal["superseded", "abandoned", "revalidated"]
 PeerSignal = Literal["REOPEN_REQUEST", "DEPENDENCY_REQUEST", "BLOCKED"]
 
 
@@ -1168,6 +1169,38 @@ async def record_peer_signal(
 
 @mcp.tool()
 @_public_tool_errors
+async def record_candidate_reconciliation(
+    stale_turn_id: str,
+    resolution: CandidateReconciliation,
+    reason: str,
+    work_item_id: str,
+    work_item_revision: int,
+    replacement_turn_id: str | None = None,
+) -> dict[str, Any]:
+    """Record Lead reconciliation of one stale candidate against a newer Work Item revision.
+
+    This is explicit candidate-level semantic evidence for R5 closure. It does not rewrite
+    the historical Lead disposition on the stale turn. replacement_turn_id, when present,
+    must identify the captured current-revision Peer turn that supersedes or revalidates it.
+    """
+    seq = _store.record_candidate_reconciliation(
+        stale_turn_id=stale_turn_id,
+        resolution=resolution,
+        reason=reason,
+        work_item_id=work_item_id,
+        work_item_revision=work_item_revision,
+        replacement_turn_id=replacement_turn_id,
+    )
+    return {
+        "event_seq": seq,
+        "stale_turn_id": stale_turn_id,
+        "resolution": resolution,
+        "replacement_turn_id": replacement_turn_id,
+    }
+
+
+@mcp.tool()
+@_public_tool_errors
 async def record_dependency_consumed(
     source_turn_id: str,
     repository: RepositoryName | None = None,
@@ -1441,18 +1474,20 @@ async def delegate_repo_task(
             }
     finally:
         _remove_active_capture(capture_path)
-        if workspace_id:
-            await _close_herdr_workspace(workspace_id)
         try:
-            _store.record_write_scope_release(
-                claim_id=write_claim_id,
-                repository=repository,
-                turn_id=qiqi_turn_id,
-                work_item_id=work_item_id,
-                work_item_revision=work_item_revision,
-            )
+            if workspace_id:
+                await _close_herdr_workspace(workspace_id)
         finally:
-            await _release_resources(repo, session_id)
+            try:
+                _store.record_write_scope_release(
+                    claim_id=write_claim_id,
+                    repository=repository,
+                    turn_id=qiqi_turn_id,
+                    work_item_id=work_item_id,
+                    work_item_revision=work_item_revision,
+                )
+            finally:
+                await _release_resources(repo, session_id)
 
 
 if __name__ == "__main__":
