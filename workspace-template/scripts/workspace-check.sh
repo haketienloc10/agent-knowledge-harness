@@ -174,6 +174,16 @@ done
 grep -Fq 'command: codex' "$routing" || fail 'Codex must resolve the native codex CLI'
 grep -Fq 'model: gpt-5.6-luna' "$routing" || \
   fail 'codex-balanced route must use gpt-5.6-luna'
+grep -Fq 'save_snapshot_with_dispositions' "$mcp_project/task_graph_store.py" || \
+  fail 'TaskGraph graph decisions and Lead dispositions must commit atomically'
+grep -Fq 'record_lead_disposition_in_transaction' "$mcp_project/core.py" || \
+  fail 'SessionStore must expose transactional Lead disposition persistence'
+grep -Fq 'cannot be accepted without' "$mcp_project/task_graph_mcp.py" || \
+  fail 'TaskGraph accept must require an exact captured Peer turn'
+grep -Fq 'flock -n 9' "$workspace_root/scripts/qiqi-supervisor-broker.sh" || \
+  fail 'Supervisor broker launcher must enforce one process per workspace'
+grep -Fq 'partially created slp-control workspace' "$supervisor_control" || \
+  fail 'Supervisor control-plane creation must clean up provisional topology on failure'
 grep -Fq 'write_claim_recorded = False' "$mcp_project/server.py" || \
   fail 'direct delegation must track whether the durable write claim was persisted'
 grep -Fq 'if write_claim_recorded:' "$mcp_project/server.py" || \
