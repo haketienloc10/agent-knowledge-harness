@@ -210,10 +210,12 @@ Process only durable deterministic rules without starting control-plane agents:
 bash scripts/qiqi-supervisor-broker.sh --once
 ```
 
-The broker must remain running for continuous supervision. The canonical launcher takes a
-non-blocking `flock` on `.qiqi/state/qiqi-supervisor-broker.lock`; a second launcher for the
-same workspace exits instead of allowing duplicate Supervisor/Lead prompts. If the broker is absent
-or unhealthy, the workspace must not claim continuous supervision.
+The broker must remain running for continuous supervision. The Python broker entrypoint takes a
+non-blocking process-lifetime file lock derived from the exact state DB
+(`qiqi_delegate.sqlite3.supervisor-broker.lock` by default); a second broker for the same DB exits
+instead of allowing duplicate Supervisor/Lead prompts. This also protects direct Python invocation,
+not only the shell launcher. If the broker is absent or unhealthy, the workspace must not claim
+continuous supervision.
 
 CI includes an autonomous E2E-08 state-machine integration test that proves broker case opening,
 Supervisor review, Lead wakeup, explicit Lead disposition, and semantic case closure without a
