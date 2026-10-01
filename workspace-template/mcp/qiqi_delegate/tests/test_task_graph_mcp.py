@@ -470,6 +470,79 @@ class TaskGraphMcpTests(unittest.IsolatedAsyncioTestCase):
             session_id=None,
         )
 
+    async def test_dependency_dispatch_rejects_stale_accepted_source(self) -> None:
+        payload = graph_payload()
+        payload["nodes"][0]["task_packet"]["context"] = {
+            "trusted_facts": [
+                {
+                    "fact": (
+                        "work_item_path=/tmp/work-items/e2e-dependency; "
+                        "id=e2e:dependency; revision=1"
+                    ),
+                    "source": "canonical Work Item locator",
+                }
+            ]
+        }
+        delegate = self.recording_delegate(
+            {
+                "session_id": "native-session-contracts",
+                "turn_id": "qiqi-turn-contracts",
+                "state": "settled",
+                "agent_response": "accepted revision 1 contract",
+            },
+            {
+                "session_id": "native-session-backend",
+                "turn_id": "qiqi-turn-backend",
+                "state": "settled",
+                "agent_response": "must not dispatch while upstream is stale",
+            },
+        )
+
+        with patch("task_graph_mcp.delegate_repo_task", delegate):
+            async with Client(mcp) as client:
+                started = (
+                    await client.call_tool("start_graph", {"graph": payload})
+                ).structured_content
+                reviewable = (
+                    await client.call_tool(
+                        "delegate_next", {"graph_run_id": started["graph_run_id"]}
+                    )
+                ).structured_content
+                accepted = (
+                    await client.call_tool(
+                        "submit_decisions",
+                        {
+                            "graph_run_id": started["graph_run_id"],
+                            "decisions": [
+                                {"node_id": "contracts", "action": "accept"}
+                            ],
+                            "expected_revision": reviewable["revision"],
+                        },
+                    )
+                ).structured_content
+                self.assertEqual(accepted["runnable_nodes"], ["backend"])
+
+                self.slp_store.record_work_item_revision(
+                    work_item_id="e2e:dependency",
+                    work_item_revision=2,
+                    reason="material requirement changed after acceptance",
+                )
+
+                blocked = await client.call_tool(
+                    "delegate_next", {"graph_run_id": started["graph_run_id"]}
+                )
+
+        self.assertTrue(blocked.is_error)
+        self.assertIn(
+            "TaskGraph dependency source is stale for the current Work Item revision",
+            error_text(blocked),
+        )
+        self.assertEqual(delegate.await_count, 1)
+        self.assertNotIn(
+            "dependency.consumed",
+            [event["event_type"] for event in self.slp_store.list_slp_events()],
+        )
+
     async def test_get_node_review_rejects_stale_review_locator(self) -> None:
         delegate = AsyncMock(
             return_value={
