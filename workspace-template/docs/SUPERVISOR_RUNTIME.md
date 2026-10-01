@@ -143,7 +143,9 @@ The runtime now emits/records the semantic inputs consumed by the deterministic 
 - after an actual material revision change, canonical Work Item mutation must call
   `record_work_item_revision` immediately;
 - direct Peer signals are recorded with `record_peer_signal`; bounded signal details are carried
-  into R4 governance facts without copying the raw Peer response;
+  into R4 governance facts without copying the raw Peer response. A deferred explicit signal later
+  closes through `record_peer_signal_resolution` for that exact turn + signal, preserving the
+  historical `defer` disposition;
 - a native runtime-blocked R4 case is tied to its exact native session and closes when that same
   session later produces a captured Peer response; explicit semantic BLOCKED signals still require
   normal Lead reconciliation;
@@ -180,19 +182,19 @@ prompt acknowledgement as completion.
 Start the autonomous broker:
 
 ```bash
-scripts/qiqi-supervisor-broker.sh
+bash scripts/qiqi-supervisor-broker.sh
 ```
 
 Process one full autonomous cycle and exit:
 
 ```bash
-scripts/qiqi-supervisor-broker.sh --supervise-once
+bash scripts/qiqi-supervisor-broker.sh --supervise-once
 ```
 
 Process only durable deterministic rules without starting control-plane agents:
 
 ```bash
-scripts/qiqi-supervisor-broker.sh --once
+bash scripts/qiqi-supervisor-broker.sh --once
 ```
 
 The broker must remain running for continuous supervision. If it is absent or unhealthy, the
