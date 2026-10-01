@@ -318,7 +318,17 @@ class AutonomousSupervisorRuntimeTests(unittest.IsolatedAsyncioTestCase):
 
         result = await runtime.handle_pending_cases()
 
-        self.assertEqual(result, {"reviewed": 1, "delivered_to_lead": 1})
+        self.assertEqual(
+            result,
+            {
+                "reviewed": 1,
+                "delivered_to_lead": 1,
+                "review_attempted": 1,
+                "delivery_attempted": 1,
+                "review_failures": 0,
+                "delivery_failures": 0,
+            },
+        )
         self.assertEqual(len(fake.supervisor_packets), 1)
         self.assertEqual(len(fake.lead_findings), 1)
         self.assertEqual(
@@ -411,6 +421,37 @@ class AutonomousSupervisorRuntimeTests(unittest.IsolatedAsyncioTestCase):
             },
         )
 
+    async def test_runtime_isolates_one_failed_supervisor_case(self) -> None:
+        self._record_turn("turn-fail")
+        self._record_turn("turn-ok")
+        self.broker.process_pending()
+
+        class PartialFailure(_FakeControlPlane):
+            def __init__(self):
+                super().__init__("issue")
+                self.calls = 0
+
+            async def prompt_supervisor(self, packet):
+                self.calls += 1
+                if self.calls == 1:
+                    raise RuntimeError("transient supervisor failure")
+                return await super().prompt_supervisor(packet)
+
+        fake = PartialFailure()
+        runtime = AutonomousSupervisorRuntime(
+            state_db=self.db_path,
+            control_plane=fake,
+        )
+        result = await runtime.handle_pending_cases()
+
+        self.assertEqual(result["review_failures"], 1)
+        self.assertEqual(result["reviewed"], 1)
+        self.assertEqual(result["delivered_to_lead"], 1)
+        self.assertEqual(
+            len(SupervisorControlStore(self.db_path).pending_unreviewed_cases()),
+            1,
+        )
+
     async def test_runtime_is_idempotent_after_finding_delivery(self) -> None:
         self._record_turn("turn-2")
         self.broker.process_pending()
@@ -423,7 +464,17 @@ class AutonomousSupervisorRuntimeTests(unittest.IsolatedAsyncioTestCase):
         await runtime.handle_pending_cases()
         second = await runtime.handle_pending_cases()
 
-        self.assertEqual(second, {"reviewed": 0, "delivered_to_lead": 0})
+        self.assertEqual(
+            second,
+            {
+                "reviewed": 0,
+                "delivered_to_lead": 0,
+                "review_attempted": 0,
+                "delivery_attempted": 0,
+                "review_failures": 0,
+                "delivery_failures": 0,
+            },
+        )
         self.assertEqual(len(fake.supervisor_packets), 1)
         self.assertEqual(len(fake.lead_findings), 1)
 
@@ -438,7 +489,17 @@ class AutonomousSupervisorRuntimeTests(unittest.IsolatedAsyncioTestCase):
 
         result = await runtime.handle_pending_cases()
 
-        self.assertEqual(result, {"reviewed": 1, "delivered_to_lead": 0})
+        self.assertEqual(
+            result,
+            {
+                "reviewed": 1,
+                "delivered_to_lead": 0,
+                "review_attempted": 1,
+                "delivery_attempted": 0,
+                "review_failures": 0,
+                "delivery_failures": 0,
+            },
+        )
         self.assertEqual(fake.lead_findings, [])
         case = self.broker.list_cases()[0]
         self.assertEqual(case["status"], "WAITING_FOR_EVIDENCE")
@@ -453,6 +514,7 @@ class _RecordingHerdrControlPlane(HerdrControlPlane):
         super().__init__(**kwargs)
         self.commands: list[tuple[str, ...]] = []
         self.agent_names: set[str] = set()
+        self.agent_panes: dict[str, str] = {}
 
     async def _ensure_server(self) -> None:
         return None
@@ -462,6 +524,9 @@ class _RecordingHerdrControlPlane(HerdrControlPlane):
             return None
         return {
             "name": name,
+            "pane_id": self.agent_panes.get(
+                name, "w-control:p1" if name == "lead" else "w-control:p2"
+            ),
             "interactive_ready": True,
             "agent_status": "idle",
             "launch_pending": False,
@@ -471,8 +536,11 @@ class _RecordingHerdrControlPlane(HerdrControlPlane):
         self.commands.append(tuple(args))
         if len(args) >= 3 and args[:2] == ("agent", "start"):
             self.agent_names.add(args[2])
+            pane_index = args.index("--pane") + 1
+            self.agent_panes[args[2]] = args[pane_index]
         if args[:2] == ("workspace", "close"):
             self.agent_names.clear()
+            self.agent_panes.clear()
         return 0, "{}", ""
 
     async def _run_json(self, *args: str):
@@ -508,6 +576,7 @@ class _StaleNamedAgentControlPlane(_RecordingHerdrControlPlane):
             return None
         return {
             "name": name,
+            "pane_id": "w-control:p1" if name == "lead" else "w-control:p2",
             "interactive_ready": self.ready,
             "agent_status": "idle" if self.ready else "unknown",
             "launch_pending": not self.ready,
@@ -632,6 +701,36 @@ class HerdrControlPlaneTopologyTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaisesRegex(
                 RuntimeError, "persisted slp-control topology could not be restored"
             ):
+                await control.ensure_started()
+
+    async def test_prompt_ready_named_agent_on_wrong_pane_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            workspace = root / "workspace"
+            workspace.mkdir()
+            state_db = workspace / ".qiqi" / "state" / "qiqi_delegate.sqlite3"
+            control = _RecordingHerdrControlPlane(
+                workspace_root=workspace,
+                state_db=state_db,
+                supervisor_home=root / "isolated-supervisor",
+            )
+            control.agent_names.update({"lead", "supervisor"})
+            control.agent_panes.update(
+                {"lead": "wrong:p1", "supervisor": "wrong:p2"}
+            )
+            control.store.save_control_plane(
+                workspace_id="w-control",
+                lead_pane_id="w-control:p1",
+                supervisor_pane_id="w-control:p2",
+                herdr_session="qiqi-delegate",
+                lead_model=DEFAULT_MODEL,
+                supervisor_model=DEFAULT_MODEL,
+                supervisor_home=root / "isolated-supervisor",
+                supervisor_capture_dir=root / "isolated-supervisor" / "captures",
+                supervisor_capture_nonce="nonce",
+            )
+
+            with self.assertRaisesRegex(RuntimeError, "topology mismatch"):
                 await control.ensure_started()
 
     async def test_control_room_starts_independent_lead_and_read_only_supervisor(self) -> None:
