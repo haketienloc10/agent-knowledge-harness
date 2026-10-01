@@ -745,6 +745,10 @@ class SessionStore:
                 broker_id TEXT PRIMARY KEY,
                 last_processed_seq INTEGER NOT NULL DEFAULT 0
                     CHECK (last_processed_seq >= 0),
+                health_status TEXT NOT NULL DEFAULT 'healthy'
+                    CHECK (health_status IN ('healthy', 'retrying')),
+                last_error TEXT,
+                last_error_at_ns INTEGER,
                 updated_at_ns INTEGER NOT NULL
             );
             CREATE TABLE IF NOT EXISTS write_scope_claims (
@@ -828,6 +832,54 @@ class SessionStore:
                 conn.execute(
                     f"ALTER TABLE supervisor_control_plane ADD COLUMN {column} {definition}"
                 )
+
+        broker_state_columns = {
+            row["name"] if isinstance(row, sqlite3.Row) else row[1]
+            for row in conn.execute("PRAGMA table_info(supervisor_broker_state)").fetchall()
+        }
+        broker_state_additions = {
+            "health_status": "TEXT NOT NULL DEFAULT 'healthy'",
+            "last_error": "TEXT",
+            "last_error_at_ns": "INTEGER",
+        }
+        for column, definition in broker_state_additions.items():
+            if column not in broker_state_columns:
+                conn.execute(
+                    f"ALTER TABLE supervisor_broker_state ADD COLUMN {column} {definition}"
+                )
+
+        # Workspaces created before the semantic ledger may already contain canonical
+        # captured Peer turns. Backfill exactly one peer.response event per missing turn
+        # so R1/R5 supervision applies after upgrade. The NOT EXISTS predicate makes
+        # this safe to run on every schema ensure/restart.
+        legacy_turns = conn.execute(
+            "SELECT t.* FROM turns t "
+            "WHERE NOT EXISTS ("
+            "SELECT 1 FROM slp_events e "
+            "WHERE e.event_type = 'peer.response' AND e.turn_id = t.turn_id"
+            ") ORDER BY t.created_at_ns, t.turn_id"
+        ).fetchall()
+        for turn in legacy_turns:
+            try:
+                packet_payload = json.loads(turn["task_packet_json"])
+            except json.JSONDecodeError as exc:
+                raise RuntimeError(
+                    "cannot backfill semantic event for legacy turn with invalid TaskPacket JSON: "
+                    f"{turn['turn_id']!r}"
+                ) from exc
+            work_item_id, work_item_revision = _work_item_ref_from_payload(packet_payload)
+            SessionStore._insert_slp_event(
+                conn,
+                event_type="peer.response",
+                turn_id=turn["turn_id"],
+                session_id=turn["session_id"],
+                repository=turn["repository"],
+                route=turn["route"],
+                work_item_id=work_item_id,
+                work_item_revision=work_item_revision,
+                payload={"backfilled_from": "turns"},
+                created_at_ns=int(turn["created_at_ns"]),
+            )
 
     @staticmethod
     def _optional_runtime_text(value: str | None, label: str) -> str | None:
@@ -1412,11 +1464,21 @@ class SessionStore:
                 "Lead disposition requires an existing captured Peer turn: "
                 f"unknown turn_id={clean_turn_id!r}"
             )
+        packet_payload = json.loads(turn["task_packet_json"])
+        inferred_id, inferred_revision = _work_item_ref_from_payload(packet_payload)
         if clean_work_item_id is None:
-            packet_payload = json.loads(turn["task_packet_json"])
-            inferred_id, inferred_revision = _work_item_ref_from_payload(packet_payload)
             clean_work_item_id = inferred_id
             clean_work_item_revision = inferred_revision
+        elif (
+            clean_work_item_id != inferred_id
+            or clean_work_item_revision != inferred_revision
+        ):
+            raise RuntimeError(
+                "explicit Work Item locator does not match the captured Peer turn: "
+                f"turn_id={clean_turn_id!r}, "
+                f"captured={inferred_id!r}@{inferred_revision!r}, "
+                f"provided={clean_work_item_id!r}@{clean_work_item_revision!r}"
+            )
 
         existing = conn.execute(
             "SELECT * FROM lead_dispositions WHERE turn_id = ?",
