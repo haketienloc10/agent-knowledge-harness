@@ -960,53 +960,73 @@ class HerdrControlPlane:
                 return self.store.get_control_plane() or state
 
         capture_dir, nonce = self._prepare_supervisor_home()
-        created = await self._run_json(
-            "workspace",
-            "create",
-            "--cwd",
-            str(self.workspace_root),
-            "--label",
-            CONTROL_ID,
-            "--no-focus",
-        )
-        workspace = self._result(created, "workspace")
-        root_pane = self._result(created, "root_pane")
-        workspace_id = _required_text(workspace.get("workspace_id"), "workspace_id")
-        lead_pane_id = _required_text(root_pane.get("pane_id"), "lead_pane_id")
+        workspace_id: str | None = None
+        try:
+            created = await self._run_json(
+                "workspace",
+                "create",
+                "--cwd",
+                str(self.workspace_root),
+                "--label",
+                CONTROL_ID,
+                "--no-focus",
+            )
+            workspace = self._result(created, "workspace")
+            root_pane = self._result(created, "root_pane")
+            workspace_id = _required_text(workspace.get("workspace_id"), "workspace_id")
+            lead_pane_id = _required_text(root_pane.get("pane_id"), "lead_pane_id")
 
-        split = await self._run_json(
-            "pane",
-            "split",
-            lead_pane_id,
-            "--direction",
-            "right",
-            "--cwd",
-            str(self.supervisor_home),
-            "--no-focus",
-        )
-        supervisor_pane = self._result(split, "pane")
-        supervisor_pane_id = _required_text(
-            supervisor_pane.get("pane_id"),
-            "supervisor_pane_id",
-        )
+            split = await self._run_json(
+                "pane",
+                "split",
+                lead_pane_id,
+                "--direction",
+                "right",
+                "--cwd",
+                str(self.supervisor_home),
+                "--no-focus",
+            )
+            supervisor_pane = self._result(split, "pane")
+            supervisor_pane_id = _required_text(
+                supervisor_pane.get("pane_id"),
+                "supervisor_pane_id",
+            )
 
-        await self._start_agent(LEAD_AGENT_NAME, lead_pane_id, self._lead_args())
-        await self._start_agent(
-            SUPERVISOR_AGENT_NAME,
-            supervisor_pane_id,
-            self._supervisor_args(capture_dir, nonce),
-        )
-        return self.store.save_control_plane(
-            workspace_id=workspace_id,
-            lead_pane_id=lead_pane_id,
-            supervisor_pane_id=supervisor_pane_id,
-            herdr_session=self.session,
-            lead_model=self.lead_model,
-            supervisor_model=self.supervisor_model,
-            supervisor_home=self.supervisor_home,
-            supervisor_capture_dir=capture_dir,
-            supervisor_capture_nonce=nonce,
-        )
+            await self._start_agent(LEAD_AGENT_NAME, lead_pane_id, self._lead_args())
+            await self._start_agent(
+                SUPERVISOR_AGENT_NAME,
+                supervisor_pane_id,
+                self._supervisor_args(capture_dir, nonce),
+            )
+            return self.store.save_control_plane(
+                workspace_id=workspace_id,
+                lead_pane_id=lead_pane_id,
+                supervisor_pane_id=supervisor_pane_id,
+                herdr_session=self.session,
+                lead_model=self.lead_model,
+                supervisor_model=self.supervisor_model,
+                supervisor_home=self.supervisor_home,
+                supervisor_capture_dir=capture_dir,
+                supervisor_capture_nonce=nonce,
+            )
+        except Exception as exc:
+            # Creation is not considered durable until save_control_plane succeeds.
+            # Tear down the provisional Herdr workspace so fixed agent names cannot
+            # survive on old panes and poison the next retry.
+            self.store.clear_control_plane()
+            if workspace_id is not None:
+                close_code, _, close_err = await self._run(
+                    "workspace",
+                    "close",
+                    workspace_id,
+                    check=False,
+                )
+                if close_code != 0:
+                    raise RuntimeError(
+                        "failed to clean up partially created slp-control workspace: "
+                        f"{close_err.strip() or close_code}"
+                    ) from exc
+            raise
 
     @staticmethod
     def _clear_capture_dir(capture_dir: Path) -> None:
