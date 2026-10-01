@@ -114,6 +114,10 @@ grep -Fq '_agent_matches_pane' "$supervisor_control" || \
   fail 'Supervisor control plane must validate named-agent pane identity'
 grep -Fq '_drain_durable' "$supervisor_broker" || \
   fail 'Supervisor broker must drain durable backlog before waiting for wakeups'
+grep -Fq 'stream_once(yield_ready=True)' "$supervisor_broker" || \
+  fail 'Supervisor broker must establish Herdr subscription before its final durable drain'
+grep -Fq '"subscription_started"' "$supervisor_broker" || \
+  fail 'Supervisor broker must wait for Herdr subscription acknowledgement'
 grep -Fq 'candidate.reconciled' "$supervisor_broker" || \
   fail 'Supervisor broker must close R5 only from explicit stale-candidate evidence'
 for rule in R1 R2 R3 R4 R5; do
@@ -170,6 +174,10 @@ done
 grep -Fq 'command: codex' "$routing" || fail 'Codex must resolve the native codex CLI'
 grep -Fq 'model: gpt-5.6-luna' "$routing" || \
   fail 'codex-balanced route must use gpt-5.6-luna'
+grep -Fq 'write_claim_recorded = False' "$mcp_project/server.py" || \
+  fail 'direct delegation must track whether the durable write claim was persisted'
+grep -Fq 'if write_claim_recorded:' "$mcp_project/server.py" || \
+  fail 'direct delegation must release durable claim when dispatch recording fails'
 grep -Fq 'State/phase/progress/evidence/disposition/report reconciliation' "$agents" || \
   fail 'Lead Work Item policy must forbid revision bumps for state-only reconciliation'
 grep -Fq 'command: claude' "$routing" || fail 'Claude must resolve the native claude CLI'
