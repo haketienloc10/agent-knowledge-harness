@@ -1169,6 +1169,35 @@ async def record_peer_signal(
 
 @mcp.tool()
 @_public_tool_errors
+async def record_peer_signal_resolution(
+    turn_id: str,
+    signal: PeerSignal,
+    reason: str,
+    work_item_id: str | None = None,
+    work_item_revision: int | None = None,
+) -> dict[str, Any]:
+    """Record Lead evidence that one previously deferred explicit Peer signal is resolved.
+
+    This does not rewrite the historical Lead disposition for the Peer response. It closes
+    the exact R4 signal loop with separate semantic evidence after the blocker/dependency/
+    reopen condition has actually been reconciled.
+    """
+    seq = _store.record_peer_signal_resolution(
+        turn_id=turn_id,
+        signal=signal,
+        reason=reason,
+        work_item_id=work_item_id,
+        work_item_revision=work_item_revision,
+    )
+    return {
+        "event_seq": seq,
+        "turn_id": turn_id,
+        "signal": signal,
+    }
+
+
+@mcp.tool()
+@_public_tool_errors
 async def record_candidate_reconciliation(
     stale_turn_id: str,
     resolution: CandidateReconciliation,
