@@ -561,11 +561,17 @@ class TaskGraphRuntimeTests(unittest.IsolatedAsyncioTestCase):
                     executor=self.settled_executor,
                 )
 
+                decision_payload = {"node_id": "contracts", "action": action}
+                if action in {"block", "replan"}:
+                    decision_payload.update(
+                        {
+                            "owner": "lead",
+                            "return_checkpoint": "after semantic reconciliation",
+                        }
+                    )
                 updated = runtime.submit_decisions(
                     run_id,
-                    decisions_from_payload(
-                        [{"node_id": "contracts", "action": action}]
-                    ),
+                    decisions_from_payload([decision_payload]),
                     expected_revision=reviewable["revision"],
                 )
 
@@ -678,7 +684,14 @@ class TaskGraphRuntimeTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_decision_transport_is_strict_and_replan_is_supported(self) -> None:
         decisions = decisions_from_payload(
-            [{"node_id": "backend", "action": "replan"}]
+            [
+                {
+                    "node_id": "backend",
+                    "action": "replan",
+                    "owner": "lead",
+                    "return_checkpoint": "after graph reconciliation",
+                }
+            ]
         )
         self.assertEqual(decisions[0].node_id, "backend")
         self.assertEqual(decisions[0].action, "replan")
