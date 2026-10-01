@@ -165,7 +165,14 @@ The runtime now emits/records the semantic inputs consumed by the deterministic 
   emits conservative `write_scope.claimed/released` events with scope `["*"]`; durable release
   is attempted both when pre-dispatch semantic recording fails after the claim and when later Herdr
   workspace cleanup fails;
-- explicit Lead `accept` also emits `candidate.accepted`;
+- explicit Lead `accept` also emits `candidate.accepted`; any explicit Work Item id/revision
+  passed with a disposition must exactly match the canonical locator captured in that turn's
+  TaskPacket or the write fails closed;
+- pre-semantic-ledger workspaces are upgraded idempotently: any canonical row already present in
+  `turns` but missing its `peer.response` ledger event is backfilled exactly once, preserving
+  legacy candidates for R1/R5 governance;
+- TaskGraph `replan` / `block` decisions require explicit `owner` and
+  `return_checkpoint`; both are persisted in the exact Lead disposition reason;
 - R5 stale candidates do not close merely because another current-revision Peer response appears.
   Lead records exact stale-candidate reconciliation with `record_candidate_reconciliation`, which
   emits `candidate.reconciled` without rewriting the stale turn's historical disposition.
@@ -182,7 +189,9 @@ drains durable SQLite truth, opens the Herdr subscription, waits for the explici
 for lifecycle wakeups. This closes the commit-to-subscribe race: any wakeup created during the
 second drain is already buffered by the active subscription. Topology change or event loss causes
 reconnect and the same durable replay sequence. A transient Supervisor/control-plane failure is
-isolated from other cases and retried with backoff; it does not terminate the long-lived broker.
+isolated from other cases and retried with backoff; each retry failure is written to stderr and
+persisted in `supervisor_broker_state` as `health_status=retrying` with the latest error/time.
+A completed full durable drain clears the error and marks the broker `healthy`.
 
 Supervisor responses are captured through the native Stop hook. The broker does not use
 `pane.read` or `agent.read` as semantic input.
@@ -198,7 +207,8 @@ Start the autonomous broker:
 bash scripts/qiqi-supervisor-broker.sh
 ```
 
-Process one full autonomous cycle and exit:
+Process one full autonomous drain and exit (all bounded event/review/delivery batches are drained,
+not just one batch):
 
 ```bash
 bash scripts/qiqi-supervisor-broker.sh --supervise-once
