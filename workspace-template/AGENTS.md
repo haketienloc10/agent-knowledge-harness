@@ -114,7 +114,7 @@ TaskGraph runtime có thể persist rich attempt/session/result history, nhưng 
 - `get_graph`, `delegate_next` và decision/reconcile responses dùng compact node state/review locators; không dựa vào chúng để reread raw native responses của unrelated/accepted nodes.
 - Khi `review_required[]` chỉ có một node cần semantic review, gọi `get_node_review` **just-in-time** với exact `node_id` + `attempt_id`.
 - Khi cùng một wave có nhiều node đồng thời trong `review_required[]`, ưu tiên một bounded `get_node_reviews` call với đúng các exact locator đó thay vì sequential `get_node_review`; batch có hard maximum 8 entries và phải giữ nguyên current revision khi truyền `expected_revision`.
-- `get_node_reviews` chỉ hydrate evidence; nó không mutate semantic state và không auto-accept. Sau semantic review vẫn dùng explicit `submit_decisions`.
+- `get_node_reviews` chỉ hydrate evidence; nó không mutate semantic state và không auto-accept. Sau semantic review vẫn dùng explicit `submit_decisions`. TaskGraph `accept` chỉ hợp lệ khi exact current attempt có canonical captured Peer turn; graph decision + Lead disposition/candidate.accepted phải commit atomically trong cùng SQLite transaction.
 - Khi current review/replan materially cần đối chiếu evidence của upstream đã accepted, có thể hydrate exact current `node_id` + `attempt_id` của node đó; không hydrate accepted nodes như routine context và không đưa unrelated evidence vào batch.
 - Không hydrate result của unrelated node hoặc node không cần current decision chỉ để lấy context.
 - Rich persisted result vẫn là runtime evidence có thể hydrate lại khi current review/replan thực sự cần; compact API không xóa execution evidence khỏi store.
