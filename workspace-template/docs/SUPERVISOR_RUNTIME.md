@@ -26,6 +26,11 @@ persisted pane must not require operator cleanup. Prompt-ready named agents are 
 their reported Herdr pane matches the persisted control-plane pane; a same-name agent on another
 pane fails closed instead of receiving Lead/Supervisor traffic.
 
+Initial control-plane creation is provisional until both named agents are prompt-ready and the
+topology row is durably saved. Any failure after creating the workspace closes that provisional
+workspace and clears control-plane state before retry, preventing orphaned fixed-name agents from
+poisoning the next startup.
+
 
 ## Sources of truth
 
@@ -205,8 +210,10 @@ Process only durable deterministic rules without starting control-plane agents:
 bash scripts/qiqi-supervisor-broker.sh --once
 ```
 
-The broker must remain running for continuous supervision. If it is absent or unhealthy, the
-workspace must not claim continuous supervision.
+The broker must remain running for continuous supervision. The canonical launcher takes a
+non-blocking `flock` on `.qiqi/state/qiqi-supervisor-broker.lock`; a second launcher for the
+same workspace exits instead of allowing duplicate Supervisor/Lead prompts. If the broker is absent
+or unhealthy, the workspace must not claim continuous supervision.
 
 CI includes an autonomous E2E-08 state-machine integration test that proves broker case opening,
 Supervisor review, Lead wakeup, explicit Lead disposition, and semantic case closure without a
