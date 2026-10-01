@@ -226,6 +226,34 @@ async def _execute_repo_task(
             f"runnable node {node.node_id!r} has no route for repository execution"
         )
     packet = node.task_packet
+    if graph_run_id is not None and node.depends_on:
+        work_item_id, work_item_revision = task_packet_work_item_ref(packet)
+        for dependency_node_id in node.depends_on:
+            dependency = _graph_runtime.store.get_node(
+                graph_run_id, dependency_node_id
+            )
+            if dependency is None:
+                raise RuntimeError(
+                    "TaskGraph dependency state disappeared during execution: "
+                    f"{dependency_node_id!r}"
+                )
+            source_turn_id = dependency.get("turn_id")
+            if not isinstance(source_turn_id, str) or not source_turn_id:
+                raise RuntimeError(
+                    "TaskGraph consumed a satisfied dependency without captured "
+                    f"Peer turn evidence: {dependency_node_id!r}"
+                )
+            # Consumption begins when the downstream node is dispatched with the
+            # accepted upstream semantics, not when final-response transport succeeds.
+            _store.record_dependency_consumed(
+                source_turn_id=source_turn_id,
+                consumer_turn_id=None,
+                repository=node.repository,
+                graph_run_id=graph_run_id,
+                node_id=node.node_id,
+                work_item_id=work_item_id,
+                work_item_revision=work_item_revision,
+            )
     try:
         result = await delegate_repo_task(
             repository=node.repository,
@@ -239,37 +267,6 @@ async def _execute_repo_task(
             known_unknowns=list(packet.known_unknowns),
             session_id=session_id,
         )
-        if graph_run_id is not None and node.depends_on:
-            consumer_turn_id = result.get("turn_id")
-            work_item_id, work_item_revision = task_packet_work_item_ref(packet)
-            for dependency_node_id in node.depends_on:
-                dependency = _graph_runtime.store.get_node(
-                    graph_run_id, dependency_node_id
-                )
-                if dependency is None:
-                    raise RuntimeError(
-                        "TaskGraph dependency state disappeared during execution: "
-                        f"{dependency_node_id!r}"
-                    )
-                source_turn_id = dependency.get("turn_id")
-                if not isinstance(source_turn_id, str) or not source_turn_id:
-                    raise RuntimeError(
-                        "TaskGraph consumed a satisfied dependency without captured "
-                        f"Peer turn evidence: {dependency_node_id!r}"
-                    )
-                _store.record_dependency_consumed(
-                    source_turn_id=source_turn_id,
-                    consumer_turn_id=(
-                        consumer_turn_id
-                        if isinstance(consumer_turn_id, str) and consumer_turn_id
-                        else None
-                    ),
-                    repository=node.repository,
-                    graph_run_id=graph_run_id,
-                    node_id=node.node_id,
-                    work_item_id=work_item_id,
-                    work_item_revision=work_item_revision,
-                )
         return result
     except ToolError as exc:
         preserved_session_id = _preserved_session_id(exc)
