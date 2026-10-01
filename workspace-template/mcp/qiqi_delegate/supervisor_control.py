@@ -705,6 +705,14 @@ class HerdrControlPlane:
             and info.get("launch_pending") is not True
         )
 
+    @staticmethod
+    def _agent_matches_pane(info: dict[str, Any] | None, pane_id: str) -> bool:
+        return (
+            isinstance(info, dict)
+            and isinstance(info.get("pane_id"), str)
+            and info.get("pane_id") == pane_id
+        )
+
     async def _agent_exists(self, name: str) -> bool:
         return await self._agent_info(name) is not None
 
@@ -849,9 +857,18 @@ class HerdrControlPlane:
     ) -> None:
         existing = await self._agent_info(name)
         if existing is not None:
+            if not self._agent_matches_pane(existing, pane_id):
+                raise RuntimeError(
+                    f"named agent topology mismatch for {name!r}: "
+                    f"expected pane {pane_id!r}, got {existing.get('pane_id')!r}"
+                )
             if self._agent_prompt_ready(existing):
                 return
-            await self._wait_agent_prompt_ready(name)
+            ready = await self._wait_agent_prompt_ready(name)
+            if not self._agent_matches_pane(ready, pane_id):
+                raise RuntimeError(
+                    f"named agent topology mismatch for {name!r} after readiness"
+                )
             return
 
         await self._run(
@@ -908,6 +925,10 @@ class HerdrControlPlane:
             if (
                 self._agent_prompt_ready(lead_info)
                 and self._agent_prompt_ready(supervisor_info)
+                and self._agent_matches_pane(lead_info, state["lead_pane_id"])
+                and self._agent_matches_pane(
+                    supervisor_info, state["supervisor_pane_id"]
+                )
             ):
                 return state
             try:
@@ -1091,25 +1112,41 @@ class AutonomousSupervisorRuntime:
         self.store = SupervisorControlStore(state_db)
         self.control_plane = control_plane
 
-    async def handle_pending_cases(self) -> dict[str, int]:
+    async def handle_pending_cases(self, *, limit: int = 20) -> dict[str, int]:
         await self.control_plane.ensure_started()
         reviewed = 0
         delivered = 0
+        review_failures = 0
+        delivery_failures = 0
 
-        for case in self.store.pending_unreviewed_cases():
-            finding = await self.control_plane.prompt_supervisor(build_audit_packet(case))
-            if self.store.record_finding(finding):
-                reviewed += 1
+        cases = self.store.pending_unreviewed_cases(limit=limit)
+        for case in cases:
+            try:
+                finding = await self.control_plane.prompt_supervisor(
+                    build_audit_packet(case)
+                )
+                if self.store.record_finding(finding):
+                    reviewed += 1
+            except (RuntimeError, ValueError):
+                review_failures += 1
 
-        for finding in self.store.issue_findings_needing_delivery():
+        findings = self.store.issue_findings_needing_delivery(limit=limit)
+        for finding in findings:
             current = self.store.get_case(finding["case_id"])
             if current is None or current["status"] == "CLOSED":
                 continue
-            await self.control_plane.wake_lead(finding)
-            if self.store.mark_delivered_to_lead(finding["case_id"]):
-                delivered += 1
+            try:
+                await self.control_plane.wake_lead(finding)
+                if self.store.mark_delivered_to_lead(finding["case_id"]):
+                    delivered += 1
+            except (RuntimeError, ValueError):
+                delivery_failures += 1
 
         return {
             "reviewed": reviewed,
             "delivered_to_lead": delivered,
+            "review_attempted": len(cases),
+            "delivery_attempted": len(findings),
+            "review_failures": review_failures,
+            "delivery_failures": delivery_failures,
         }
