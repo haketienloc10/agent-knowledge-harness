@@ -22,7 +22,9 @@ agents instead of silently reusing sessions launched with an older model.
 Persisted Herdr topology is also validated before reuse. If the saved workspace or either
 saved pane no longer exists (for example after a Herdr restart or manual workspace close), the
 runtime clears the stale control-plane row and recreates `slp-control` automatically. A missing
-persisted pane must not require operator cleanup.
+persisted pane must not require operator cleanup. Prompt-ready named agents are reused only when
+their reported Herdr pane matches the persisted control-plane pane; a same-name agent on another
+pane fails closed instead of receiving Lead/Supervisor traffic.
 
 
 ## Sources of truth
@@ -140,12 +142,21 @@ The runtime now emits/records the semantic inputs consumed by the deterministic 
   phase, evidence, disposition, report reconciliation, waiting, or done transitions do not bump it;
 - after an actual material revision change, canonical Work Item mutation must call
   `record_work_item_revision` immediately;
-- direct Peer signals are recorded with `record_peer_signal`;
+- direct Peer signals are recorded with `record_peer_signal`; bounded signal details are carried
+  into R4 governance facts without copying the raw Peer response;
+- a native runtime-blocked R4 case is tied to its exact native session and closes when that same
+  session later produces a captured Peer response; explicit semantic BLOCKED signals still require
+  normal Lead reconciliation;
 - direct downstream consumption uses `record_dependency_consumed`;
-- TaskGraph downstream execution automatically records each accepted upstream dependency turn;
+- TaskGraph downstream execution records dependency consumption at dispatch, before final-response
+  transport can fail;
 - every direct/TaskGraph repository delegation uses the existing repository ownership lock and
-  emits conservative `write_scope.claimed/released` events with scope `["*"]`;
-- explicit Lead `accept` also emits `candidate.accepted`.
+  emits conservative `write_scope.claimed/released` events with scope `["*"]`; durable release
+  is attempted even if Herdr workspace cleanup fails;
+- explicit Lead `accept` also emits `candidate.accepted`;
+- R5 stale candidates do not close merely because another current-revision Peer response appears.
+  Lead records exact stale-candidate reconciliation with `record_candidate_reconciliation`, which
+  emits `candidate.reconciled` without rewriting the stale turn's historical disposition.
 
 The current `["*"]` claim mirrors the actual qiqi_delegate same-repository serialization
 boundary. It is intentionally conservative and does not replace Lead's finer-grained write-scope
@@ -154,7 +165,9 @@ planning.
 ## Herdr wakeup contract
 
 The broker uses raw `events.subscribe` only as a wakeup stream. On startup, reconnect, topology
-change, or event loss, it replays durable SLP events from the SQLite cursor.
+change, or event loss, it repeatedly drains bounded SQLite event/case batches before waiting for a
+new wakeup. A transient Supervisor/control-plane failure is isolated from other cases and retried
+with backoff; it does not terminate the long-lived broker.
 
 Supervisor responses are captured through the native Stop hook. The broker does not use
 `pane.read` or `agent.read` as semantic input.
