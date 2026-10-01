@@ -274,6 +274,74 @@ class DirectDelegationPhase4IntegrationTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(release_event["work_item_revision"], 4)
 
 
+    async def test_write_scope_release_survives_peer_dispatch_recording_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            repo_path = root / "repo-a"
+            repo_path.mkdir()
+            hook_path = root / "result-hook.py"
+            hook_path.write_text("# hook\n", encoding="utf-8")
+            store = SessionStore(root / "qiqi_delegate.sqlite3")
+            original_record_slp_event = store.record_slp_event
+            release = AsyncMock()
+
+            def fail_dispatch(**kwargs):
+                if kwargs.get("event_type") == "peer.dispatched":
+                    raise RuntimeError("dispatch event insert failed")
+                return original_record_slp_event(**kwargs)
+
+            with ExitStack() as stack:
+                stack.enter_context(patch.object(server, "_store", store))
+                stack.enter_context(
+                    patch.object(server, "_resolve_repo", return_value=repo_path)
+                )
+                stack.enter_context(
+                    patch.object(
+                        server,
+                        "_resolve_route",
+                        return_value=(
+                            "claude",
+                            {"adapter": "claude", "command": "claude"},
+                            {"model": "sonnet", "args": []},
+                        ),
+                    )
+                )
+                stack.enter_context(
+                    patch.object(server.shutil, "which", return_value="/bin/true")
+                )
+                stack.enter_context(patch.object(server, "RESULT_HOOK_PATH", hook_path))
+                stack.enter_context(
+                    patch.object(server, "_ensure_herdr_server", new=AsyncMock())
+                )
+                stack.enter_context(
+                    patch.object(server, "_require_current_integration", new=AsyncMock())
+                )
+                stack.enter_context(
+                    patch.object(server, "_claim_resources", new=AsyncMock())
+                )
+                stack.enter_context(
+                    patch.object(server, "_release_resources", new=release)
+                )
+                stack.enter_context(
+                    patch.object(store, "record_slp_event", side_effect=fail_dispatch)
+                )
+
+                with self.assertRaisesRegex(ToolError, "dispatch event insert failed"):
+                    await server.delegate_repo_task(
+                        repository="repo-a",
+                        route="claude-balanced",
+                        objective="Implement one change.",
+                        scope=["pricing"],
+                        acceptance_criteria=["tests pass"],
+                    )
+
+            release.assert_awaited_once()
+            self.assertEqual(
+                [event["event_type"] for event in store.list_slp_events()],
+                ["write_scope.claimed", "write_scope.released"],
+            )
+
+
     async def test_write_scope_release_survives_herdr_workspace_close_failure(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
