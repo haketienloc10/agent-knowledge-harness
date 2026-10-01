@@ -18,6 +18,7 @@ from supervisor_broker import (  # noqa: E402
     HerdrLifecycleSubscriber,
     SupervisorBroker,
     _drain_durable,
+    main,
     resolve_herdr_socket,
 )
 
@@ -414,15 +415,52 @@ class BrokerInstanceLockTests(unittest.TestCase):
             second.release()
 
 
+class BrokerHealthTests(unittest.TestCase):
+    def test_retry_health_is_durable_and_can_recover(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            db_path = Path(temp) / "qiqi_delegate.sqlite3"
+            broker = SupervisorBroker(db_path)
+            broker.mark_retrying(RuntimeError("capture failed"))
+
+            retrying = SupervisorBroker(db_path).health_state()
+            self.assertEqual(retrying["health_status"], "retrying")
+            self.assertIn("capture failed", retrying["last_error"])
+            self.assertIsNotNone(retrying["last_error_at_ns"])
+
+            broker.mark_healthy()
+            healthy = broker.health_state()
+            self.assertEqual(healthy["health_status"], "healthy")
+            self.assertIsNone(healthy["last_error"])
+            self.assertIsNone(healthy["last_error_at_ns"])
+
+
 class DurableDrainTests(unittest.IsolatedAsyncioTestCase):
     async def test_drain_consumes_all_bounded_batches_before_waiting_for_wakeup(self) -> None:
         class Broker:
             def __init__(self):
                 self.calls = 0
+                self.healthy = False
 
             def process_pending(self, *, limit):
                 self.calls += 1
-                return {"processed": limit if self.calls == 1 else 3}
+                return {
+                    "from_seq": 0,
+                    "last_processed_seq": self.calls,
+                    "processed": limit if self.calls == 1 else 3,
+                    "opened": 1 if self.calls == 1 else 0,
+                    "closed": 0,
+                }
+
+            def mark_healthy(self):
+                self.healthy = True
+
+            def health_state(self):
+                return {
+                    "health_status": "healthy" if self.healthy else "retrying",
+                    "last_error": None,
+                    "last_error_at_ns": None,
+                    "updated_at_ns": 1,
+                }
 
         class Runtime:
             def __init__(self):
@@ -442,9 +480,55 @@ class DurableDrainTests(unittest.IsolatedAsyncioTestCase):
 
         broker = Broker()
         runtime = Runtime()
-        await _drain_durable(broker, runtime)
+        result = await _drain_durable(broker, runtime)
         self.assertEqual(broker.calls, 2)
         self.assertEqual(runtime.calls, 2)
+        self.assertTrue(broker.healthy)
+        self.assertEqual(result["broker"]["processed"], 1003)
+        self.assertEqual(result["supervisor"]["reviewed"], 20)
+
+
+class SuperviseOnceTests(unittest.TestCase):
+    def test_supervise_once_uses_full_durable_drain(self) -> None:
+        expected = {
+            "broker": {
+                "processed": 1001,
+                "opened": 2,
+                "closed": 1,
+                "from_seq": 1000,
+                "last_processed_seq": 2001,
+            },
+            "supervisor": {
+                "reviewed": 21,
+                "delivered_to_lead": 20,
+                "review_attempted": 21,
+                "delivery_attempted": 20,
+                "review_failures": 0,
+                "delivery_failures": 0,
+            },
+            "health": {
+                "health_status": "healthy",
+                "last_error": None,
+                "last_error_at_ns": None,
+                "updated_at_ns": 1,
+            },
+        }
+
+        async def fake_drain(_broker, _runtime):
+            return expected
+
+        with tempfile.TemporaryDirectory() as temp:
+            db_path = Path(temp) / "qiqi_delegate.sqlite3"
+            with patch(
+                "supervisor_broker._drain_durable",
+                side_effect=fake_drain,
+            ) as drain:
+                with patch("builtins.print") as printed:
+                    rc = main(["--supervise-once", "--db", str(db_path)])
+
+        self.assertEqual(rc, 0)
+        self.assertEqual(drain.call_count, 1)
+        printed.assert_called_once_with(json.dumps(expected, sort_keys=True))
 
 
 @unittest.skipIf(os.name == "nt", "Unix-domain Herdr socket test")
