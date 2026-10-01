@@ -122,6 +122,46 @@ class Phase4SemanticStoreTests(unittest.TestCase):
         self.assertEqual(event["event_type"], "peer.signal")
         self.assertEqual(event["payload"]["signal"], "REOPEN_REQUEST")
 
+    def test_signal_resolution_requires_matching_explicit_signal(self) -> None:
+        packet = build_task_packet(
+            objective="Investigate dependency.",
+            scope=["repo evidence"],
+            acceptance_criteria=["report evidence"],
+        )
+        self.store.record_turn(
+            turn_id="turn-resolve-signal",
+            session_id="session-resolve-signal",
+            repository="repo-a",
+            agent="claude",
+            route="claude-balanced",
+            state="settled",
+            native_turn_id=None,
+            packet=packet,
+            agent_response="DEPENDENCY_REQUEST with evidence",
+        )
+        with self.assertRaisesRegex(RuntimeError, "matching prior explicit Peer signal"):
+            self.store.record_peer_signal_resolution(
+                turn_id="turn-resolve-signal",
+                signal="DEPENDENCY_REQUEST",
+                reason="dependency resolved",
+            )
+
+        self.store.record_peer_signal(
+            turn_id="turn-resolve-signal",
+            signal="DEPENDENCY_REQUEST",
+            details="need upstream contract",
+        )
+        seq = self.store.record_peer_signal_resolution(
+            turn_id="turn-resolve-signal",
+            signal="DEPENDENCY_REQUEST",
+            reason="upstream contract accepted",
+        )
+        event = next(item for item in self.store.list_slp_events() if item["seq"] == seq)
+        self.assertEqual(event["event_type"], "peer.signal_resolved")
+        self.assertEqual(event["payload"]["signal"], "DEPENDENCY_REQUEST")
+
+
+
 
 class DirectDelegationPhase4IntegrationTests(unittest.IsolatedAsyncioTestCase):
     async def test_tracked_delegation_emits_revision_claim_response_and_release(self) -> None:
