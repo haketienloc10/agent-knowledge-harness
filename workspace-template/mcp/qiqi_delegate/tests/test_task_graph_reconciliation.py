@@ -218,7 +218,14 @@ class TaskGraphReconciliationTests(unittest.IsolatedAsyncioTestCase):
         delegated = await self.runtime.delegate_next(run_id, executor=self.executor)
         blocked = self.runtime.submit_decisions(
             run_id,
-            decisions_from_payload([{"node_id": "contracts", "action": "replan"}]),
+            decisions_from_payload([
+                {
+                    "node_id": "contracts",
+                    "action": "replan",
+                    "owner": "lead",
+                    "return_checkpoint": "after replacement graph is authored",
+                }
+            ]),
             expected_revision=delegated["revision"],
         )
         self.assertEqual(blocked["graph_state"], "blocked")
@@ -281,7 +288,14 @@ class TaskGraphReconciliationTests(unittest.IsolatedAsyncioTestCase):
         backend_wave = await self.runtime.delegate_next(run_id, executor=self.executor)
         blocked = self.runtime.submit_decisions(
             run_id,
-            decisions_from_payload([{"node_id": "backend", "action": "block"}]),
+            decisions_from_payload([
+                {
+                    "node_id": "backend",
+                    "action": "block",
+                    "owner": "lead",
+                    "return_checkpoint": "after blocker is resolved",
+                }
+            ]),
             expected_revision=backend_wave["revision"],
         )
         self.assertEqual(blocked["graph_state"], "blocked")
