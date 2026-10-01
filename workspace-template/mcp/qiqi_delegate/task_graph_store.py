@@ -8,6 +8,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+from core import SessionStore
 from task_graph import TaskGraph
 from task_graph_scheduler import GraphSnapshot, NodeState, derive_graph_state
 
@@ -297,8 +298,9 @@ class GraphRuntimeStore:
         snapshot, _ = self.load_snapshot_with_revision(graph_run_id, graph)
         return snapshot
 
-    def save_snapshot(
+    def _save_snapshot_in_transaction(
         self,
+        conn: sqlite3.Connection,
         graph_run_id: str,
         snapshot: GraphSnapshot,
         *,
@@ -310,79 +312,122 @@ class GraphRuntimeStore:
         fingerprint = _graph_fingerprint(snapshot.graph)
         now = time.time_ns()
 
-        with self._connect() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            run = conn.execute(
-                "SELECT graph_fingerprint, revision FROM graph_runs WHERE graph_run_id = ?",
-                (run_id,),
+        run = conn.execute(
+            "SELECT graph_fingerprint, revision FROM graph_runs WHERE graph_run_id = ?",
+            (run_id,),
+        ).fetchone()
+        if run is None:
+            raise RuntimeError(f"unknown graph_run_id: {run_id!r}")
+        if run["graph_fingerprint"] != fingerprint:
+            raise RuntimeError("TaskGraph semantics do not match persisted graph run")
+        current_revision = int(run["revision"])
+        if current_revision != clean_expected_revision:
+            raise RuntimeError(
+                "stale graph snapshot revision: "
+                f"expected {clean_expected_revision}, current {current_revision}"
+            )
+
+        rows = conn.execute(
+            "SELECT node_id, current_attempt_id FROM graph_node_states "
+            "WHERE graph_run_id = ? AND active = 1",
+            (run_id,),
+        ).fetchall()
+        persisted_ids = {row["node_id"] for row in rows}
+        if persisted_ids != set(states):
+            raise RuntimeError("graph snapshot node set differs from persisted graph run")
+
+        for row in rows:
+            node_id = row["node_id"]
+            current_attempt_id = row["current_attempt_id"]
+            if current_attempt_id is None:
+                if states[node_id].runtime_state == "running":
+                    raise RuntimeError(
+                        f"node {node_id!r} cannot be persisted as running without an active attempt"
+                    )
+                continue
+            attempt = conn.execute(
+                "SELECT runtime_state FROM graph_attempts WHERE attempt_id = ?",
+                (current_attempt_id,),
             ).fetchone()
-            if run is None:
-                raise RuntimeError(f"unknown graph_run_id: {run_id!r}")
-            if run["graph_fingerprint"] != fingerprint:
-                raise RuntimeError("TaskGraph semantics do not match persisted graph run")
-            current_revision = int(run["revision"])
-            if current_revision != clean_expected_revision:
+            if attempt is None:
                 raise RuntimeError(
-                    "stale graph snapshot revision: "
-                    f"expected {clean_expected_revision}, current {current_revision}"
+                    f"node {node_id!r} references missing attempt {current_attempt_id!r}"
+                )
+            if attempt["runtime_state"] == "running" and states[node_id].runtime_state != "running":
+                raise RuntimeError(
+                    f"node {node_id!r} has a running attempt and cannot leave runtime_state='running'"
+                )
+            if attempt["runtime_state"] != "running" and states[node_id].runtime_state == "running":
+                raise RuntimeError(
+                    f"node {node_id!r} cannot be persisted as running after its attempt completed"
                 )
 
-            rows = conn.execute(
-                "SELECT node_id, current_attempt_id FROM graph_node_states "
-                "WHERE graph_run_id = ? AND active = 1",
-                (run_id,),
-            ).fetchall()
-            persisted_ids = {row["node_id"] for row in rows}
-            if persisted_ids != set(states):
-                raise RuntimeError("graph snapshot node set differs from persisted graph run")
+        conn.executemany(
+            "UPDATE graph_node_states SET semantic_state = ?, runtime_state = ?, updated_at_ns = ? "
+            "WHERE graph_run_id = ? AND node_id = ? AND active = 1",
+            [
+                (
+                    state.semantic_state,
+                    state.runtime_state,
+                    now,
+                    run_id,
+                    state.node_id,
+                )
+                for state in snapshot.node_states
+            ],
+        )
+        updated = conn.execute(
+            "UPDATE graph_runs SET updated_at_ns = ?, revision = revision + 1 "
+            "WHERE graph_run_id = ? AND revision = ?",
+            (now, run_id, clean_expected_revision),
+        )
+        if updated.rowcount != 1:
+            raise RuntimeError("graph run revision changed while saving snapshot")
 
-            for row in rows:
-                node_id = row["node_id"]
-                current_attempt_id = row["current_attempt_id"]
-                if current_attempt_id is None:
-                    if states[node_id].runtime_state == "running":
-                        raise RuntimeError(
-                            f"node {node_id!r} cannot be persisted as running without an active attempt"
-                        )
-                    continue
-                attempt = conn.execute(
-                    "SELECT runtime_state FROM graph_attempts WHERE attempt_id = ?",
-                    (current_attempt_id,),
-                ).fetchone()
-                if attempt is None:
-                    raise RuntimeError(
-                        f"node {node_id!r} references missing attempt {current_attempt_id!r}"
-                    )
-                if attempt["runtime_state"] == "running" and states[node_id].runtime_state != "running":
-                    raise RuntimeError(
-                        f"node {node_id!r} has a running attempt and cannot leave runtime_state='running'"
-                    )
-                if attempt["runtime_state"] != "running" and states[node_id].runtime_state == "running":
-                    raise RuntimeError(
-                        f"node {node_id!r} cannot be persisted as running after its attempt completed"
-                    )
+    def save_snapshot(
+        self,
+        graph_run_id: str,
+        snapshot: GraphSnapshot,
+        *,
+        expected_revision: int,
+    ) -> None:
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            self._save_snapshot_in_transaction(
+                conn,
+                graph_run_id,
+                snapshot,
+                expected_revision=expected_revision,
+            )
 
-            conn.executemany(
-                "UPDATE graph_node_states SET semantic_state = ?, runtime_state = ?, updated_at_ns = ? "
-                "WHERE graph_run_id = ? AND node_id = ? AND active = 1",
-                [
-                    (
-                        state.semantic_state,
-                        state.runtime_state,
-                        now,
-                        run_id,
-                        state.node_id,
-                    )
-                    for state in snapshot.node_states
-                ],
+    def save_snapshot_with_dispositions(
+        self,
+        graph_run_id: str,
+        snapshot: GraphSnapshot,
+        *,
+        expected_revision: int,
+        dispositions: tuple[dict[str, Any], ...],
+    ) -> None:
+        """Atomically persist graph decisions and exact Lead dispositions."""
+        if not isinstance(dispositions, tuple):
+            raise ValueError("dispositions must be a tuple")
+        slp_store = SessionStore(self.path)
+        with self._connect() as conn:
+            SessionStore._ensure_schema(conn)
+            conn.execute("BEGIN IMMEDIATE")
+            self._save_snapshot_in_transaction(
+                conn,
+                graph_run_id,
+                snapshot,
+                expected_revision=expected_revision,
             )
-            updated = conn.execute(
-                "UPDATE graph_runs SET updated_at_ns = ?, revision = revision + 1 "
-                "WHERE graph_run_id = ? AND revision = ?",
-                (now, run_id, clean_expected_revision),
-            )
-            if updated.rowcount != 1:
-                raise RuntimeError("graph run revision changed while saving snapshot")
+            for disposition in dispositions:
+                if not isinstance(disposition, dict):
+                    raise ValueError("graph disposition records must be objects")
+                slp_store.record_lead_disposition_in_transaction(
+                    conn,
+                    **disposition,
+                )
 
     def reconcile_graph(
         self,
