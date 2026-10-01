@@ -110,6 +110,12 @@ grep -Fq '"version": 2' "$supervisor_control" || \
   fail 'Supervisor AuditPacket contract version must include explicit rule semantics'
 grep -Fq 'rule_contract is the normative meaning' "$supervisor_control" || \
   fail 'Supervisor prompt must treat rule_contract as normative'
+grep -Fq '_agent_matches_pane' "$supervisor_control" || \
+  fail 'Supervisor control plane must validate named-agent pane identity'
+grep -Fq '_drain_durable' "$supervisor_broker" || \
+  fail 'Supervisor broker must drain durable backlog before waiting for wakeups'
+grep -Fq 'candidate.reconciled' "$supervisor_broker" || \
+  fail 'Supervisor broker must close R5 only from explicit stale-candidate evidence'
 for rule in R1 R2 R3 R4 R5; do
   grep -Fq "\"$rule\":" "$supervisor_control" || \
     fail "Supervisor AuditPacket missing deterministic rule contract: $rule"
@@ -131,6 +137,7 @@ for pattern in \
   'must not claim continuous supervision' \
   'work_item.revision_changed' \
   'record_dependency_consumed' \
+  'record_candidate_reconciliation' \
   'write_scope.claimed/released' \
   'autonomous E2E-08 state-machine integration test' \
   'normative `rule_contract`' \
@@ -144,6 +151,7 @@ for tool_name in \
   'record_lead_disposition' \
   'record_work_item_revision' \
   'record_peer_signal' \
+  'record_candidate_reconciliation' \
   'record_dependency_consumed'; do
   grep -Fq -- "$tool_name" "$config" || \
     fail "QiQi config missing SLP semantic runtime tool: $tool_name"
@@ -235,6 +243,7 @@ for pattern in \
   'explicit `ACCEPT` / `REJECT`' \
   'record_work_item_revision' \
   'record_peer_signal' \
+  'record_candidate_reconciliation' \
   'record_dependency_consumed' \
   'write_scope.claimed/released'; do
   grep -Fq -- "$pattern" "$agents" || fail "AGENTS.md missing SLP Lead policy: $pattern"
