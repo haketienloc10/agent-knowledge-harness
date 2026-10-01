@@ -1,7 +1,7 @@
 {
   "version": 66,
   "from_ref": "5475a5f41bb64fc412bf27eec7eeb2f2ed1cfe06",
-  "to_ref": "bfe74e0491a986ee6f129dc3defc6aa16574b6f8",
+  "to_ref": "7e5bb0f371fd2065b4d3cc6a33478d1f4f3a7a16",
   "description": "fix sixth Codex review of autonomous Supervisor governance: commit legacy semantic backfill before broker-owned transactions, bound Herdr snapshot/subscription handshakes, validate Peer signal and signal-resolution Work Item provenance against the captured turn, require candidate reconciliation to target the exact recorded current revision with an exact tracked replacement locator, and prevent TaskGraph downstream dispatch from consuming an accepted source that became stale after a material Work Item revision",
   "workspace": {
     "merge": [],
