@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 import sys
 import tempfile
 import unittest
@@ -89,6 +90,110 @@ class Phase4SemanticStoreTests(unittest.TestCase):
             events[-1]["payload"]["disposition_id"],
             disposition["disposition_id"],
         )
+
+    def test_disposition_rejects_work_item_override_mismatch(self) -> None:
+        packet = build_task_packet(
+            objective="Produce tracked candidate.",
+            scope=["repo work"],
+            acceptance_criteria=["tests pass"],
+            context={
+                "trusted_facts": [
+                    {
+                        "fact": (
+                            "work_item_path=/tmp/work-items/e2e-a; "
+                            "id=e2e:a; revision=2"
+                        ),
+                        "source": "canonical Work Item locator",
+                    }
+                ]
+            },
+        )
+        self.store.record_turn(
+            turn_id="turn-provenance",
+            session_id="session-provenance",
+            repository="repo-a",
+            agent="claude",
+            route="claude-balanced",
+            state="settled",
+            native_turn_id=None,
+            packet=packet,
+            agent_response="candidate evidence",
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "does not match the captured Peer turn"):
+            self.store.record_lead_disposition(
+                turn_id="turn-provenance",
+                action="accept",
+                reason="incorrect override",
+                work_item_id="e2e:b",
+                work_item_revision=9,
+            )
+
+        self.assertIsNone(self.store.get_lead_disposition("turn-provenance"))
+        self.assertEqual(
+            [event["event_type"] for event in self.store.list_slp_events()],
+            ["peer.response"],
+        )
+
+    def test_schema_upgrade_backfills_legacy_turn_once(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            db_path = Path(temp) / "legacy.sqlite3"
+            packet = build_task_packet(
+                objective="Legacy captured result.",
+                scope=["repo evidence"],
+                acceptance_criteria=["report evidence"],
+            )
+            with sqlite3.connect(db_path) as conn:
+                conn.executescript(
+                    """
+                    CREATE TABLE sessions (
+                        session_id TEXT PRIMARY KEY,
+                        repository TEXT NOT NULL,
+                        agent TEXT NOT NULL,
+                        created_at_ns INTEGER NOT NULL,
+                        updated_at_ns INTEGER NOT NULL
+                    );
+                    CREATE TABLE turns (
+                        turn_id TEXT PRIMARY KEY,
+                        session_id TEXT NOT NULL,
+                        repository TEXT NOT NULL,
+                        route TEXT NOT NULL,
+                        state TEXT NOT NULL,
+                        native_turn_id TEXT,
+                        task_packet_json TEXT NOT NULL,
+                        agent_response TEXT NOT NULL,
+                        created_at_ns INTEGER NOT NULL
+                    );
+                    """
+                )
+                conn.execute(
+                    "INSERT INTO sessions VALUES (?, ?, ?, ?, ?)",
+                    ("legacy-session", "repo-a", "claude", 10, 10),
+                )
+                conn.execute(
+                    "INSERT INTO turns VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        "legacy-turn",
+                        "legacy-session",
+                        "repo-a",
+                        "claude-balanced",
+                        "settled",
+                        None,
+                        packet.to_json(),
+                        "legacy result",
+                        11,
+                    ),
+                )
+
+            upgraded = SessionStore(db_path)
+            first = upgraded.list_slp_events()
+            second = upgraded.list_slp_events()
+
+        peer_events = [event for event in first if event["event_type"] == "peer.response"]
+        self.assertEqual(len(peer_events), 1)
+        self.assertEqual(peer_events[0]["turn_id"], "legacy-turn")
+        self.assertEqual(peer_events[0]["payload"]["backfilled_from"], "turns")
+        self.assertEqual(len(second), len(first))
 
     def test_explicit_peer_signal_requires_captured_turn(self) -> None:
         with self.assertRaisesRegex(RuntimeError, "unknown turn_id"):
