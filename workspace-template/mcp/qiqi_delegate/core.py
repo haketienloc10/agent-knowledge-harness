@@ -881,6 +881,11 @@ class SessionStore:
                 created_at_ns=int(turn["created_at_ns"]),
             )
 
+        # Schema ensure may perform DML for legacy semantic backfill. Callers such as
+        # SupervisorBroker start their own explicit transaction immediately after this
+        # method returns, so leave every fresh connection at a clean transaction boundary.
+        conn.commit()
+
     @staticmethod
     def _optional_runtime_text(value: str | None, label: str) -> str | None:
         if value is None:
@@ -1077,10 +1082,13 @@ class SessionStore:
         graph_run_id: str | None = None,
         node_id: str | None = None,
         attempt_id: str | None = None,
+        require_current_source: bool = False,
     ) -> int:
         source_turn = self._optional_runtime_text(source_turn_id, "source_turn_id")
         if source_turn is None:
             raise ValueError("source_turn_id must not be empty")
+        if not isinstance(require_current_source, bool):
+            raise ValueError("require_current_source must be a boolean")
         clean_consumer = self._optional_runtime_text(consumer_turn_id, "consumer_turn_id")
         clean_repository = self._optional_runtime_text(repository, "repository")
         clean_work_item_id = self._optional_runtime_text(work_item_id, "work_item_id")
@@ -1092,8 +1100,12 @@ class SessionStore:
         clean_node = self._optional_runtime_text(node_id, "node_id")
         clean_attempt = self._optional_runtime_text(attempt_id, "attempt_id")
         with self._connect() as conn:
+            if require_current_source:
+                # Hold the writer reservation across current-revision validation and
+                # dependency.consumed insertion so a material revision cannot race the gate.
+                conn.execute("BEGIN IMMEDIATE")
             source = conn.execute(
-                "SELECT turn_id FROM turns WHERE turn_id = ?",
+                "SELECT turn_id, task_packet_json FROM turns WHERE turn_id = ?",
                 (source_turn,),
             ).fetchone()
             if source is None:
@@ -1101,6 +1113,56 @@ class SessionStore:
                     "dependency consumption requires an existing captured source Peer turn: "
                     f"unknown source_turn_id={source_turn!r}"
                 )
+
+            if require_current_source:
+                disposition = conn.execute(
+                    "SELECT action FROM lead_dispositions WHERE turn_id = ?",
+                    (source_turn,),
+                ).fetchone()
+                if disposition is None or disposition["action"] != "accept":
+                    raise RuntimeError(
+                        "TaskGraph dependency source is not explicitly accepted: "
+                        f"source_turn_id={source_turn!r}"
+                    )
+
+                source_packet = json.loads(source["task_packet_json"])
+                source_work_item_id, source_revision = _work_item_ref_from_payload(
+                    source_packet
+                )
+                if source_work_item_id is not None and source_revision is not None:
+                    latest = conn.execute(
+                        "SELECT work_item_revision FROM slp_events "
+                        "WHERE event_type = 'work_item.revision_changed' "
+                        "AND work_item_id = ? ORDER BY seq DESC LIMIT 1",
+                        (source_work_item_id,),
+                    ).fetchone()
+                    if latest is not None:
+                        current_revision = int(latest["work_item_revision"])
+                        if current_revision > source_revision:
+                            reconciliation = conn.execute(
+                                "SELECT work_item_revision, payload_json FROM slp_events "
+                                "WHERE event_type = 'candidate.reconciled' "
+                                "AND turn_id = ? AND work_item_id = ? "
+                                "ORDER BY seq DESC LIMIT 1",
+                                (source_turn, source_work_item_id),
+                            ).fetchone()
+                            is_current = False
+                            if reconciliation is not None:
+                                payload = json.loads(reconciliation["payload_json"])
+                                is_current = (
+                                    payload.get("resolution") == "revalidated"
+                                    and int(reconciliation["work_item_revision"])
+                                    == current_revision
+                                )
+                            if not is_current:
+                                raise RuntimeError(
+                                    "TaskGraph dependency source is stale for the current "
+                                    "Work Item revision: "
+                                    f"source_turn_id={source_turn!r}, "
+                                    f"captured_revision={source_revision}, "
+                                    f"current_revision={current_revision}"
+                                )
+
             return self._insert_slp_event(
                 conn,
                 event_type="dependency.consumed",
@@ -1145,10 +1207,20 @@ class SessionStore:
                     "Peer signal requires an existing captured Peer turn: "
                     f"unknown turn_id={clean_turn!r}"
                 )
+            packet_payload = json.loads(turn["task_packet_json"])
+            inferred_id, inferred_revision = _work_item_ref_from_payload(packet_payload)
             if clean_work_item_id is None:
-                packet_payload = json.loads(turn["task_packet_json"])
-                clean_work_item_id, clean_work_item_revision = _work_item_ref_from_payload(
-                    packet_payload
+                clean_work_item_id = inferred_id
+                clean_work_item_revision = inferred_revision
+            elif (
+                clean_work_item_id != inferred_id
+                or clean_work_item_revision != inferred_revision
+            ):
+                raise RuntimeError(
+                    "explicit Work Item locator does not match the captured Peer turn: "
+                    f"turn_id={clean_turn!r}, "
+                    f"captured={inferred_id!r}@{inferred_revision!r}, "
+                    f"provided={clean_work_item_id!r}@{clean_work_item_revision!r}"
                 )
             payload: dict[str, Any] = {"signal": clean_signal}
             if clean_details is not None:
@@ -1214,10 +1286,20 @@ class SessionStore:
                     "Peer signal resolution requires a matching prior explicit Peer signal: "
                     f"turn_id={clean_turn!r}, signal={clean_signal!r}"
                 )
+            packet_payload = json.loads(turn["task_packet_json"])
+            inferred_id, inferred_revision = _work_item_ref_from_payload(packet_payload)
             if clean_work_item_id is None:
-                packet_payload = json.loads(turn["task_packet_json"])
-                clean_work_item_id, clean_work_item_revision = _work_item_ref_from_payload(
-                    packet_payload
+                clean_work_item_id = inferred_id
+                clean_work_item_revision = inferred_revision
+            elif (
+                clean_work_item_id != inferred_id
+                or clean_work_item_revision != inferred_revision
+            ):
+                raise RuntimeError(
+                    "explicit Work Item locator does not match the captured Peer turn: "
+                    f"turn_id={clean_turn!r}, "
+                    f"captured={inferred_id!r}@{inferred_revision!r}, "
+                    f"provided={clean_work_item_id!r}@{clean_work_item_revision!r}"
                 )
             return self._insert_slp_event(
                 conn,
@@ -1284,6 +1366,24 @@ class SessionStore:
                     "candidate reconciliation requires a newer material Work Item revision"
                 )
 
+            current = conn.execute(
+                "SELECT work_item_revision FROM slp_events "
+                "WHERE event_type = 'work_item.revision_changed' AND work_item_id = ? "
+                "ORDER BY seq DESC LIMIT 1",
+                (clean_work_item_id,),
+            ).fetchone()
+            if current is None:
+                raise RuntimeError(
+                    "candidate reconciliation requires a recorded current Work Item revision"
+                )
+            current_revision = int(current["work_item_revision"])
+            if clean_revision != current_revision:
+                raise RuntimeError(
+                    "candidate reconciliation must target the latest recorded Work Item "
+                    "revision: "
+                    f"current={current_revision}, provided={clean_revision}"
+                )
+
             if clean_replacement is not None:
                 replacement = conn.execute(
                     "SELECT task_packet_json FROM turns WHERE turn_id = ?",
@@ -1299,18 +1399,12 @@ class SessionStore:
                     replacement_packet
                 )
                 if (
-                    replacement_work_item_id is not None
-                    and replacement_work_item_id != clean_work_item_id
+                    replacement_work_item_id != clean_work_item_id
+                    or replacement_revision != clean_revision
                 ):
                     raise RuntimeError(
-                        "replacement Peer turn belongs to a different Work Item"
-                    )
-                if (
-                    replacement_revision is not None
-                    and replacement_revision < clean_revision
-                ):
-                    raise RuntimeError(
-                        "replacement Peer turn predates the reconciled Work Item revision"
+                        "replacement Peer turn must match the reconciled Work Item "
+                        "and exact current revision"
                     )
 
             payload: dict[str, Any] = {
