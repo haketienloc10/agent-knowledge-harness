@@ -522,7 +522,12 @@ class TaskGraphRuntimeTests(unittest.IsolatedAsyncioTestCase):
         replanning = self.runtime.submit_decisions(
             run_id,
             decisions_from_payload(
-                [{"node_id": "backend", "action": "replan"}]
+                [{
+                    "node_id": "backend",
+                    "action": "replan",
+                    "owner": "lead",
+                    "return_checkpoint": "after graph reconciliation",
+                }]
             ),
             expected_revision=backend_review["revision"],
         )
@@ -677,6 +682,18 @@ class TaskGraphRuntimeTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(decisions[0].node_id, "backend")
         self.assertEqual(decisions[0].action, "replan")
+        self.assertEqual(decisions[0].owner, "lead")
+        self.assertEqual(
+            decisions[0].return_checkpoint,
+            "after graph reconciliation",
+        )
+
+        with self.assertRaisesRegex(
+            ValueError, "requires owner and return_checkpoint"
+        ):
+            decisions_from_payload(
+                [{"node_id": "backend", "action": "block"}]
+            )
 
         with self.assertRaisesRegex(ValueError, "unsupported fields: reason"):
             decisions_from_payload(
