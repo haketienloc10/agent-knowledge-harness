@@ -173,7 +173,11 @@ class HerdrLifecycleSubscriber:
             + (f"; {detail}" if isinstance(detail, str) and detail else "")
         )
 
-    async def stream_once(self) -> AsyncIterator[dict[str, Any]]:
+    async def stream_once(
+        self,
+        *,
+        yield_ready: bool = False,
+    ) -> AsyncIterator[dict[str, Any]]:
         if os.name == "nt":
             raise HerdrSubscriptionError(
                 "Phase 2 raw Herdr subscriber currently requires a Unix-domain socket"
@@ -221,6 +225,15 @@ class HerdrLifecycleSubscriber:
                 raise HerdrSubscriptionError(
                     "Herdr events.subscribe returned an unexpected request id"
                 )
+            if yield_ready:
+                # This synthetic local wakeup is emitted only after Herdr has
+                # acknowledged the subscription. Callers can now perform a final
+                # SQLite drain while every subsequent lifecycle wakeup is buffered
+                # by the already-active subscription.
+                yield {
+                    "event": "subscription_started",
+                    "data": {"type": "subscription_started"},
+                }
 
             while True:
                 message = await self._read(reader)
@@ -1028,12 +1041,22 @@ async def serve(
     if reconnect_seconds <= 0:
         raise ValueError("reconnect_seconds must be positive")
 
-    # Durable SQLite truth is drained fully before waiting on transient Herdr wakeups.
+    # Durable SQLite truth is drained once before transport setup, then again
+    # after Herdr has acknowledged the subscription. The second drain closes the
+    # commit->subscribe race: any lifecycle wakeup produced during that drain is
+    # already buffered by the active subscription.
     # Any control-plane/reasoning failure is retryable: it must not terminate the daemon.
     while True:
         try:
             await _drain_durable(broker, runtime)
-            async for _wakeup in subscriber.stream_once():
+            stream = subscriber.stream_once(yield_ready=True)
+            ready = await anext(stream)
+            if _herdr_event_name(ready) != "subscription_started":
+                raise HerdrSubscriptionError(
+                    "Herdr subscriber did not confirm subscription readiness"
+                )
+            await _drain_durable(broker, runtime)
+            async for _wakeup in stream:
                 await _drain_durable(broker, runtime)
         except (
             EOFError,
