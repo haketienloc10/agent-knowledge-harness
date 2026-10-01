@@ -77,10 +77,14 @@ terminal output, source trees, or Work Item filesystem paths.
 Rule ids are not opaque to the Supervisor. The packet carries the deterministic meaning:
 
 - R1: actual Peer response exists without an explicit Lead disposition for that exact turn;
-- R2: downstream dependency was consumed before explicit ACCEPT of the upstream Peer turn;
-- R3: active writable ownership claims overlap in the same repository;
+- R2: downstream dependency was consumed before explicit ACCEPT of the upstream Peer turn; the
+  case/audit locators attach to that upstream source turn while consumer identity remains supporting
+  governance context;
+- R3: active writable ownership claims overlap in the same repository; the packet includes bounded
+  exact overlap pairs so the Supervisor can evaluate the normative predicate without repo access;
 - R4: REOPEN_REQUEST / DEPENDENCY_REQUEST / BLOCKED remains unresolved;
-- R5: a Peer response belongs to an older material Work Item revision than the current revision.
+- R5: every unreconciled Peer response belonging to an older material Work Item revision gets its
+  own stale-candidate case; a terminal superseded/abandoned reconciliation is not reopened.
 
 Supervisor evaluates the bounded packet against that exact contract. It must not reinterpret a
 rule from perceived severity, implementation quality, or technical outcome. A prior disposition
