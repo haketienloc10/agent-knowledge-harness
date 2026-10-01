@@ -153,6 +153,10 @@ class SupervisorBrokerTests(unittest.TestCase):
         cases = self.cases("R2")
         self.assertEqual(len(cases), 1)
         self.assertEqual(cases[0]["status"], "OPEN")
+        self.assertEqual(cases[0]["turn_id"], "turn-source")
+        self.assertEqual(cases[0]["details"]["source_turn_id"], "turn-source")
+        self.assertEqual(cases[0]["details"]["consumer_turn_id"], "turn-consumer")
+        self.assertEqual(cases[0]["details"]["consumer_repository"], "repo-b")
 
         self.store.record_lead_disposition(
             turn_id="turn-source",
@@ -190,6 +194,11 @@ class SupervisorBrokerTests(unittest.TestCase):
             cases[0]["details"]["claim_ids"],
             ["claim-a", "claim-b"],
         )
+        self.assertEqual(
+            cases[0]["details"]["overlap_pairs"],
+            [{"left": "src", "right": "src/pricing.py"}],
+        )
+        self.assertFalse(cases[0]["details"]["overlap_pairs_truncated"])
 
         self.store.record_slp_event(
             event_type="write_scope.released",
@@ -227,6 +236,32 @@ class SupervisorBrokerTests(unittest.TestCase):
             native_turn_id=None,
             packet=self.packet(),
             agent_response="resumed result",
+        )
+        self.broker.process_pending()
+        self.assertEqual(self.cases("R4")[0]["status"], "CLOSED")
+
+    def test_r4_defer_then_explicit_signal_resolution_closes_case(self) -> None:
+        self.record_turn("turn-deferred-signal")
+        self.store.record_peer_signal(
+            turn_id="turn-deferred-signal",
+            signal="DEPENDENCY_REQUEST",
+            details="Need upstream contract.",
+        )
+        self.broker.process_pending()
+        self.assertEqual(self.cases("R4")[0]["status"], "OPEN")
+
+        self.store.record_lead_disposition(
+            turn_id="turn-deferred-signal",
+            action="defer",
+            reason="Owner assigned; return after upstream contract is accepted.",
+        )
+        self.broker.process_pending()
+        self.assertEqual(self.cases("R4")[0]["status"], "OPEN")
+
+        self.store.record_peer_signal_resolution(
+            turn_id="turn-deferred-signal",
+            signal="DEPENDENCY_REQUEST",
+            reason="Upstream contract is now accepted and available.",
         )
         self.broker.process_pending()
         self.assertEqual(self.cases("R4")[0]["status"], "CLOSED")
@@ -287,6 +322,27 @@ class SupervisorBrokerTests(unittest.TestCase):
         )
         self.broker.process_pending()
         self.assertEqual(self.cases("R5")[0]["status"], "CLOSED")
+
+    def test_r5_revision_change_opens_case_for_every_unreconciled_stale_turn(self) -> None:
+        self.record_turn("turn-stale-a", work_item_id="e2e:multi", revision=2)
+        self.record_turn("turn-stale-b", work_item_id="e2e:multi", revision=2)
+        self.broker.process_pending()
+
+        self.store.record_slp_event(
+            event_type="work_item.revision_changed",
+            work_item_id="e2e:multi",
+            work_item_revision=3,
+            payload={"reason": "material requirement change"},
+        )
+        self.broker.process_pending()
+
+        cases = self.cases("R5")
+        self.assertEqual(len(cases), 2)
+        self.assertEqual(
+            {case["turn_id"] for case in cases},
+            {"turn-stale-a", "turn-stale-b"},
+        )
+        self.assertTrue(all(case["status"] == "OPEN" for case in cases))
 
     def test_r5_requirement_change_after_accept_still_opens_stale_candidate_case(self) -> None:
         self.record_turn(
