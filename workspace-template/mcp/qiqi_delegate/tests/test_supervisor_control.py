@@ -68,14 +68,18 @@ class SupervisorFindingContractTests(unittest.TestCase):
         cases = {
             "R1": {"turn_id": "turn-r1"},
             "R2": {
-                "turn_id": "turn-r2-consumer",
-                "details": {"source_turn_id": "turn-r2-source"},
+                "turn_id": "turn-r2-source",
+                "details": {
+                    "source_turn_id": "turn-r2-source",
+                    "consumer_turn_id": "turn-r2-consumer",
+                },
             },
             "R3": {
                 "turn_id": None,
                 "details": {
                     "claim_ids": ["claim-a", "claim-b"],
-                    "scope": ["src"],
+                    "overlap_pairs": [{"left": "src", "right": "src/pricing.py"}],
+                    "overlap_pairs_truncated": False,
                 },
             },
             "R4": {
