@@ -1,0 +1,23 @@
+{
+  "version": 49,
+  "from_ref": "4ba64ad17b2f803a494b25bb9362208cac8262e6",
+  "to_ref": "6be3cc314d0283293a6af4ce1d59180630cdf01e",
+  "description": "route qiqi_delegate native result hooks directly to a per-delegation sink/nonce instead of resolving capture identity from mutable hook cwd, surface direct-hook normalization failures as structured capture errors, extend the initial settled-result grace window, and add regression coverage for changed cwd and missing hook session identity",
+  "workspace": {
+    "merge": [],
+    "replace": [
+      "workspace-template/mcp/qiqi_delegate/server.py",
+      "workspace-template/mcp/qiqi_delegate/result_hook.py",
+      "workspace-template/mcp/qiqi_delegate/tests/test_result_capture_wait.py",
+      "workspace-template/mcp/qiqi_delegate/tests/test_result_hook.py"
+    ],
+    "delete": [],
+    "manual_review": []
+  },
+  "repo": {
+    "merge": [],
+    "replace": [],
+    "delete": [],
+    "manual_review": []
+  }
+}
