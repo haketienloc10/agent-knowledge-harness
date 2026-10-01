@@ -29,6 +29,7 @@ SLP_EVENT_TYPES = frozenset(
         "peer.capture_ambiguous",
         "lead.disposition",
         "candidate.accepted",
+        "candidate.reconciled",
         "dependency.consumed",
         "write_scope.claimed",
         "write_scope.released",
@@ -36,6 +37,7 @@ SLP_EVENT_TYPES = frozenset(
     }
 )
 LEAD_DISPOSITION_ACTIONS = frozenset({"accept", "reject", "repair", "defer", "resolve"})
+CANDIDATE_RECONCILIATION_ACTIONS = frozenset({"superseded", "abandoned", "revalidated"})
 PEER_SIGNAL_TYPES = frozenset(
     {"REOPEN_REQUEST", "DEPENDENCY_REQUEST", "BLOCKED", "runtime_blocked"}
 )
@@ -1107,6 +1109,107 @@ class SessionStore:
                 route=turn["route"],
                 work_item_id=clean_work_item_id,
                 work_item_revision=clean_work_item_revision,
+                payload=payload,
+            )
+
+    def record_candidate_reconciliation(
+        self,
+        *,
+        stale_turn_id: str,
+        resolution: str,
+        reason: str,
+        work_item_id: str,
+        work_item_revision: int,
+        replacement_turn_id: str | None = None,
+    ) -> int:
+        clean_stale = self._optional_runtime_text(stale_turn_id, "stale_turn_id")
+        if clean_stale is None:
+            raise ValueError("stale_turn_id must not be empty")
+        if not isinstance(resolution, str):
+            raise ValueError("resolution must be a string")
+        clean_resolution = resolution.strip().lower()
+        if clean_resolution not in CANDIDATE_RECONCILIATION_ACTIONS:
+            raise ValueError(f"unsupported candidate reconciliation: {resolution!r}")
+        clean_reason = self._optional_runtime_text(reason, "reason")
+        if clean_reason is None:
+            raise ValueError("reason must not be empty")
+        clean_work_item_id = self._optional_runtime_text(work_item_id, "work_item_id")
+        if clean_work_item_id is None:
+            raise ValueError("work_item_id must not be empty")
+        clean_revision = self._optional_work_item_revision(work_item_revision)
+        if clean_revision is None:
+            raise ValueError("work_item_revision is required")
+        clean_replacement = self._optional_runtime_text(
+            replacement_turn_id, "replacement_turn_id"
+        )
+
+        with self._connect() as conn:
+            stale = conn.execute(
+                "SELECT turn_id, session_id, repository, route, task_packet_json "
+                "FROM turns WHERE turn_id = ?",
+                (clean_stale,),
+            ).fetchone()
+            if stale is None:
+                raise RuntimeError(
+                    "candidate reconciliation requires an existing captured stale Peer turn: "
+                    f"unknown stale_turn_id={clean_stale!r}"
+                )
+            stale_packet = json.loads(stale["task_packet_json"])
+            stale_work_item_id, stale_revision = _work_item_ref_from_payload(stale_packet)
+            if stale_work_item_id is not None and stale_work_item_id != clean_work_item_id:
+                raise RuntimeError(
+                    "candidate reconciliation Work Item does not match stale Peer turn"
+                )
+            if stale_revision is not None and clean_revision <= stale_revision:
+                raise RuntimeError(
+                    "candidate reconciliation requires a newer material Work Item revision"
+                )
+
+            if clean_replacement is not None:
+                replacement = conn.execute(
+                    "SELECT task_packet_json FROM turns WHERE turn_id = ?",
+                    (clean_replacement,),
+                ).fetchone()
+                if replacement is None:
+                    raise RuntimeError(
+                        "candidate reconciliation replacement_turn_id must reference "
+                        "an existing captured Peer turn"
+                    )
+                replacement_packet = json.loads(replacement["task_packet_json"])
+                replacement_work_item_id, replacement_revision = _work_item_ref_from_payload(
+                    replacement_packet
+                )
+                if (
+                    replacement_work_item_id is not None
+                    and replacement_work_item_id != clean_work_item_id
+                ):
+                    raise RuntimeError(
+                        "replacement Peer turn belongs to a different Work Item"
+                    )
+                if (
+                    replacement_revision is not None
+                    and replacement_revision < clean_revision
+                ):
+                    raise RuntimeError(
+                        "replacement Peer turn predates the reconciled Work Item revision"
+                    )
+
+            payload: dict[str, Any] = {
+                "stale_turn_id": clean_stale,
+                "resolution": clean_resolution,
+                "reason": clean_reason,
+            }
+            if clean_replacement is not None:
+                payload["replacement_turn_id"] = clean_replacement
+            return self._insert_slp_event(
+                conn,
+                event_type="candidate.reconciled",
+                turn_id=clean_stale,
+                session_id=stale["session_id"],
+                repository=stale["repository"],
+                route=stale["route"],
+                work_item_id=clean_work_item_id,
+                work_item_revision=clean_revision,
                 payload=payload,
             )
 
