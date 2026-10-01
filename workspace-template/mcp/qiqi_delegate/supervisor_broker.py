@@ -22,6 +22,10 @@ BROKER_ID = "slp-supervisor"
 OPEN_CASE_STATUS = "OPEN"
 CLOSED_CASE_STATUS = "CLOSED"
 AUDIT_SIGNALS = frozenset({"REOPEN_REQUEST", "DEPENDENCY_REQUEST", "BLOCKED"})
+CANDIDATE_RECONCILIATIONS = frozenset({"superseded", "abandoned", "revalidated"})
+SIGNAL_DETAILS_MAX_CHARS = 2_000
+BROKER_BATCH_LIMIT = 1_000
+SUPERVISOR_BATCH_LIMIT = 20
 HERDR_GLOBAL_SUBSCRIPTIONS = (
     "workspace.created",
     "workspace.updated",
@@ -389,6 +393,15 @@ class SupervisorBroker:
         return normalized
 
     @staticmethod
+    def _bounded_signal_details(value: Any) -> tuple[str | None, bool]:
+        if not isinstance(value, str) or not value.strip():
+            return None, False
+        cleaned = value.strip()
+        if len(cleaned) <= SIGNAL_DETAILS_MAX_CHARS:
+            return cleaned, False
+        return cleaned[:SIGNAL_DETAILS_MAX_CHARS], True
+
+    @staticmethod
     def _normalize_scope_item(value: str) -> str:
         item = value.replace("\\", "/").strip()
         while item.startswith("./"):
@@ -451,6 +464,18 @@ class SupervisorBroker:
                     )
                 )
 
+        session_id = event.get("session_id")
+        if isinstance(session_id, str) and session_id:
+            closed += self._close_cases(
+                conn,
+                event_seq=int(event["seq"]),
+                predicate=lambda case: (
+                    case["rule"] == "R4"
+                    and case["details"].get("runtime_blocked") is True
+                    and case["details"].get("session_id") == session_id
+                ),
+            )
+
         work_item_id = event.get("work_item_id")
         revision = event.get("work_item_revision")
         if (
@@ -491,16 +516,6 @@ class SupervisorBroker:
                     )
                 )
 
-            closed += self._close_cases(
-                conn,
-                event_seq=int(event["seq"]),
-                predicate=lambda case: (
-                    case["rule"] == "R5"
-                    and case.get("work_item_id") == work_item_id
-                    and isinstance(case.get("work_item_revision"), int)
-                    and revision >= int(case["work_item_revision"])
-                ),
-            )
         return opened, closed
 
     def _process_dependency_consumed(
@@ -643,7 +658,8 @@ class SupervisorBroker:
         conn: sqlite3.Connection,
         event: dict[str, Any],
     ) -> tuple[int, int]:
-        signal = self._normalize_signal(event["payload"].get("signal"))
+        raw_signal = event["payload"].get("signal")
+        signal = self._normalize_signal(raw_signal)
         if signal not in AUDIT_SIGNALS:
             return 0, 0
         turn_id = event.get("turn_id")
@@ -655,12 +671,27 @@ class SupervisorBroker:
             if isinstance(turn_id, str) and turn_id
             else f"event:{event['seq']}:signal:{signal}"
         )
+        signal_details, details_truncated = self._bounded_signal_details(
+            event["payload"].get("details")
+        )
+        details: dict[str, Any] = {
+            "turn_id": turn_id,
+            "signal": signal,
+            "session_id": event.get("session_id"),
+            "runtime_blocked": (
+                isinstance(raw_signal, str)
+                and raw_signal.strip().lower() == "runtime_blocked"
+            ),
+        }
+        if signal_details is not None:
+            details["signal_details"] = signal_details
+            details["signal_details_truncated"] = details_truncated
         opened = self._open_case(
             conn,
             event=event,
             rule="R4",
             subject_key=subject,
-            details={"turn_id": turn_id, "signal": signal},
+            details=details,
             turn_id=turn_id if isinstance(turn_id, str) else None,
             work_item_id=event.get("work_item_id"),
             work_item_revision=event.get("work_item_revision"),
@@ -711,6 +742,38 @@ class SupervisorBroker:
         )
         return int(opened), 0
 
+    def _process_candidate_reconciled(
+        self,
+        conn: sqlite3.Connection,
+        event: dict[str, Any],
+    ) -> tuple[int, int]:
+        payload = event["payload"]
+        stale_turn_id = payload.get("stale_turn_id")
+        resolution = payload.get("resolution")
+        revision = event.get("work_item_revision")
+        work_item_id = event.get("work_item_id")
+        if (
+            not isinstance(stale_turn_id, str)
+            or not stale_turn_id
+            or resolution not in CANDIDATE_RECONCILIATIONS
+            or not isinstance(work_item_id, str)
+            or not work_item_id
+            or not isinstance(revision, int)
+        ):
+            return 0, 0
+        closed = self._close_cases(
+            conn,
+            event_seq=int(event["seq"]),
+            predicate=lambda case: (
+                case["rule"] == "R5"
+                and case.get("turn_id") == stale_turn_id
+                and case.get("work_item_id") == work_item_id
+                and isinstance(case.get("work_item_revision"), int)
+                and revision >= int(case["work_item_revision"])
+            ),
+        )
+        return 0, closed
+
     def _process_lead_disposition(
         self,
         conn: sqlite3.Connection,
@@ -759,6 +822,8 @@ class SupervisorBroker:
             return self._process_peer_response(conn, event)
         if event_type == "lead.disposition":
             return self._process_lead_disposition(conn, event)
+        if event_type == "candidate.reconciled":
+            return self._process_candidate_reconciled(conn, event)
         if event_type == "dependency.consumed":
             return self._process_dependency_consumed(conn, event)
         if event_type == "write_scope.claimed":
@@ -828,6 +893,25 @@ def default_state_db() -> Path:
     return default_workspace_root() / ".qiqi" / "state" / "qiqi_delegate.sqlite3"
 
 
+async def _drain_durable(
+    broker: SupervisorBroker,
+    runtime: AutonomousSupervisorRuntime,
+) -> None:
+    while True:
+        broker_result = broker.process_pending(limit=BROKER_BATCH_LIMIT)
+        runtime_result = await runtime.handle_pending_cases(limit=SUPERVISOR_BATCH_LIMIT)
+        if runtime_result["review_failures"] or runtime_result["delivery_failures"]:
+            raise RuntimeError(
+                "Supervisor processing left retryable case/delivery failures"
+            )
+        if (
+            broker_result["processed"] < BROKER_BATCH_LIMIT
+            and runtime_result["review_attempted"] < SUPERVISOR_BATCH_LIMIT
+            and runtime_result["delivery_attempted"] < SUPERVISOR_BATCH_LIMIT
+        ):
+            return
+
+
 async def serve(
     broker: SupervisorBroker,
     subscriber: HerdrLifecycleSubscriber,
@@ -838,20 +922,20 @@ async def serve(
     if reconnect_seconds <= 0:
         raise ValueError("reconnect_seconds must be positive")
 
-    # Durable replay happens before the transient subscriber starts, then after every
-    # Herdr wakeup/reconnect. Herdr event payloads never decide SLP semantics. Phase 3
-    # then reviews newly opened cases and delivers confirmed findings through the
-    # persistent control plane. Delivery itself never closes a case.
-    broker.process_pending()
-    await runtime.handle_pending_cases()
+    # Durable SQLite truth is drained fully before waiting on transient Herdr wakeups.
+    # Any control-plane/reasoning failure is retryable: it must not terminate the daemon.
     while True:
         try:
+            await _drain_durable(broker, runtime)
             async for _wakeup in subscriber.stream_once():
-                broker.process_pending()
-                await runtime.handle_pending_cases()
-        except (EOFError, OSError, HerdrSubscriptionError):
-            broker.process_pending()
-            await runtime.handle_pending_cases()
+                await _drain_durable(broker, runtime)
+        except (
+            EOFError,
+            OSError,
+            HerdrSubscriptionError,
+            RuntimeError,
+            ValueError,
+        ):
             await asyncio.sleep(reconnect_seconds)
 
 
