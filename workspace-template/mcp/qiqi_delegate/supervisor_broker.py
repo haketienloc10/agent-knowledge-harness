@@ -4,7 +4,6 @@ from __future__ import annotations
 import argparse
 import asyncio
 import hashlib
-import fcntl
 import json
 import os
 import re
@@ -15,6 +14,11 @@ import uuid
 from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 from typing import Any
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - long-lived subscriber is POSIX-only today.
+    fcntl = None  # type: ignore[assignment]
 
 from core import SessionStore
 from supervisor_control import AutonomousSupervisorRuntime, HerdrControlPlane
@@ -52,6 +56,8 @@ class BrokerInstanceLock:
         self._handle = None
 
     def acquire(self) -> None:
+        if fcntl is None:
+            raise RuntimeError("Supervisor broker singleton lock requires POSIX fcntl")
         self.path.parent.mkdir(parents=True, exist_ok=True)
         handle = self.path.open("a+", encoding="utf-8")
         try:
@@ -74,6 +80,7 @@ class BrokerInstanceLock:
             return
         self._handle = None
         try:
+            assert fcntl is not None
             fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
         finally:
             handle.close()
