@@ -135,6 +135,145 @@ class Phase4SemanticStoreTests(unittest.TestCase):
             ["peer.response"],
         )
 
+    def test_peer_signal_locators_must_match_captured_turn(self) -> None:
+        packet = build_task_packet(
+            objective="Report tracked governance signal.",
+            scope=["repo work"],
+            acceptance_criteria=["signal is reconciled"],
+            context={
+                "trusted_facts": [
+                    {
+                        "fact": (
+                            "work_item_path=/tmp/work-items/e2e-signal; "
+                            "id=e2e:signal; revision=2"
+                        ),
+                        "source": "canonical Work Item locator",
+                    }
+                ]
+            },
+        )
+        self.store.record_turn(
+            turn_id="turn-signal-provenance",
+            session_id="session-signal-provenance",
+            repository="repo-a",
+            agent="claude",
+            route="claude-balanced",
+            state="settled",
+            native_turn_id=None,
+            packet=packet,
+            agent_response="REOPEN_REQUEST: premise changed",
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "does not match the captured Peer turn"):
+            self.store.record_peer_signal(
+                turn_id="turn-signal-provenance",
+                signal="REOPEN_REQUEST",
+                work_item_id="e2e:other",
+                work_item_revision=9,
+            )
+
+        self.store.record_peer_signal(
+            turn_id="turn-signal-provenance",
+            signal="REOPEN_REQUEST",
+        )
+        with self.assertRaisesRegex(RuntimeError, "does not match the captured Peer turn"):
+            self.store.record_peer_signal_resolution(
+                turn_id="turn-signal-provenance",
+                signal="REOPEN_REQUEST",
+                reason="incorrect resolution provenance",
+                work_item_id="e2e:other",
+                work_item_revision=9,
+            )
+
+        self.assertEqual(
+            [event["event_type"] for event in self.store.list_slp_events()],
+            ["peer.response", "peer.signal"],
+        )
+
+    def test_candidate_reconciliation_requires_current_revision_and_tracked_replacement(
+        self,
+    ) -> None:
+        stale_packet = build_task_packet(
+            objective="Produce revision 1 candidate.",
+            scope=["repo work"],
+            acceptance_criteria=["tests pass"],
+            context={
+                "trusted_facts": [
+                    {
+                        "fact": (
+                            "work_item_path=/tmp/work-items/e2e-reconcile; "
+                            "id=e2e:reconcile; revision=1"
+                        ),
+                        "source": "canonical Work Item locator",
+                    }
+                ]
+            },
+        )
+        replacement_packet = build_task_packet(
+            objective="Untracked unrelated result.",
+            scope=["repo work"],
+            acceptance_criteria=["tests pass"],
+        )
+        self.store.record_turn(
+            turn_id="turn-stale",
+            session_id="session-stale",
+            repository="repo-a",
+            agent="claude",
+            route="claude-balanced",
+            state="settled",
+            native_turn_id=None,
+            packet=stale_packet,
+            agent_response="revision 1 result",
+        )
+        self.store.record_turn(
+            turn_id="turn-untracked",
+            session_id="session-untracked",
+            repository="repo-a",
+            agent="claude",
+            route="claude-balanced",
+            state="settled",
+            native_turn_id=None,
+            packet=replacement_packet,
+            agent_response="untracked result",
+        )
+        self.store.record_work_item_revision(
+            work_item_id="e2e:reconcile",
+            work_item_revision=2,
+            reason="material requirement change",
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "latest recorded Work Item revision"):
+            self.store.record_candidate_reconciliation(
+                stale_turn_id="turn-stale",
+                resolution="revalidated",
+                reason="invalid future revision",
+                work_item_id="e2e:reconcile",
+                work_item_revision=99,
+            )
+
+        with self.assertRaisesRegex(RuntimeError, "exact current revision"):
+            self.store.record_candidate_reconciliation(
+                stale_turn_id="turn-stale",
+                resolution="superseded",
+                reason="invalid replacement provenance",
+                work_item_id="e2e:reconcile",
+                work_item_revision=2,
+                replacement_turn_id="turn-untracked",
+            )
+
+        event_seq = self.store.record_candidate_reconciliation(
+            stale_turn_id="turn-stale",
+            resolution="revalidated",
+            reason="candidate remains valid under revision 2",
+            work_item_id="e2e:reconcile",
+            work_item_revision=2,
+        )
+        event = next(
+            item for item in self.store.list_slp_events() if item["seq"] == event_seq
+        )
+        self.assertEqual(event["event_type"], "candidate.reconciled")
+        self.assertEqual(event["work_item_revision"], 2)
+
     def test_schema_upgrade_backfills_legacy_turn_once(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             db_path = Path(temp) / "legacy.sqlite3"
@@ -184,6 +323,12 @@ class Phase4SemanticStoreTests(unittest.TestCase):
                         11,
                     ),
                 )
+
+            # The first broker connection performs the legacy backfill and then starts
+            # its own explicit BEGIN IMMEDIATE transaction. This is the upgrade path that
+            # previously failed with "cannot start a transaction within a transaction".
+            broker_result = SupervisorBroker(db_path).process_pending()
+            self.assertEqual(broker_result["processed"], 1)
 
             upgraded = SessionStore(db_path)
             first = upgraded.list_slp_events()
