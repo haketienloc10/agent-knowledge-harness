@@ -16,6 +16,7 @@ from supervisor_broker import (  # noqa: E402
     HerdrEventsLost,
     HerdrLifecycleSubscriber,
     SupervisorBroker,
+    _drain_durable,
     resolve_herdr_socket,
 )
 
@@ -198,10 +199,12 @@ class SupervisorBrokerTests(unittest.TestCase):
         self.broker.process_pending()
         self.assertEqual(self.cases("R3")[0]["status"], "CLOSED")
 
-    def test_r4_runtime_blocked_is_normalized_to_blocked_signal(self) -> None:
+    def test_r4_runtime_blocked_is_normalized_and_closes_on_same_session_response(self) -> None:
+        self.store.register_session("native-blocked", "repo-a", "claude")
         self.store.record_slp_event(
             event_type="peer.signal",
             turn_id="blocked-turn",
+            session_id="native-blocked",
             repository="repo-a",
             payload={"signal": "runtime_blocked"},
         )
@@ -211,6 +214,38 @@ class SupervisorBrokerTests(unittest.TestCase):
         self.assertEqual(len(cases), 1)
         self.assertEqual(cases[0]["status"], "OPEN")
         self.assertEqual(cases[0]["details"]["signal"], "BLOCKED")
+        self.assertTrue(cases[0]["details"]["runtime_blocked"])
+        self.assertEqual(cases[0]["details"]["session_id"], "native-blocked")
+
+        self.store.record_turn(
+            turn_id="resumed-turn",
+            session_id="native-blocked",
+            repository="repo-a",
+            agent="claude",
+            route="claude-balanced",
+            state="settled",
+            native_turn_id=None,
+            packet=self.packet(),
+            agent_response="resumed result",
+        )
+        self.broker.process_pending()
+        self.assertEqual(self.cases("R4")[0]["status"], "CLOSED")
+
+    def test_r4_preserves_bounded_peer_signal_details(self) -> None:
+        self.record_turn("turn-signal")
+        self.store.record_peer_signal(
+            turn_id="turn-signal",
+            signal="DEPENDENCY_REQUEST",
+            details="Need accepted upstream contract and candidate identity.",
+        )
+        self.broker.process_pending()
+
+        case = self.cases("R4")[0]
+        self.assertEqual(
+            case["details"]["signal_details"],
+            "Need accepted upstream contract and candidate identity.",
+        )
+        self.assertFalse(case["details"]["signal_details_truncated"])
 
     def test_r5_newer_work_item_revision_marks_latest_peer_response_stale(self) -> None:
         self.record_turn(
@@ -238,6 +273,17 @@ class SupervisorBrokerTests(unittest.TestCase):
             "turn-current",
             work_item_id="e2e:009",
             revision=3,
+        )
+        self.broker.process_pending()
+        self.assertEqual(self.cases("R5")[0]["status"], "OPEN")
+
+        self.store.record_candidate_reconciliation(
+            stale_turn_id="turn-stale",
+            resolution="superseded",
+            reason="revision 3 candidate replaces the stale revision 2 result",
+            work_item_id="e2e:009",
+            work_item_revision=3,
+            replacement_turn_id="turn-current",
         )
         self.broker.process_pending()
         self.assertEqual(self.cases("R5")[0]["status"], "CLOSED")
@@ -289,6 +335,39 @@ class SupervisorBrokerTests(unittest.TestCase):
                 for value in row
             )
         self.assertNotIn(raw, stored)
+
+
+class DurableDrainTests(unittest.IsolatedAsyncioTestCase):
+    async def test_drain_consumes_all_bounded_batches_before_waiting_for_wakeup(self) -> None:
+        class Broker:
+            def __init__(self):
+                self.calls = 0
+
+            def process_pending(self, *, limit):
+                self.calls += 1
+                return {"processed": limit if self.calls == 1 else 3}
+
+        class Runtime:
+            def __init__(self):
+                self.calls = 0
+
+            async def handle_pending_cases(self, *, limit):
+                self.calls += 1
+                attempted = limit if self.calls == 1 else 0
+                return {
+                    "reviewed": attempted,
+                    "delivered_to_lead": 0,
+                    "review_attempted": attempted,
+                    "delivery_attempted": 0,
+                    "review_failures": 0,
+                    "delivery_failures": 0,
+                }
+
+        broker = Broker()
+        runtime = Runtime()
+        await _drain_durable(broker, runtime)
+        self.assertEqual(broker.calls, 2)
+        self.assertEqual(runtime.calls, 2)
 
 
 @unittest.skipIf(os.name == "nt", "Unix-domain Herdr socket test")
