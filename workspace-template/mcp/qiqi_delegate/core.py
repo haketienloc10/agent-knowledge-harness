@@ -1367,8 +1367,9 @@ class SessionStore:
             result.append(item)
         return result
 
-    def record_lead_disposition(
+    def record_lead_disposition_in_transaction(
         self,
+        conn: sqlite3.Connection,
         *,
         turn_id: str,
         action: str,
@@ -1380,6 +1381,7 @@ class SessionStore:
         node_id: str | None = None,
         attempt_id: str | None = None,
     ) -> dict[str, Any]:
+        """Record one exact Lead disposition using the caller's active SQLite transaction."""
         clean_turn_id = self._optional_runtime_text(turn_id, "turn_id")
         if clean_turn_id is None:
             raise ValueError("turn_id must not be empty")
@@ -1400,52 +1402,92 @@ class SessionStore:
         clean_node_id = self._optional_runtime_text(node_id, "node_id")
         clean_attempt_id = self._optional_runtime_text(attempt_id, "attempt_id")
 
-        with self._connect() as conn:
-            turn = conn.execute(
-                "SELECT turn_id, session_id, repository, route, task_packet_json "
-                "FROM turns WHERE turn_id = ?",
-                (clean_turn_id,),
-            ).fetchone()
-            if turn is None:
+        turn = conn.execute(
+            "SELECT turn_id, session_id, repository, route, task_packet_json "
+            "FROM turns WHERE turn_id = ?",
+            (clean_turn_id,),
+        ).fetchone()
+        if turn is None:
+            raise RuntimeError(
+                "Lead disposition requires an existing captured Peer turn: "
+                f"unknown turn_id={clean_turn_id!r}"
+            )
+        if clean_work_item_id is None:
+            packet_payload = json.loads(turn["task_packet_json"])
+            inferred_id, inferred_revision = _work_item_ref_from_payload(packet_payload)
+            clean_work_item_id = inferred_id
+            clean_work_item_revision = inferred_revision
+
+        existing = conn.execute(
+            "SELECT * FROM lead_dispositions WHERE turn_id = ?",
+            (clean_turn_id,),
+        ).fetchone()
+        if existing is not None:
+            same = (
+                existing["action"] == clean_action
+                and existing["reason"] == clean_reason
+                and existing["work_item_id"] == clean_work_item_id
+                and existing["work_item_revision"] == clean_work_item_revision
+                and existing["candidate_id"] == clean_candidate_id
+                and existing["graph_run_id"] == clean_graph_run_id
+                and existing["node_id"] == clean_node_id
+                and existing["attempt_id"] == clean_attempt_id
+            )
+            if not same:
                 raise RuntimeError(
-                    "Lead disposition requires an existing captured Peer turn: "
-                    f"unknown turn_id={clean_turn_id!r}"
+                    "Peer turn already has a different Lead disposition; "
+                    "a single actionable Peer response may not be dispositioned twice"
                 )
-            if clean_work_item_id is None:
-                packet_payload = json.loads(turn["task_packet_json"])
-                inferred_id, inferred_revision = _work_item_ref_from_payload(packet_payload)
-                clean_work_item_id = inferred_id
-                clean_work_item_revision = inferred_revision
+            result = dict(existing)
+            result["idempotent"] = True
+            return result
 
-            existing = conn.execute(
-                "SELECT * FROM lead_dispositions WHERE turn_id = ?",
-                (clean_turn_id,),
-            ).fetchone()
-            if existing is not None:
-                same = (
-                    existing["action"] == clean_action
-                    and existing["reason"] == clean_reason
-                    and existing["work_item_id"] == clean_work_item_id
-                    and existing["work_item_revision"] == clean_work_item_revision
-                    and existing["candidate_id"] == clean_candidate_id
-                    and existing["graph_run_id"] == clean_graph_run_id
-                    and existing["node_id"] == clean_node_id
-                    and existing["attempt_id"] == clean_attempt_id
-                )
-                if not same:
-                    raise RuntimeError(
-                        "Peer turn already has a different Lead disposition; "
-                        "a single actionable Peer response may not be dispositioned twice"
-                    )
-                result = dict(existing)
-                result["idempotent"] = True
-                return result
-
-            disposition_id = str(uuid.uuid4())
-            now = time.time_ns()
-            event_seq = self._insert_slp_event(
+        disposition_id = str(uuid.uuid4())
+        now = time.time_ns()
+        event_seq = self._insert_slp_event(
+            conn,
+            event_type="lead.disposition",
+            turn_id=clean_turn_id,
+            session_id=turn["session_id"],
+            repository=turn["repository"],
+            route=turn["route"],
+            graph_run_id=clean_graph_run_id,
+            node_id=clean_node_id,
+            attempt_id=clean_attempt_id,
+            work_item_id=clean_work_item_id,
+            work_item_revision=clean_work_item_revision,
+            candidate_id=clean_candidate_id,
+            payload={
+                "disposition_id": disposition_id,
+                "action": clean_action,
+            },
+            created_at_ns=now,
+        )
+        conn.execute(
+            "INSERT INTO lead_dispositions("
+            "disposition_id, event_seq, turn_id, action, work_item_id, "
+            "work_item_revision, candidate_id, reason, graph_run_id, node_id, "
+            "attempt_id, created_at_ns"
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                disposition_id,
+                event_seq,
+                clean_turn_id,
+                clean_action,
+                clean_work_item_id,
+                clean_work_item_revision,
+                clean_candidate_id,
+                clean_reason,
+                clean_graph_run_id,
+                clean_node_id,
+                clean_attempt_id,
+                now,
+            ),
+        )
+        if clean_action == "accept":
+            self._insert_slp_event(
                 conn,
-                event_type="lead.disposition",
+                event_type="candidate.accepted",
                 turn_id=clean_turn_id,
                 session_id=turn["session_id"],
                 repository=turn["repository"],
@@ -1456,57 +1498,45 @@ class SessionStore:
                 work_item_id=clean_work_item_id,
                 work_item_revision=clean_work_item_revision,
                 candidate_id=clean_candidate_id,
-                payload={
-                    "disposition_id": disposition_id,
-                    "action": clean_action,
-                },
+                payload={"disposition_id": disposition_id},
                 created_at_ns=now,
             )
-            conn.execute(
-                "INSERT INTO lead_dispositions("
-                "disposition_id, event_seq, turn_id, action, work_item_id, "
-                "work_item_revision, candidate_id, reason, graph_run_id, node_id, "
-                "attempt_id, created_at_ns"
-                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (
-                    disposition_id,
-                    event_seq,
-                    clean_turn_id,
-                    clean_action,
-                    clean_work_item_id,
-                    clean_work_item_revision,
-                    clean_candidate_id,
-                    clean_reason,
-                    clean_graph_run_id,
-                    clean_node_id,
-                    clean_attempt_id,
-                    now,
-                ),
-            )
-            if clean_action == "accept":
-                self._insert_slp_event(
-                    conn,
-                    event_type="candidate.accepted",
-                    turn_id=clean_turn_id,
-                    session_id=turn["session_id"],
-                    repository=turn["repository"],
-                    route=turn["route"],
-                    graph_run_id=clean_graph_run_id,
-                    node_id=clean_node_id,
-                    attempt_id=clean_attempt_id,
-                    work_item_id=clean_work_item_id,
-                    work_item_revision=clean_work_item_revision,
-                    candidate_id=clean_candidate_id,
-                    payload={"disposition_id": disposition_id},
-                    created_at_ns=now,
-                )
-            row = conn.execute(
-                "SELECT * FROM lead_dispositions WHERE disposition_id = ?",
-                (disposition_id,),
-            ).fetchone()
+        row = conn.execute(
+            "SELECT * FROM lead_dispositions WHERE disposition_id = ?",
+            (disposition_id,),
+        ).fetchone()
+        if row is None:
+            raise RuntimeError("Lead disposition was not persisted")
         result = dict(row)
         result["idempotent"] = False
         return result
+
+    def record_lead_disposition(
+        self,
+        *,
+        turn_id: str,
+        action: str,
+        reason: str,
+        work_item_id: str | None = None,
+        work_item_revision: int | None = None,
+        candidate_id: str | None = None,
+        graph_run_id: str | None = None,
+        node_id: str | None = None,
+        attempt_id: str | None = None,
+    ) -> dict[str, Any]:
+        with self._connect() as conn:
+            return self.record_lead_disposition_in_transaction(
+                conn,
+                turn_id=turn_id,
+                action=action,
+                reason=reason,
+                work_item_id=work_item_id,
+                work_item_revision=work_item_revision,
+                candidate_id=candidate_id,
+                graph_run_id=graph_run_id,
+                node_id=node_id,
+                attempt_id=attempt_id,
+            )
 
     def get_lead_disposition(self, turn_id: str) -> dict[str, Any] | None:
         clean_turn_id = self._optional_runtime_text(turn_id, "turn_id")
