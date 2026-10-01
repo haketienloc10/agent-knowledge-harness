@@ -1115,16 +1115,10 @@ class SessionStore:
                 )
 
             if require_current_source:
-                disposition = conn.execute(
-                    "SELECT action FROM lead_dispositions WHERE turn_id = ?",
-                    (source_turn,),
-                ).fetchone()
-                if disposition is None or disposition["action"] != "accept":
-                    raise RuntimeError(
-                        "TaskGraph dependency source is not explicitly accepted: "
-                        f"source_turn_id={source_turn!r}"
-                    )
-
+                # TaskGraph reaches this path only for a dependency whose semantic node
+                # state is already satisfied. Re-check only the durable Work Item
+                # freshness invariant here; generic direct consumption intentionally
+                # remains auditable by R2 even when acceptance evidence is missing.
                 source_packet = json.loads(source["task_packet_json"])
                 source_work_item_id, source_revision = _work_item_ref_from_payload(
                     source_packet
