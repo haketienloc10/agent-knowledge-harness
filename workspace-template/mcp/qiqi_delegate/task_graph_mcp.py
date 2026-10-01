@@ -444,7 +444,7 @@ async def submit_decisions(
     parsed = decisions_from_payload(
         [decision.model_dump(exclude_none=True, exclude_defaults=True) for decision in decisions]
     )
-    disposition_links: list[tuple[str, str | None, str | None]] = []
+    lead_dispositions: list[dict[str, Any]] = []
     for decision in parsed:
         node = _graph_runtime.store.get_node(graph_run_id, decision.node_id)
         if node is None:
@@ -459,39 +459,43 @@ async def submit_decisions(
             if isinstance(raw_attempt_id, str) and raw_attempt_id
             else None
         )
-        # A recoverable execution/capture failure can legitimately reach review without
-        # an actual Peer response. There is no communication loop to disposition until a
-        # captured turn exists, so preserve the TaskGraph recovery path and emit no fake
-        # Lead-disposition event.
-        disposition_links.append((decision.node_id, turn_id, attempt_id))
+        captured_turn = _store.get_turn(turn_id) if turn_id is not None else None
 
-    result = _graph_runtime.submit_decisions(
-        graph_run_id,
-        parsed,
-        expected_revision=expected_revision,
-    )
-    for decision, (node_id, turn_id, attempt_id) in zip(
-        parsed, disposition_links, strict=True
-    ):
-        # Real TaskGraph execution delegates through delegate_repo_task, which persists
-        # the canonical raw turn before returning. Recoverable failures may have no turn
-        # at all, and unit/integration executors may return a synthetic normalized turn_id
-        # without raw SessionStore evidence; never invent evidence merely to satisfy SLP
-        # instrumentation.
-        if turn_id is None or _store.get_turn(turn_id) is None:
+        # ACCEPT is a technical acceptance of one exact captured Peer response. A blocked
+        # or capture_ambiguous attempt may carry a transport turn locator without a
+        # canonical turns row; fail closed before changing graph state in that case.
+        if decision.action == "accept" and captured_turn is None:
+            raise RuntimeError(
+                f"TaskGraph node {decision.node_id!r} cannot be accepted without "
+                "an exact captured Peer turn; resolve/retry the current attempt first"
+            )
+
+        # Retry/replan/block may legitimately apply to an execution/capture failure with
+        # no captured Peer response. In that case there is no communication loop to
+        # disposition, so persist only the graph recovery decision.
+        if captured_turn is None or turn_id is None:
             continue
+
         reason = f"TaskGraph semantic decision: {decision.action}"
         if decision.feedback:
             reason += "; feedback=" + " | ".join(decision.feedback)
-        _store.record_lead_disposition(
-            turn_id=turn_id,
-            action=_GRAPH_DISPOSITION_ACTIONS[decision.action],
-            reason=reason,
-            graph_run_id=graph_run_id,
-            node_id=node_id,
-            attempt_id=attempt_id,
+        lead_dispositions.append(
+            {
+                "turn_id": turn_id,
+                "action": _GRAPH_DISPOSITION_ACTIONS[decision.action],
+                "reason": reason,
+                "graph_run_id": graph_run_id,
+                "node_id": decision.node_id,
+                "attempt_id": attempt_id,
+            }
         )
-    return result
+
+    return _graph_runtime.submit_decisions(
+        graph_run_id,
+        parsed,
+        expected_revision=expected_revision,
+        lead_dispositions=tuple(lead_dispositions),
+    )
 
 
 if __name__ == "__main__":
