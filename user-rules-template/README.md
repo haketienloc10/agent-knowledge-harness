@@ -50,12 +50,15 @@ Script chỉ đụng vào khối nằm giữa hai marker:
 | Symlink bị gãy hoặc không trỏ tới regular file | Dừng với exit 65, không ghi target nào |
 | Marker lỗi: thiếu một đầu, trùng, hoặc sai thứ tự | Dừng với exit 65, không ghi target nào |
 | Nội dung đã giống nguồn | In `unchanged`, không ghi |
+| Hai target trùng hoặc lồng nhau sau khi resolve path | Dừng với exit 65 trước khi tạo parent hoặc ghi file |
 
-Installer preflight cả Claude và Codex trước khi thay file. Vì vậy lỗi marker hoặc symlink ở một
-client không làm client còn lại bị cập nhật một phần.
+Installer preflight cả Claude và Codex trước khi thay file. Vì vậy lỗi marker, symlink hoặc target
+lồng nhau ở một client không làm client còn lại bị cập nhật một phần.
 
 Ghi nội dung qua file tạm rồi `os.replace`, giữ nguyên quyền của regular file cũ. Với symlink,
-`os.replace` áp dụng lên file đích đã resolve, không thay bản thân symlink.
+`os.replace` áp dụng lên file đích đã resolve, không thay bản thân symlink. Installer cũng giữ
+nguyên line ending của phần nằm ngoài managed block; file CRLF không bị normalize toàn bộ sang LF.
+Temporary file được đăng ký cleanup ngay sau khi tạo, kể cả khi bước ghi hoặc `copymode` thất bại.
 
 Lần cài đầu vào file đã có sẵn nội dung tương tự nhưng chưa có marker sẽ tạo bản trùng. Xóa
 nội dung cũ, hoặc bọc nó bằng marker, trước khi chạy script.
