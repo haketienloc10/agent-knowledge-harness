@@ -81,8 +81,11 @@ for client, requested in zip(raw_pairs[0::2], raw_pairs[1::2]):
         with open(target, encoding="utf-8", newline="") as f:
             text = f.read()
 
-    if text:
-        match = re.search(r"\r\n|\n|\r", text)
+    bom = "\ufeff" if text is not None and text.startswith("\ufeff") else ""
+    body = text[len(bom):] if text is not None else None
+
+    if body:
+        match = re.search(r"\r\n|\n|\r", body)
         eol = match.group(0) if match else "\n"
     else:
         eol = "\n"
@@ -90,26 +93,27 @@ for client, requested in zip(raw_pairs[0::2], raw_pairs[1::2]):
     managed_block = block.replace("\n", eol)
     managed = f"{start}{eol}{managed_block}{eol}{end}{eol}"
 
-    if text is None:
-        new = managed
+    if body is None:
+        new_body = managed
     else:
-        starts, ends = text.count(start), text.count(end)
+        starts, ends = body.count(start), body.count(end)
         if starts == 0 and ends == 0:
-            new = managed + (eol + text if text else "")
-        elif starts == 1 and ends == 1 and text.index(start) < text.index(end):
-            i = text.index(start)
-            j = text.index(end) + len(end)
-            if text.startswith("\r\n", j):
+            new_body = managed + (eol + body if body else "")
+        elif starts == 1 and ends == 1 and body.index(start) < body.index(end):
+            i = body.index(start)
+            j = body.index(end) + len(end)
+            if body.startswith("\r\n", j):
                 j += 2
-            elif text[j:j + 1] in ("\n", "\r"):
+            elif body[j:j + 1] in ("\n", "\r"):
                 j += 1
-            new = text[:i] + managed + text[j:]
+            new_body = body[:i] + managed + body[j:]
         else:
             sys.stderr.write(
                 f"ERROR: {client} file has malformed marker block ({start} x{starts}, {end} x{ends}): {requested}\n"
             )
             sys.exit(65)
 
+    new = bom + new_body
     plans.append((client, requested, target, text, new))
 
 # Reject identical or nested resolved targets before parent directories are created.
