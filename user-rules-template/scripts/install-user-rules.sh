@@ -417,6 +417,33 @@ try:
 
             print(f"{client} rules installed: {requested}")
 
+        # Verify the complete two-client result before backups are discarded.
+        # This catches a no-op target (or a freshly installed target) changing
+        # while the other client is being committed.
+        for item in prepared:
+            if item["tmp"] is None:
+                assert_target_unchanged(
+                    item["client"],
+                    item["requested"],
+                    item["target"],
+                    item["text"],
+                    item["snapshot"],
+                )
+                continue
+
+            target = item["target"]
+            if (
+                not item["installed"]
+                or not os.path.isfile(target)
+                or os.path.islink(target)
+                or stat_signature(target) != item["installed_snapshot"]
+                or read_text(target) != item["new"]
+            ):
+                raise RuntimeError(
+                    f"{item['client']} instruction target changed before "
+                    "transaction completion"
+                )
+
     except BaseException as commit_error:
         # Do not let a second HUP/INT/TERM interrupt rollback.
         if hasattr(signal, "pthread_sigmask"):
@@ -458,7 +485,10 @@ try:
                             f"target is occupied; original retained at {backup}"
                         )
 
-                    os.replace(backup, target)
+                    # Publish the original without clobbering a target that
+                    # appeared after the occupancy check.
+                    os.link(backup, target, follow_symlinks=False)
+                    os.unlink(backup)
                     temps.discard(backup)
                     item["moved_aside"] = False
 
