@@ -21,7 +21,11 @@ except ImportError:  # pragma: no cover - long-lived subscriber is POSIX-only to
     fcntl = None  # type: ignore[assignment]
 
 from core import SessionStore
-from supervisor_control import AutonomousSupervisorRuntime, HerdrControlPlane
+from supervisor_control import (
+    AutonomousSupervisorRuntime,
+    HerdrControlPlane,
+    default_herdr_session,
+)
 
 BROKER_ID = "slp-supervisor"
 OPEN_CASE_STATUS = "OPEN"
@@ -1368,7 +1372,7 @@ def main(argv: list[str] | None = None) -> int:
         args.session
         or os.environ.get("QIQI_HERDR_SESSION")
         or os.environ.get("HERDR_SESSION")
-        or "qiqi-delegate"
+        or default_herdr_session(workspace_root)
     )
     control_plane = HerdrControlPlane(
         workspace_root=workspace_root,
