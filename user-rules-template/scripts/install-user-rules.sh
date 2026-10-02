@@ -153,7 +153,8 @@ def validate_path_ancestors(client, requested):
 
 
 def stat_signature(path):
-    return stat_fingerprint(os.stat(path, follow_symlinks=True))
+    st = os.stat(path, follow_symlinks=True)
+    return (st.st_dev, st.st_ino, st.st_mode, st.st_size, st.st_mtime_ns)
 
 
 def read_text(path):
