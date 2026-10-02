@@ -1,7 +1,7 @@
 {
   "version": 72,
   "from_ref": "bed28a4a56e988b22564cad70763beb1cf036be1",
-  "to_ref": "d1307905eec257a3b70407b65f8fbe15e3ff0f53",
+  "to_ref": "6102ff0aeba0902eb147bc2b5476aedda8337d49",
   "description": "fix deep autonomous Supervisor review findings: serialize Work Item revision and candidate reconciliation state transitions, keep terminal stale-candidate retirement permanent across later revisions, add explicit verified-abandonment recovery for orphan durable write claims, add explicit remediation evidence and closure for historical R2 consume-before-ACCEPT violations, and align the live installed-workspace E2E plus runtime documentation with workspace-scoped Herdr sessions",
   "workspace": {
     "merge": [],
