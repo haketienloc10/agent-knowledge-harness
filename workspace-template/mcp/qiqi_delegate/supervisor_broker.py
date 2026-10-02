@@ -186,6 +186,7 @@ class HerdrLifecycleSubscriber:
         socket_path: Path,
         *,
         handshake_timeout_seconds: float = 10.0,
+        event_idle_seconds: float = 30.0,
     ):
         if (
             isinstance(handshake_timeout_seconds, bool)
@@ -193,8 +194,15 @@ class HerdrLifecycleSubscriber:
             or handshake_timeout_seconds <= 0
         ):
             raise ValueError("handshake_timeout_seconds must be a positive number")
+        if (
+            isinstance(event_idle_seconds, bool)
+            or not isinstance(event_idle_seconds, (int, float))
+            or event_idle_seconds <= 0
+        ):
+            raise ValueError("event_idle_seconds must be a positive number")
         self.socket_path = socket_path
         self.handshake_timeout_seconds = float(handshake_timeout_seconds)
+        self.event_idle_seconds = float(event_idle_seconds)
 
     @staticmethod
     async def _send(
@@ -316,7 +324,19 @@ class HerdrLifecycleSubscriber:
                 }
 
             while True:
-                message = await self._read(reader)
+                try:
+                    message = await asyncio.wait_for(
+                        self._read(reader),
+                        timeout=self.event_idle_seconds,
+                    )
+                except asyncio.TimeoutError:
+                    # Herdr is only a wakeup source. A quiet socket must not suppress
+                    # later SQLite semantics written by MCP tools or Lead actions.
+                    yield {
+                        "event": "subscription_idle",
+                        "data": {"type": "subscription_idle"},
+                    }
+                    continue
                 self._raise_error(message, context="Herdr event stream")
                 yield message
                 event_name = _herdr_event_name(message)
@@ -1185,17 +1205,32 @@ async def _drain_durable(
             deliver=False,
         )
         accumulate_supervisor(review_result)
-        raise_supervisor_failure(review_result)
+        review_failed = bool(review_result["review_failures"])
+        review_error = review_result.get("last_error")
 
         await replay_to_quiescence()
 
+        # Persisted successful findings must still reach Lead even when another
+        # case in the same review batch failed. Surface the retryable review error
+        # only after delivery has had a chance to make independent progress.
         delivery_result = await runtime.handle_pending_cases(
             limit=SUPERVISOR_BATCH_LIMIT,
             review=False,
             deliver=True,
         )
         accumulate_supervisor(delivery_result)
-        raise_supervisor_failure(delivery_result)
+        if delivery_result["delivery_failures"]:
+            raise_supervisor_failure(delivery_result)
+        if review_failed:
+            detail = (
+                review_error
+                if isinstance(review_error, str) and review_error
+                else "review batch contained one or more retryable failures"
+            )
+            raise RuntimeError(
+                "Supervisor processing left retryable case/delivery failures: "
+                + detail
+            )
 
         # Delivery may itself race with newly persisted semantic evidence. Probe and
         # loop through a full replay before doing more review work.
