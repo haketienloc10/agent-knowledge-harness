@@ -631,8 +631,11 @@ class HerdrControlPlane:
         self._prompt_lock = asyncio.Lock()
         self._managed_server: asyncio.subprocess.Process | None = None
 
-    def _argv(self, *args: str) -> list[str]:
-        return [self.herdr_bin, "--session", self.session, *args]
+    def _argv(self, *args: str, session: str | None = None) -> list[str]:
+        effective_session = (
+            self.session if session is None else _required_text(session, "Herdr session")
+        )
+        return [self.herdr_bin, "--session", effective_session, *args]
 
     def _outer_command_timeout(self, args: tuple[str, ...]) -> float:
         timeout = self.command_timeout_seconds
@@ -654,9 +657,10 @@ class HerdrControlPlane:
         self,
         *args: str,
         check: bool = True,
+        session: str | None = None,
     ) -> tuple[int, str, str]:
         proc = await asyncio.create_subprocess_exec(
-            *self._argv(*args),
+            *self._argv(*args, session=session),
             stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
@@ -700,8 +704,12 @@ class HerdrControlPlane:
             )
         return returncode, out_text, err_text
 
-    async def _run_json(self, *args: str) -> dict[str, Any]:
-        _, stdout, _ = await self._run(*args)
+    async def _run_json(
+        self,
+        *args: str,
+        session: str | None = None,
+    ) -> dict[str, Any]:
+        _, stdout, _ = await self._run(*args, session=session)
         return _json_object(stdout, f"Herdr {' '.join(args)} response")
 
     async def _ensure_server(self) -> None:
@@ -772,14 +780,34 @@ class HerdrControlPlane:
     async def _agent_exists(self, name: str) -> bool:
         return await self._agent_info(name) is not None
 
-    async def _workspace_exists(self, workspace_id: str) -> bool:
+    async def _workspace_exists(
+        self,
+        workspace_id: str,
+        *,
+        session: str | None = None,
+    ) -> bool:
         returncode, _, _ = await self._run(
-            "workspace", "get", workspace_id, check=False
+            "workspace",
+            "get",
+            workspace_id,
+            check=False,
+            session=session,
         )
         return returncode == 0
 
-    async def _pane_exists(self, pane_id: str) -> bool:
-        returncode, _, _ = await self._run("pane", "get", pane_id, check=False)
+    async def _pane_exists(
+        self,
+        pane_id: str,
+        *,
+        session: str | None = None,
+    ) -> bool:
+        returncode, _, _ = await self._run(
+            "pane",
+            "get",
+            pane_id,
+            check=False,
+            session=session,
+        )
         return returncode == 0
 
     async def _discard_stale_control_plane(
@@ -789,13 +817,23 @@ class HerdrControlPlane:
         require_close_success: bool,
     ) -> None:
         workspace_id = _required_text(state.get("workspace_id"), "workspace_id")
-        workspace_exists = await self._workspace_exists(workspace_id)
+        stored_session = state.get("herdr_session")
+        close_session = (
+            _required_text(stored_session, "stored Herdr session")
+            if isinstance(stored_session, str) and stored_session.strip()
+            else self.session
+        )
+        workspace_exists = await self._workspace_exists(
+            workspace_id,
+            session=close_session,
+        )
         if workspace_exists:
             close_code, _, close_err = await self._run(
                 "workspace",
                 "close",
                 workspace_id,
                 check=False,
+                session=close_session,
             )
             if require_close_success and close_code != 0:
                 raise RuntimeError(
@@ -952,14 +990,10 @@ class HerdrControlPlane:
                 and state.get("supervisor_model") == self.supervisor_model
             )
             if not identity_matches:
-                stored_session = state.get("herdr_session")
-                if stored_session in {"", self.session}:
-                    await self._discard_stale_control_plane(
-                        state,
-                        require_close_success=True,
-                    )
-                else:
-                    self.store.clear_control_plane()
+                await self._discard_stale_control_plane(
+                    state,
+                    require_close_success=True,
+                )
                 state = None
 
         if state is not None:
@@ -1082,10 +1116,9 @@ class HerdrControlPlane:
             )
             return provisional_state
         except Exception as exc:
-            # Creation is not considered durable until save_control_plane succeeds.
-            # Tear down the provisional Herdr workspace so fixed agent names cannot
-            # survive on old panes and poison the next retry.
-            self.store.clear_control_plane()
+            # Keep provisional topology durable until Herdr confirms the workspace is
+            # closed. If cleanup itself fails, the next retry must retain the exact
+            # workspace/pane ids needed to recover fixed-name agents.
             if workspace_id is not None:
                 close_code, _, close_err = await self._run(
                     "workspace",
@@ -1098,6 +1131,7 @@ class HerdrControlPlane:
                         "failed to clean up partially created slp-control workspace: "
                         f"{close_err.strip() or close_code}"
                     ) from exc
+            self.store.clear_control_plane()
             raise
 
     @staticmethod
