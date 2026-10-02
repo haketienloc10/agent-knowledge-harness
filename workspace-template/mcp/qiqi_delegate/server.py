@@ -167,6 +167,32 @@ def _set_repo_dispatch_boundary_hook(hook: Callable[[Any], None]):
 def _reset_repo_dispatch_boundary_hook(token: contextvars.Token) -> None:
     _repo_dispatch_boundary_hook.reset(token)
 
+
+def _record_peer_dispatch(
+    *,
+    turn_id: str,
+    repository: str,
+    route: str,
+    work_item_id: str | None,
+    work_item_revision: int | None,
+) -> int:
+    """Atomically persist dispatch plus any context-local dependency evidence."""
+    with _store._connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        seq = _store._insert_slp_event(
+            conn,
+            event_type="peer.dispatched",
+            turn_id=turn_id,
+            repository=repository,
+            route=route,
+            work_item_id=work_item_id,
+            work_item_revision=work_item_revision,
+        )
+        dispatch_hook = _repo_dispatch_boundary_hook.get()
+        if dispatch_hook is not None:
+            dispatch_hook(conn)
+        return seq
+
 _store = SessionStore(STATE_DB)
 
 
@@ -1406,22 +1432,14 @@ async def delegate_repo_task(
         )
         write_claim_recorded = True
         # Commit the durable dispatch marker and any TaskGraph dependency-consumption
-        # evidence in one SQLite transaction. The graph hook is context-local, so
-        # concurrent independent delegations cannot cross-contaminate evidence.
-        with _store._connect() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            _store._insert_slp_event(
-                conn,
-                event_type="peer.dispatched",
-                turn_id=qiqi_turn_id,
-                repository=repository,
-                route=route,
-                work_item_id=work_item_id,
-                work_item_revision=work_item_revision,
-            )
-            dispatch_hook = _repo_dispatch_boundary_hook.get()
-            if dispatch_hook is not None:
-                dispatch_hook(conn)
+        # evidence in one transaction at the actual dispatch boundary.
+        _record_peer_dispatch(
+            turn_id=qiqi_turn_id,
+            repository=repository,
+            route=route,
+            work_item_id=work_item_id,
+            work_item_revision=work_item_revision,
+        )
     except Exception:
         try:
             if write_claim_recorded:
