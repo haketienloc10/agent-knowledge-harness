@@ -1056,11 +1056,6 @@ class SupervisorBroker:
             predicate=lambda case: (
                 (case["rule"] == "R1" and case.get("turn_id") == turn_id)
                 or (
-                    case["rule"] == "R2"
-                    and action == "accept"
-                    and case["details"].get("source_turn_id") == turn_id
-                )
-                or (
                     case["rule"] == "R4"
                     and action != "defer"
                     and case.get("turn_id") == turn_id
