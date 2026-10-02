@@ -586,6 +586,55 @@ class DurableDrainTests(unittest.IsolatedAsyncioTestCase):
             ["broker-1", "runtime-review", "broker-2", "runtime-deliver"],
         )
 
+    async def test_drain_delivers_successful_findings_before_raising_review_failure(
+        self,
+    ) -> None:
+        phases: list[str] = []
+
+        class Broker:
+            def process_pending(self, *, limit):
+                return {
+                    "from_seq": 0,
+                    "last_processed_seq": 0,
+                    "processed": 0,
+                    "opened": 0,
+                    "closed": 0,
+                }
+
+        class Runtime:
+            async def handle_pending_cases(
+                self,
+                *,
+                limit,
+                review=True,
+                deliver=True,
+            ):
+                if review:
+                    phases.append("review")
+                    return {
+                        "reviewed": 1,
+                        "delivered_to_lead": 0,
+                        "review_attempted": 2,
+                        "delivery_attempted": 0,
+                        "review_failures": 1,
+                        "delivery_failures": 0,
+                        "last_error": "review case 'bad': RuntimeError: bad schema",
+                    }
+                phases.append("deliver")
+                return {
+                    "reviewed": 0,
+                    "delivered_to_lead": 1,
+                    "review_attempted": 0,
+                    "delivery_attempted": 1,
+                    "review_failures": 0,
+                    "delivery_failures": 0,
+                }
+
+        with self.assertRaisesRegex(RuntimeError, "bad schema"):
+            await _drain_durable(Broker(), Runtime())
+
+        self.assertEqual(phases, ["review", "deliver"])
+
     async def test_drain_surfaces_underlying_supervisor_failure(self) -> None:
         class Broker:
             def process_pending(self, *, limit):
@@ -703,6 +752,55 @@ class SuperviseOnceTests(unittest.TestCase):
 
 @unittest.skipIf(os.name == "nt", "Unix-domain Herdr socket test")
 class HerdrLifecycleSubscriberTests(unittest.IsolatedAsyncioTestCase):
+    async def test_idle_subscription_emits_periodic_sqlite_wakeup(self) -> None:
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        socket_path = Path(temp.name) / "herdr.sock"
+        completed = asyncio.Event()
+
+        async def handler(
+            reader: asyncio.StreamReader,
+            writer: asyncio.StreamWriter,
+        ) -> None:
+            try:
+                snapshot = json.loads((await reader.readline()).decode("utf-8"))
+                writer.write(
+                    (
+                        json.dumps({"id": snapshot["id"], "result": {"workspaces": []}})
+                        + "\n"
+                    ).encode("utf-8")
+                )
+                await writer.drain()
+                subscribe = json.loads((await reader.readline()).decode("utf-8"))
+                writer.write(
+                    (
+                        json.dumps(
+                            {"id": subscribe["id"], "result": {"type": "subscription_started"}}
+                        )
+                        + "\n"
+                    ).encode("utf-8")
+                )
+                await writer.drain()
+                await reader.read()
+            finally:
+                writer.close()
+                await writer.wait_closed()
+                completed.set()
+
+        server = await asyncio.start_unix_server(handler, path=str(socket_path))
+        async with server:
+            subscriber = HerdrLifecycleSubscriber(
+                socket_path,
+                event_idle_seconds=0.05,
+            )
+            stream = subscriber.stream_once(yield_ready=True)
+            ready = await anext(stream)
+            idle = await asyncio.wait_for(anext(stream), timeout=1)
+            self.assertEqual(ready["event"], "subscription_started")
+            self.assertEqual(idle["event"], "subscription_idle")
+            await stream.aclose()
+            await asyncio.wait_for(completed.wait(), timeout=2)
+
     async def test_subscriber_uses_snapshot_and_events_only_not_terminal_reads(self) -> None:
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
