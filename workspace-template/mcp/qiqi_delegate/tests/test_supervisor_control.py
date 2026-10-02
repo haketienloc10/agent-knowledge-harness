@@ -5,6 +5,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import AsyncMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -13,6 +14,7 @@ from supervisor_broker import SupervisorBroker  # noqa: E402
 from supervisor_control import (  # noqa: E402
     AutonomousSupervisorRuntime,
     DEFAULT_MODEL,
+    HerdrAgentNotReadyError,
     HerdrControlPlane,
     SupervisorControlStore,
     build_audit_packet,
@@ -586,8 +588,19 @@ class _StaleNamedAgentControlPlane(_RecordingHerdrControlPlane):
             "launch_pending": not self.ready,
         }
 
+    async def _run(self, *args: str, check: bool = True):
+        result = await super()._run(*args, check=check)
+        if args[:2] == ("workspace", "close"):
+            # The recreated control room starts fresh agents that can become ready.
+            self.ready = True
+        return result
+
     async def _wait_agent_prompt_ready(self, name: str, *, timeout_ms: int = 60_000):
-        raise RuntimeError(f"stale named agent is not prompt-ready: {name}")
+        if not self.ready:
+            raise HerdrAgentNotReadyError(
+                f"stale named agent is not prompt-ready: {name}"
+            )
+        return await super()._wait_agent_prompt_ready(name, timeout_ms=timeout_ms)
 
 
 class _PartialCreateFailureControlPlane(_RecordingHerdrControlPlane):
@@ -605,6 +618,54 @@ class _PartialCreateFailureControlPlane(_RecordingHerdrControlPlane):
             self.fail_supervisor_once = False
             raise RuntimeError("simulated supervisor start failure")
         await super()._start_agent(name, pane_id, args)
+
+
+class HerdrControlPlaneCommandTests(unittest.IsolatedAsyncioTestCase):
+    async def test_cli_command_timeout_terminates_stalled_process(self) -> None:
+        class HangingProcess:
+            def __init__(self):
+                self.returncode = None
+                self.terminated = False
+                self.killed = False
+                self.release = asyncio.Event()
+
+            async def communicate(self):
+                await self.release.wait()
+                return b"", b""
+
+            def terminate(self):
+                self.terminated = True
+                self.returncode = -15
+                self.release.set()
+
+            def kill(self):
+                self.killed = True
+                self.returncode = -9
+                self.release.set()
+
+            async def wait(self):
+                return self.returncode
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            workspace = root / "workspace"
+            workspace.mkdir()
+            process = HangingProcess()
+            control = HerdrControlPlane(
+                workspace_root=workspace,
+                state_db=workspace / ".qiqi" / "state" / "qiqi_delegate.sqlite3",
+                supervisor_home=root / "isolated-supervisor",
+                command_timeout_seconds=0.01,
+            )
+            with patch(
+                "supervisor_control.asyncio.create_subprocess_exec",
+                new=AsyncMock(return_value=process),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "Herdr command timed out"):
+                    await control._run("status", "server")
+
+            self.assertTrue(process.terminated)
+            self.assertFalse(process.killed)
 
 
 class HerdrControlPlaneTopologyTests(unittest.IsolatedAsyncioTestCase):
@@ -720,7 +781,7 @@ class HerdrControlPlaneTopologyTests(unittest.IsolatedAsyncioTestCase):
                 )
             )
 
-    async def test_stale_named_agents_do_not_count_as_ready(self) -> None:
+    async def test_stale_same_pane_agents_recreate_control_room(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             workspace = root / "workspace"
@@ -743,10 +804,19 @@ class HerdrControlPlaneTopologyTests(unittest.IsolatedAsyncioTestCase):
                 supervisor_capture_nonce="nonce",
             )
 
-            with self.assertRaisesRegex(
-                RuntimeError, "persisted slp-control topology could not be restored"
-            ):
-                await control.ensure_started()
+            state = await control.ensure_started()
+
+            self.assertEqual(state["workspace_id"], "w-control")
+            self.assertIn(("workspace", "close", "w-control"), control.commands)
+            self.assertTrue(
+                any(command[:3] == ("agent", "start", "lead") for command in control.commands)
+            )
+            self.assertTrue(
+                any(
+                    command[:3] == ("agent", "start", "supervisor")
+                    for command in control.commands
+                )
+            )
 
     async def test_prompt_ready_named_agent_on_wrong_pane_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
