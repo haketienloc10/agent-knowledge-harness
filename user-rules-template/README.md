@@ -57,8 +57,9 @@ lồng nhau ở một client không làm client còn lại bị cập nhật m�
 
 Ghi nội dung qua file tạm rồi `os.replace`, giữ nguyên quyền của regular file cũ. Với symlink,
 `os.replace` áp dụng lên file đích đã resolve, không thay bản thân symlink. Installer cũng giữ
-nguyên line ending của phần nằm ngoài managed block; file CRLF không bị normalize toàn bộ sang LF.
-Temporary file được đăng ký cleanup ngay sau khi tạo, kể cả khi bước ghi hoặc `copymode` thất bại.
+nguyên UTF-8 BOM ở đầu file và line ending của phần nằm ngoài managed block; file CRLF không bị
+normalize toàn bộ sang LF. Temporary file được đăng ký cleanup ngay sau khi tạo, kể cả khi bước
+ghi hoặc `copymode` thất bại.
 
 Lần cài đầu vào file đã có sẵn nội dung tương tự nhưng chưa có marker sẽ tạo bản trùng. Xóa
 nội dung cũ, hoặc bọc nó bằng marker, trước khi chạy script.
