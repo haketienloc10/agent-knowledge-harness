@@ -4,7 +4,7 @@ set -euo pipefail
 home="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source_rules="$home/rules/response-rules.md"
 marker="AKH: response-rules"
-claude_file="${HOME}/.claude/CLAUDE.md"
+claude_file="${CLAUDE_CONFIG_DIR:-${HOME}/.claude}/CLAUDE.md"
 codex_file="${CODEX_HOME:-${HOME}/.codex}/AGENTS.md"
 
 usage() {
@@ -355,6 +355,12 @@ try:
             new = item["new"]
 
             if tmp is None:
+                # A no-op target still participates in the two-client
+                # transaction. Revalidate it before allowing another client to
+                # commit so both clients remain on the same preflight snapshot.
+                assert_target_unchanged(
+                    client, requested, target, text, snapshot
+                )
                 print(f"{client} rules unchanged: {requested}")
                 continue
 
