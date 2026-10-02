@@ -1,5 +1,5 @@
 {
-  "version": 51,
+  "version": 52,
   "from_ref": "ebe5a963b929ca636061bc46889afae3c7f1f288",
   "to_ref": "84ca725610e81298d41f7efe6177c0782fe79873",
   "description": "add the Phase 2 deterministic Supervisor Broker and Herdr wakeup subscriber: persist a durable last_processed_seq cursor and write-scope claim state in qiqi_delegate.sqlite3, replay append-only SLP semantic events by sequence, implement deterministic R1-R5 governance case rules with fingerprint deduplication and evidence-driven closure, subscribe to Herdr lifecycle and agent-status events only as transient wakeups, reconnect safely after event loss while replaying SQLite truth, add a standalone broker launcher, and enforce that terminal pane/scrollback reads are not used as semantic truth",
