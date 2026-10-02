@@ -119,6 +119,8 @@ grep -Fq '_agent_matches_pane' "$supervisor_control" || \
   fail 'Supervisor control plane must validate named-agent pane identity'
 grep -Fq '_drain_durable' "$supervisor_broker" || \
   fail 'Supervisor broker must drain durable backlog before waiting for wakeups'
+grep -Fq 'before_delivery=replay_to_quiescence' "$supervisor_broker" || \
+  fail 'Supervisor delivery must replay durable closure evidence at each Lead wakeup'
 grep -Fq 'stream_once(yield_ready=True)' "$supervisor_broker" || \
   fail 'Supervisor broker must establish Herdr subscription before its final durable drain'
 grep -Fq '"subscription_started"' "$supervisor_broker" || \
@@ -209,6 +211,10 @@ grep -Fq 'partially created slp-control workspace' "$supervisor_control" || \
   fail 'Supervisor control-plane creation must clean up provisional topology on failure'
 grep -Fq 'record_write_scope_recovery_release' "$mcp_project/core.py" || \
   fail 'SessionStore must expose an explicit orphan write-claim recovery path'
+grep -Fq 'durable write-scope claim' "$mcp_project/server.py" || \
+  fail 'delegation cleanup must retain durable ownership when Peer shutdown is unconfirmed'
+grep -Fq 'consumption_event_seq:' "$supervisor_control" || \
+  fail 'R2 Lead wakeups must expose the exact dependency consumption sequence'
 grep -Fq 'record_dependency_consumption_resolution' "$mcp_project/core.py" || \
   fail 'SessionStore must expose explicit R2 remediation evidence'
 grep -Fq 'candidate already has a terminal reconciliation' "$mcp_project/core.py" || \
