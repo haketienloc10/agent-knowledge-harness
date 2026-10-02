@@ -31,6 +31,31 @@ done
   exit 66
 }
 
+preflight_root() {
+  local client="$1" root="$2"
+  local probe="$root"
+  local parent
+
+  # Existing roots must resolve to directories. For a missing root, walk upward
+  # to the nearest existing ancestor so mkdir -p cannot later fail on a file
+  # after the other client has already been updated.
+  while [[ ! -e "$probe" && ! -L "$probe" ]]; do
+    parent="$(dirname "$probe")"
+    [[ "$parent" != "$probe" ]] || break
+    probe="$parent"
+  done
+
+  if [[ -L "$probe" && ! -d "$probe" ]]; then
+    printf 'ERROR: %s skill root has an unusable symlink ancestor: %s\n' "$client" "$probe" >&2
+    return 78
+  fi
+
+  if [[ -e "$probe" && ! -d "$probe" ]]; then
+    printf 'ERROR: %s skill root has a non-directory ancestor: %s\n' "$client" "$probe" >&2
+    return 78
+  fi
+}
+
 preflight_skill() {
   local client="$1" root="$2"
   local target="$root/$name"
@@ -89,7 +114,9 @@ install_skill() {
   printf '%s skill installed: %s/SKILL.md\n' "$client" "$target"
 }
 
-# Validate both destinations before mutating either one.
+# Validate both roots and destinations before mutating either client.
+preflight_root 'Codex' "$codex_root"
+preflight_root 'Claude' "$claude_root"
 preflight_skill 'Codex' "$codex_root"
 preflight_skill 'Claude' "$claude_root"
 
