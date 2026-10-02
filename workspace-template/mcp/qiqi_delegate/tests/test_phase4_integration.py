@@ -481,7 +481,7 @@ class Phase4SemanticStoreTests(unittest.TestCase):
         )
         self.assertEqual(repeated, first)
 
-        with self.assertRaisesRegex(RuntimeError, "reconciliation is immutable"):
+        with self.assertRaisesRegex(RuntimeError, "terminal reconciliation"):
             self.store.record_candidate_reconciliation(
                 stale_turn_id="turn-terminal-stale",
                 resolution="revalidated",
