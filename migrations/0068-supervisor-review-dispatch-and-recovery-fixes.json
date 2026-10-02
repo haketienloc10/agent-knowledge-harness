@@ -1,7 +1,7 @@
 {
   "version": 68,
   "from_ref": "299fbc548d84fd266891fa861d9711fb3580f25d",
-  "to_ref": "70781465945ebcc5c281192eec3e59e35911207e",
+  "to_ref": "33c9c985596332e745fc732073b7931c48155b1a",
   "description": "fix eighth Codex review of autonomous Supervisor governance: persist provisional control-plane topology before fixed-name agents start, preserve bounded root-cause details from isolated Supervisor failures, atomically record TaskGraph dependency consumption with the actual peer dispatch boundary, replay semantic closures between Supervisor review and Lead delivery, and honor declared Herdr command timeouts when computing the outer subprocess bound",
   "workspace": {
     "merge": [],
