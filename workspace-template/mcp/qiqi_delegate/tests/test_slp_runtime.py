@@ -149,6 +149,8 @@ class SlpRuntimeStoreTests(unittest.TestCase):
                 turn_id="missing",
                 action="defer",
                 reason="awaiting evidence",
+                owner="lead",
+                return_checkpoint="after evidence arrives",
             )
 
     def test_event_replay_is_sequence_bounded(self) -> None:
