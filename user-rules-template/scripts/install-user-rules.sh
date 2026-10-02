@@ -673,6 +673,12 @@ finally:
             restore_commit_signals(previous_cleanup_mask)
         except InstallInterrupted as cleanup_interrupt:
             if transaction_complete:
+                for retained in sorted(completed_backups):
+                    sys.stderr.write(
+                        "WARNING: retained replaced instruction backup for "
+                        "descriptor-safe recovery: "
+                        f"{retained}\n"
+                    )
                 raise SystemExit(128 + cleanup_interrupt.signum)
             raise
 
