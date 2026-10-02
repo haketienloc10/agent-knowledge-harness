@@ -53,7 +53,9 @@ Script chỉ đụng vào khối nằm giữa hai marker:
 | Hai target trùng hoặc lồng nhau sau khi resolve path | Dừng với exit 65 trước khi tạo parent hoặc ghi file |
 
 Installer preflight cả Claude và Codex trước khi thay file. Vì vậy lỗi marker, symlink hoặc target
-lồng nhau ở một client không làm client còn lại bị cập nhật một phần.
+lồng nhau ở một client không làm client còn lại bị cập nhật một phần. Trước commit, installer tạo
+rollback backup cho mọi target hiện hữu cần thay. Nếu một `os.replace` về sau thất bại, các target
+đã thay trước đó được restore theo thứ tự ngược.
 
 Ghi nội dung qua file tạm rồi `os.replace`, giữ nguyên quyền của regular file cũ. Với symlink,
 `os.replace` áp dụng lên file đích đã resolve, không thay bản thân symlink. Installer cũng giữ
