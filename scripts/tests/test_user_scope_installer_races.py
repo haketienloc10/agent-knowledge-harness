@@ -49,6 +49,51 @@ class UserScopeInstallerRaceTests(unittest.TestCase):
             self.assertEqual(source.read_bytes(), before)
             self.assertFalse(codex.exists())
 
+    def test_rules_symlink_repoint_after_publish_aborts_transaction(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            template = root / "user-rules-template"
+            shutil.copytree(REPO_ROOT / "user-rules-template", template)
+            script = template / "scripts" / "install-user-rules.sh"
+            active = root / "active-claude.md"
+            alternate = root / "alternate-claude.md"
+            alias = root / "CLAUDE.md"
+            codex = root / "AGENTS.md"
+            active.write_text("active-original\n", encoding="utf-8")
+            alternate.write_text("alternate-original\n", encoding="utf-8")
+            codex.write_text("codex-original\n", encoding="utf-8")
+            alias.symlink_to(active)
+
+            text = script.read_text(encoding="utf-8")
+            text = replace_once(
+                text,
+                """                os.link(tmp, target, follow_symlinks=False)
+                item["installed"] = True
+""",
+                f"""                os.link(tmp, target, follow_symlinks=False)
+                item["installed"] = True
+                if client == "Claude":
+                    os.unlink(requested)
+                    os.symlink({str(alternate)!r}, requested)
+""",
+                "rules requested symlink repoint",
+            )
+            script.write_text(text, encoding="utf-8")
+
+            result = self.run_installer(
+                script,
+                "--claude-file",
+                str(alias),
+                "--codex-file",
+                str(codex),
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("instruction path changed before transaction completion", result.stderr)
+            self.assertEqual(active.read_text(encoding="utf-8"), "active-original\n")
+            self.assertEqual(alternate.read_text(encoding="utf-8"), "alternate-original\n")
+            self.assertEqual(alias.resolve(), alternate.resolve())
+
     def test_rules_open_descriptor_write_survives_rollback_quarantine(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -218,6 +263,81 @@ class UserScopeInstallerRaceTests(unittest.TestCase):
                 "external-descriptor-write",
                 retained[0].read_text(encoding="utf-8"),
             )
+
+    def test_skill_root_repoint_after_publish_aborts_transaction(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            template = root / "writing-template"
+            shutil.copytree(REPO_ROOT / "writing-template", template)
+            script = template / "scripts" / "install-user-skill.sh"
+            physical_a = root / "codex-a"
+            physical_b = root / "codex-b"
+            physical_a.mkdir()
+            physical_b.mkdir()
+            requested = root / "codex-link"
+            requested.symlink_to(physical_a, target_is_directory=True)
+            claude_root = root / "claude-skills"
+
+            text = script.read_text(encoding="utf-8")
+            text = replace_once(
+                text,
+                """        state["installed"] = True
+        state["installed_fingerprint"] = expected_installed_fingerprint
+""",
+                f"""        state["installed"] = True
+        state["installed_fingerprint"] = expected_installed_fingerprint
+        if state["client"] == "Codex":
+            os.unlink(state["requested_root"])
+            os.symlink({str(physical_b)!r}, state["requested_root"])
+""",
+                "skill requested root repoint",
+            )
+            script.write_text(text, encoding="utf-8")
+
+            result = self.run_installer(
+                script,
+                "--codex-root",
+                str(requested),
+                "--claude-root",
+                str(claude_root),
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("skill root changed after preflight", result.stderr)
+            self.assertEqual(requested.resolve(), physical_b.resolve())
+            self.assertFalse((physical_b / "ste-vi").exists())
+            self.assertFalse((physical_a / "ste-vi").exists())
+
+    def test_skill_destination_inside_source_tree_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            template = root / "writing-template"
+            shutil.copytree(REPO_ROOT / "writing-template", template)
+            script = template / "scripts" / "install-user-skill.sh"
+            source_skill = template / "skills" / "ste-vi"
+            nested_root = source_skill / "client-skills"
+            claude_root = root / "claude-skills"
+            before = sorted(
+                str(path.relative_to(source_skill))
+                for path in source_skill.rglob("*")
+            )
+
+            result = self.run_installer(
+                script,
+                "--codex-root",
+                str(nested_root),
+                "--claude-root",
+                str(claude_root),
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("overlaps packaged source skill", result.stderr)
+            self.assertFalse(nested_root.exists())
+            after = sorted(
+                str(path.relative_to(source_skill))
+                for path in source_skill.rglob("*")
+            )
+            self.assertEqual(after, before)
 
     def test_skill_vanished_target_does_not_leak_rollback_parent(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
