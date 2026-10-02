@@ -60,28 +60,32 @@ preflight_skill() {
 install_skill() {
   local client="$1" root="$2"
   local target="$root/$name"
-  local temp_parent=""
+  local temp_parent
 
   mkdir -p "$root"
   temp_parent="$(mktemp -d "$root/.$name.XXXXXX")"
 
-  cleanup_temp() {
-    if [[ -n "$temp_parent" && -d "$temp_parent" ]]; then
-      rm -rf "$temp_parent"
-    fi
-  }
-  trap cleanup_temp RETURN
-
-  cp -R "$source_skill" "$temp_parent/$name"
-  : > "$temp_parent/$name/.agent-knowledge-harness-managed"
-  if [[ -d "$target" ]]; then
-    rm -rf "$target"
+  if ! cp -R "$source_skill" "$temp_parent/$name"; then
+    rm -rf "$temp_parent"
+    return 1
   fi
-  mv "$temp_parent/$name" "$target"
-  rmdir "$temp_parent"
-  temp_parent=""
 
-  trap - RETURN
+  if ! : > "$temp_parent/$name/.agent-knowledge-harness-managed"; then
+    rm -rf "$temp_parent"
+    return 1
+  fi
+
+  if [[ -d "$target" ]] && ! rm -rf "$target"; then
+    rm -rf "$temp_parent"
+    return 1
+  fi
+
+  if ! mv "$temp_parent/$name" "$target"; then
+    rm -rf "$temp_parent"
+    return 1
+  fi
+
+  rmdir "$temp_parent"
   printf '%s skill installed: %s/SKILL.md\n' "$client" "$target"
 }
 
