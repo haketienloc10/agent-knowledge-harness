@@ -5,6 +5,7 @@ import argparse
 import json
 import os
 import sys
+import time
 import uuid
 from pathlib import Path
 
@@ -27,6 +28,31 @@ def _write_event(sink: Path, event: dict[str, object]) -> None:
         os.fsync(handle.fileno())
     os.chmod(temp, 0o600)
     os.replace(temp, destination)
+
+
+def _hook_failure_event(
+    *, adapter: str, nonce: str, payload: object, exc: Exception
+) -> dict[str, object]:
+    source = payload if isinstance(payload, dict) else {}
+    session_id = source.get("session_id")
+    native_turn_id = source.get("turn_id")
+    cwd = source.get("cwd")
+    hook_event = source.get("hook_event_name")
+    return {
+        "version": 1,
+        "adapter": adapter,
+        "nonce": nonce,
+        "hook_event": hook_event if isinstance(hook_event, str) else "HookFailure",
+        "state": "capture_error",
+        "session_id": session_id if isinstance(session_id, str) else None,
+        "native_turn_id": native_turn_id if isinstance(native_turn_id, str) else None,
+        "agent_response": None,
+        "error": f"{type(exc).__name__}: {exc}",
+        "cwd": cwd if isinstance(cwd, str) else None,
+        "background_task_count": 0,
+        "hook_failure": True,
+        "captured_at_ns": time.time_ns(),
+    }
 
 
 def _active_capture_path(state_root: Path, adapter: str, cwd: str) -> Path:
@@ -72,6 +98,9 @@ def main() -> int:
     parser.add_argument("--nonce")
     args = parser.parse_args()
 
+    payload: object = None
+    direct_sink = Path(args.sink) if args.sink else None
+    direct_nonce = args.nonce
     try:
         payload = json.load(sys.stdin)
         if not isinstance(payload, dict):
@@ -84,10 +113,10 @@ def main() -> int:
                 Path(args.state_root).resolve(), args.adapter, payload
             )
         else:
-            if not args.sink or not args.nonce:
+            if direct_sink is None or not direct_nonce:
                 raise ValueError("provide --state-root or both --sink and --nonce")
-            sink = Path(args.sink)
-            nonce = args.nonce
+            sink = direct_sink
+            nonce = direct_nonce
 
         event = normalize_hook_payload(
             adapter=args.adapter,
@@ -96,8 +125,27 @@ def main() -> int:
         )
         _write_event(sink, event)
     except Exception as exc:
+        # Production delegation passes a per-turn sink/nonce directly. Preserve the
+        # hook failure there so qiqi_delegate can report the real cause instead of
+        # degrading it into a generic no-capture timeout. Static state-root mode is
+        # retained only as a compatibility path and may not know a sink on failure.
+        if direct_sink is not None and direct_nonce:
+            try:
+                _write_event(
+                    direct_sink,
+                    _hook_failure_event(
+                        adapter=args.adapter,
+                        nonce=direct_nonce,
+                        payload=payload,
+                        exc=exc,
+                    ),
+                )
+            except Exception as persist_exc:
+                print(
+                    f"qiqi result capture diagnostic write failed: {persist_exc}",
+                    file=sys.stderr,
+                )
         # Result capture must never make the native Stop hook continue/block a turn.
-        # The MCP detects the missing/invalid event and fails the delegation explicitly.
         print(f"qiqi result capture failed: {exc}", file=sys.stderr)
         print("{}")
         return 0
