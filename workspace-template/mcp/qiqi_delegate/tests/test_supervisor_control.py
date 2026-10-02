@@ -1151,6 +1151,19 @@ class HerdrControlPlaneTopologyTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIn("supervisor_broker.py derives the default", launcher)
 
+    def test_live_e2e_uses_same_workspace_scoped_session_default(self) -> None:
+        script = (
+            Path(__file__).resolve().parents[3]
+            / "scripts"
+            / "e2e-autonomous-supervisor.sh"
+        ).read_text(encoding="utf-8")
+        self.assertNotIn(
+            'session="${QIQI_HERDR_SESSION:-qiqi-delegate}"',
+            script,
+        )
+        self.assertIn("hashlib.sha256", script)
+        self.assertIn('print(f"qiqi-delegate-{digest}")', script)
+
     async def test_control_room_starts_independent_lead_and_read_only_supervisor(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
