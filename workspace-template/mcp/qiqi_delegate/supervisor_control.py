@@ -222,7 +222,6 @@ def build_audit_packet(case: dict[str, Any]) -> dict[str, Any]:
             "source": "lead_dispositions",
             "disposition_id": disposition.get("disposition_id"),
             "action": disposition.get("action"),
-            "event_seq": disposition.get("event_seq"),
             "work_item_revision": disposition.get("work_item_revision"),
             "candidate_id": disposition.get("candidate_id"),
         }
@@ -235,6 +234,11 @@ def build_audit_packet(case: dict[str, Any]) -> dict[str, Any]:
     if rule == "R2":
         consumption_event_seq = details.get("consumption_event_seq")
         accepted_before_consumption = details.get("accepted_before_consumption")
+        disposition_state["event_seq"] = (
+            disposition.get("event_seq")
+            if isinstance(disposition, dict) and disposition
+            else None
+        )
         disposition_state["accepted_before_consumption"] = (
             accepted_before_consumption is True
         )
