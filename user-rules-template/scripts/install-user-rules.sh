@@ -42,6 +42,7 @@ command -v python3 >/dev/null 2>&1 || {
 python3 - "$source_rules" "$marker" \
   'Claude' "$claude_file" \
   'Codex' "$codex_file" <<'PY'
+import hashlib
 import os
 import re
 import shutil
@@ -54,8 +55,47 @@ raw_pairs = sys.argv[3:]
 if len(raw_pairs) % 2:
     raise SystemExit("internal error: client/target pairs are incomplete")
 
-with open(source, encoding="utf-8", newline="") as f:
-    source_block = f.read()
+
+def stat_fingerprint(st):
+    return (
+        st.st_dev,
+        st.st_ino,
+        st.st_mode,
+        st.st_size,
+        st.st_mtime_ns,
+        st.st_ctime_ns,
+    )
+
+
+def read_stable_bytes(path):
+    fd = os.open(path, os.O_RDONLY)
+    try:
+        before = os.fstat(fd)
+        chunks = []
+        while True:
+            chunk = os.read(fd, 1024 * 1024)
+            if not chunk:
+                break
+            chunks.append(chunk)
+        after = os.fstat(fd)
+    finally:
+        os.close(fd)
+
+    payload = b"".join(chunks)
+    if stat_fingerprint(before) != stat_fingerprint(after):
+        raise RuntimeError(f"source rules changed while being read: {path}")
+    if len(payload) != after.st_size:
+        raise RuntimeError(f"source rules size changed while being read: {path}")
+
+    current = os.stat(path, follow_symlinks=True)
+    if (current.st_dev, current.st_ino) != (after.st_dev, after.st_ino):
+        raise RuntimeError(f"source rules identity changed while being read: {path}")
+
+    return payload, stat_fingerprint(after), hashlib.sha256(payload).digest()
+
+
+source_bytes, source_snapshot, source_digest = read_stable_bytes(source)
+source_block = source_bytes.decode("utf-8")
 block = source_block.replace("\r\n", "\n").replace("\r", "\n").rstrip("\n")
 start, end = f"<!-- {name} -->", f"<!-- /{name} -->"
 
@@ -113,8 +153,7 @@ def validate_path_ancestors(client, requested):
 
 
 def stat_signature(path):
-    st = os.stat(path, follow_symlinks=True)
-    return (st.st_dev, st.st_ino, st.st_mode, st.st_size, st.st_mtime_ns)
+    return stat_fingerprint(os.stat(path, follow_symlinks=True))
 
 
 def read_text(path):
@@ -250,6 +289,20 @@ def assert_target_unchanged(client, requested, target, original_text, snapshot):
         )
 
 
+# The staged output is derived only from source_bytes. Revalidate the source
+# immediately before any transaction material is created so an in-place writer
+# cannot make a mixed/truncated read look successful.
+current_source_bytes, current_source_snapshot, current_source_digest = read_stable_bytes(
+    source
+)
+if (
+    current_source_snapshot != source_snapshot
+    or current_source_digest != source_digest
+    or current_source_bytes != source_bytes
+):
+    raise RuntimeError("source rules changed after snapshot; retry installation")
+
+
 def block_commit_signals():
     if hasattr(signal, "pthread_sigmask"):
         return signal.pthread_sigmask(signal.SIG_BLOCK, managed_signals)
@@ -265,6 +318,69 @@ def restore_commit_signals(previous):
 prepared = []
 temps = set()
 preserved_backups = set()
+
+def quarantine_installed_target(item):
+    """Remove our installed object without deleting a concurrent writer's replacement."""
+    target = item["target"]
+    if not os.path.lexists(target):
+        return
+
+    parent = os.path.dirname(target)
+    quarantine_fd, quarantine = tempfile.mkstemp(
+        dir=parent, prefix=".akh-rules.rollback."
+    )
+    os.close(quarantine_fd)
+    temps.add(quarantine)
+
+    try:
+        # Move whatever occupies target now. If another writer won the race
+        # after our last observation, its object is moved rather than deleted.
+        os.replace(target, quarantine)
+    except FileNotFoundError:
+        try:
+            os.unlink(quarantine)
+        except FileNotFoundError:
+            pass
+        temps.discard(quarantine)
+        return
+
+    is_ours = (
+        os.path.isfile(quarantine)
+        and not os.path.islink(quarantine)
+        and stat_signature(quarantine) == item["installed_snapshot"]
+        and read_text(quarantine) == item["new"]
+    )
+    if is_ours:
+        os.unlink(quarantine)
+        temps.discard(quarantine)
+        return
+
+    # A concurrent writer replaced our published file. Never delete it. For a
+    # regular file, publish it back with a no-clobber hard link; otherwise retain
+    # the quarantined object and report its exact path.
+    republished = False
+    if os.path.isfile(quarantine) and not os.path.islink(quarantine):
+        try:
+            os.link(quarantine, target, follow_symlinks=False)
+        except (FileExistsError, OSError):
+            pass
+        else:
+            os.unlink(quarantine)
+            temps.discard(quarantine)
+            republished = True
+
+    if republished:
+        raise RuntimeError(
+            "installed target changed after commit; concurrent replacement was preserved"
+        )
+
+    temps.discard(quarantine)
+    preserved_backups.add(quarantine)
+    raise RuntimeError(
+        "installed target changed after commit; concurrent replacement retained at "
+        f"{quarantine}"
+    )
+
 
 try:
     try:
@@ -459,18 +575,7 @@ try:
 
             try:
                 if item["installed"]:
-                    if os.path.lexists(target):
-                        if (
-                            not os.path.isfile(target)
-                            or os.path.islink(target)
-                            or stat_signature(target)
-                            != item["installed_snapshot"]
-                            or read_text(target) != item["new"]
-                        ):
-                            raise RuntimeError(
-                                "installed target changed after commit"
-                            )
-                        os.unlink(target)
+                    quarantine_installed_target(item)
                     item["installed"] = False
 
                 if item["moved_aside"]:
