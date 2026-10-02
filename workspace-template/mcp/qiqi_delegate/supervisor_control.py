@@ -12,7 +12,7 @@ import sys
 import time
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 from core import (
     SessionStore,
@@ -364,6 +364,15 @@ def render_lead_finding(finding: dict[str, Any]) -> str:
         candidate_id = context.get("candidate_id")
         if isinstance(candidate_id, str) and candidate_id:
             locator_lines.append(f"candidate_id: {candidate_id}")
+        consumption_event_seq = context.get("consumption_event_seq")
+        if (
+            isinstance(consumption_event_seq, int)
+            and not isinstance(consumption_event_seq, bool)
+            and consumption_event_seq > 0
+        ):
+            locator_lines.append(
+                f"consumption_event_seq: {consumption_event_seq}"
+            )
     locator_block = (
         "Runtime locator:\n" + "\n".join(locator_lines) + "\n"
         if locator_lines
@@ -575,8 +584,9 @@ class SupervisorControlStore:
     def issue_findings_needing_delivery(self, *, limit: int = 20) -> list[dict[str, Any]]:
         with self._connect() as conn:
             rows = conn.execute(
-                "SELECT f.finding_json, c.turn_id, c.work_item_id, "
-                "c.work_item_revision, c.candidate_id FROM supervisor_findings f "
+                "SELECT f.finding_json, c.rule, c.details_json, c.turn_id, "
+                "c.work_item_id, c.work_item_revision, c.candidate_id "
+                "FROM supervisor_findings f "
                 "JOIN supervisor_cases c ON c.case_id = f.case_id "
                 "WHERE f.verdict = 'issue' "
                 "AND f.delivered_to_lead_at_ns IS NULL "
@@ -587,12 +597,20 @@ class SupervisorControlStore:
         result: list[dict[str, Any]] = []
         for row in rows:
             finding = json.loads(row["finding_json"])
-            finding["_case_context"] = {
+            context = {
                 "turn_id": row["turn_id"],
                 "work_item_id": row["work_item_id"],
                 "work_item_revision": row["work_item_revision"],
                 "candidate_id": row["candidate_id"],
             }
+            if row["rule"] == "R2":
+                details = json.loads(row["details_json"])
+                consumption_event_seq = details.get("consumption_event_seq")
+                if isinstance(consumption_event_seq, int) and not isinstance(
+                    consumption_event_seq, bool
+                ):
+                    context["consumption_event_seq"] = consumption_event_seq
+            finding["_case_context"] = context
             result.append(finding)
         return result
 
@@ -1281,6 +1299,7 @@ class AutonomousSupervisorRuntime:
         limit: int = 20,
         review: bool = True,
         deliver: bool = True,
+        before_delivery: Callable[[], Awaitable[None]] | None = None,
     ) -> dict[str, Any]:
         if not isinstance(review, bool) or not isinstance(deliver, bool):
             raise ValueError("review and deliver must be booleans")
@@ -1313,6 +1332,8 @@ class AutonomousSupervisorRuntime:
             else []
         )
         for finding in findings:
+            if before_delivery is not None:
+                await before_delivery()
             current = self.store.get_case(finding["case_id"])
             if current is None or current["status"] == "CLOSED":
                 continue
