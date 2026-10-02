@@ -122,6 +122,27 @@ def read_text(path):
         return f.read()
 
 
+def object_signature(path):
+    st = os.lstat(path)
+    if os.path.islink(path):
+        payload = ("symlink", os.readlink(path))
+    elif os.path.isfile(path):
+        with open(path, "rb") as handle:
+            payload = ("file", handle.read())
+    elif os.path.isdir(path):
+        payload = ("directory", None)
+    else:
+        payload = ("other", None)
+    return (
+        st.st_dev,
+        st.st_ino,
+        st.st_mode,
+        st.st_size,
+        st.st_mtime_ns,
+        payload,
+    )
+
+
 plans = []
 for client, requested in zip(raw_pairs[0::2], raw_pairs[1::2]):
     requested = os.path.abspath(os.path.expanduser(requested))
@@ -240,19 +261,37 @@ def restore_commit_signals(previous):
         signal.pthread_sigmask(signal.SIG_SETMASK, previous)
 
 
-# Prepare every replacement and rollback backup before any target is changed.
+# Prepare every replacement and rollback placeholder before any target is changed.
 prepared = []
 temps = set()
 preserved_backups = set()
-committed = []
+
 try:
     try:
         for client, requested, target, text, snapshot, new in plans:
             if new == text:
                 prepared.append(
-                    (client, requested, target, None, text, snapshot, None, new)
+                    {
+                        "client": client,
+                        "requested": requested,
+                        "target": target,
+                        "text": text,
+                        "snapshot": snapshot,
+                        "new": new,
+                        "tmp": None,
+                        "backup": None,
+                        "moved_aside": False,
+                        "backup_signature": None,
+                        "installed": False,
+                        "installed_snapshot": None,
+                    }
                 )
                 continue
+
+            # Revalidate before creating any per-target transaction material.
+            assert_target_unchanged(
+                client, requested, target, text, snapshot
+            )
 
             parent = os.path.dirname(target)
             os.makedirs(parent, exist_ok=True)
@@ -260,8 +299,6 @@ try:
             previous_temp_mask = block_commit_signals()
             try:
                 fd, tmp = tempfile.mkstemp(dir=parent, prefix=".akh-rules.")
-                # Publish the path before signals are unblocked so cleanup can
-                # always find a newly created replacement file.
                 temps.add(tmp)
             finally:
                 restore_commit_signals(previous_temp_mask)
@@ -285,22 +322,38 @@ try:
                     backup_fd, backup = tempfile.mkstemp(
                         dir=parent, prefix=".akh-rules.backup."
                     )
-                    # Publish the path to cleanup state while managed signals
-                    # are still blocked. A pending signal can only run after
-                    # the backup is tracked.
                     temps.add(backup)
                 finally:
                     restore_commit_signals(previous_backup_mask)
-
                 os.close(backup_fd)
-                shutil.copy2(target, backup)
 
             prepared.append(
-                (client, requested, target, tmp, text, snapshot, backup, new)
+                {
+                    "client": client,
+                    "requested": requested,
+                    "target": target,
+                    "text": text,
+                    "snapshot": snapshot,
+                    "new": new,
+                    "tmp": tmp,
+                    "backup": backup,
+                    "moved_aside": False,
+                    "backup_signature": None,
+                    "installed": False,
+                    "installed_snapshot": None,
+                }
             )
 
         for item in prepared:
-            client, requested, target, tmp, text, snapshot, backup, new = item
+            client = item["client"]
+            requested = item["requested"]
+            target = item["target"]
+            text = item["text"]
+            snapshot = item["snapshot"]
+            tmp = item["tmp"]
+            backup = item["backup"]
+            new = item["new"]
+
             if tmp is None:
                 print(f"{client} rules unchanged: {requested}")
                 continue
@@ -311,10 +364,48 @@ try:
 
             previous_mask = block_commit_signals()
             try:
-                os.replace(tmp, target)
-                installed_snapshot = stat_signature(target)
+                # Revalidate again under the signal mask. For an existing file,
+                # move the exact object aside before installing the replacement.
+                assert_target_unchanged(
+                    client, requested, target, text, snapshot
+                )
+
+                if text is not None:
+                    os.replace(target, backup)
+                    item["moved_aside"] = True
+                    item["backup_signature"] = object_signature(backup)
+
+                    # If another writer won the race between revalidation and
+                    # the move, abort. Rollback restores exactly what we moved.
+                    if (
+                        not os.path.isfile(backup)
+                        or os.path.islink(backup)
+                        or stat_signature(backup) != snapshot
+                        or read_text(backup) != text
+                    ):
+                        raise RuntimeError(
+                            f"{client} instruction target changed during commit"
+                        )
+
+                if os.path.lexists(target):
+                    raise RuntimeError(
+                        f"{client} instruction target appeared during commit: {target}"
+                    )
+
+                # tmp and target share a parent/filesystem. Hard-link creation is
+                # atomic and fails if target appeared, so it cannot clobber an
+                # unrelated file in the final race window.
+                os.link(tmp, target, follow_symlinks=False)
+                item["installed"] = True
+                item["installed_snapshot"] = stat_signature(target)
+
+                if read_text(target) != new:
+                    raise RuntimeError(
+                        f"{client} installed rules differ from staged content"
+                    )
+
+                os.unlink(tmp)
                 temps.discard(tmp)
-                committed.append((item, installed_snapshot))
             finally:
                 restore_commit_signals(previous_mask)
 
@@ -326,39 +417,48 @@ try:
             signal.pthread_sigmask(signal.SIG_BLOCK, managed_signals)
 
         rollback_errors = []
-        for committed_item, installed_snapshot in reversed(committed):
-            (
-                client,
-                requested,
-                target,
-                tmp,
-                text,
-                snapshot,
-                backup,
-                new,
-            ) = committed_item
-            try:
-                if (
-                    not os.path.isfile(target)
-                    or stat_signature(target) != installed_snapshot
-                    or read_text(target) != new
-                ):
-                    raise RuntimeError(
-                        "target changed again after this installer committed it"
-                    )
+        for item in reversed(prepared):
+            client = item["client"]
+            requested = item["requested"]
+            target = item["target"]
+            text = item["text"]
+            backup = item["backup"]
 
-                if text is not None:
-                    if backup is None:
-                        raise RuntimeError("missing rollback backup")
+            try:
+                if item["installed"]:
+                    if os.path.lexists(target):
+                        if (
+                            not os.path.isfile(target)
+                            or os.path.islink(target)
+                            or stat_signature(target)
+                            != item["installed_snapshot"]
+                            or read_text(target) != item["new"]
+                        ):
+                            raise RuntimeError(
+                                "installed target changed after commit"
+                            )
+                        os.unlink(target)
+                    item["installed"] = False
+
+                if item["moved_aside"]:
+                    if backup is None or not os.path.lexists(backup):
+                        raise RuntimeError("rollback backup is missing")
+                    if object_signature(backup) != item["backup_signature"]:
+                        raise RuntimeError(
+                            f"rollback backup changed; retained at {backup}"
+                        )
+                    if os.path.lexists(target):
+                        raise RuntimeError(
+                            f"target is occupied; original retained at {backup}"
+                        )
+
                     os.replace(backup, target)
                     temps.discard(backup)
-                else:
-                    os.unlink(target)
+                    item["moved_aside"] = False
+
             except BaseException as rollback_error:
                 retained = ""
-                if backup is not None and os.path.exists(backup):
-                    # The backup is the only preserved original when restore
-                    # fails. Keep it out of generic temp cleanup and report it.
+                if backup is not None and os.path.lexists(backup):
                     temps.discard(backup)
                     preserved_backups.add(backup)
                     retained = f"; original backup retained at {backup}"
