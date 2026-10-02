@@ -1106,6 +1106,8 @@ async def record_lead_disposition(
     work_item_id: str | None = None,
     work_item_revision: int | None = None,
     candidate_id: str | None = None,
+    owner: str | None = None,
+    return_checkpoint: str | None = None,
 ) -> dict[str, Any]:
     """Record QiQi's explicit semantic disposition for one captured Peer turn.
 
@@ -1113,9 +1115,10 @@ async def record_lead_disposition(
     Item. The exact Peer response remains only in turns.agent_response. For tracked work,
     work_item_id/work_item_revision may be supplied explicitly only when they exactly match
     the canonical Work Item locator already present in the captured TaskPacket; omitted values
-    are derived from that same locator. Repeating the exact same disposition is idempotent;
-    attempting a different
-    second disposition for the same Peer turn fails closed.
+    are derived from that same locator. A defer disposition additionally requires a non-empty
+    owner and return_checkpoint so the deferred loop remains durably actionable. Repeating
+    the exact same disposition is idempotent; attempting a different second disposition for
+    the same Peer turn fails closed.
     """
     return _store.record_lead_disposition(
         turn_id=turn_id,
@@ -1124,6 +1127,8 @@ async def record_lead_disposition(
         work_item_id=work_item_id,
         work_item_revision=work_item_revision,
         candidate_id=candidate_id,
+        owner=owner,
+        return_checkpoint=return_checkpoint,
     )
 
 
