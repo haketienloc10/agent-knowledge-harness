@@ -147,7 +147,6 @@ commit_staged() {
   fi
 
   rmdir "$stage" || true
-  printf '%s skill installed: %s/SKILL.md\n' "$client" "$target"
 }
 
 # Validate both roots and destinations before preparing either target.
@@ -164,8 +163,18 @@ codex_had_original=0
 claude_had_original=0
 
 cleanup() {
-  [[ -n "$codex_stage" && -d "$codex_stage" ]] && rm -rf "$codex_stage"
-  [[ -n "$claude_stage" && -d "$claude_stage" ]] && rm -rf "$claude_stage"
+  if [[ -n "$codex_stage" && -d "$codex_stage" ]]; then
+    rm -rf "$codex_stage"
+  fi
+  if [[ -n "$claude_stage" && -d "$claude_stage" ]]; then
+    rm -rf "$claude_stage"
+  fi
+  if [[ -n "$codex_backup" && -d "$codex_backup" ]]; then
+    rm -rf "$codex_backup"
+  fi
+  if [[ -n "$claude_backup" && -d "$claude_backup" ]]; then
+    rm -rf "$claude_backup"
+  fi
 }
 trap cleanup EXIT
 
@@ -196,8 +205,16 @@ if ! commit_staged 'Claude' "$claude_root" "$claude_stage" "$claude_backup" "$cl
 fi
 claude_stage=""
 
-[[ -n "$codex_backup" && -d "$codex_backup" ]] && rm -rf "$codex_backup"
-[[ -n "$claude_backup" && -d "$claude_backup" ]] && rm -rf "$claude_backup"
+if [[ -n "$codex_backup" && -d "$codex_backup" ]]; then
+  rm -rf "$codex_backup"
+fi
+if [[ -n "$claude_backup" && -d "$claude_backup" ]]; then
+  rm -rf "$claude_backup"
+fi
+codex_backup=""
+claude_backup=""
 
 trap - EXIT
+printf 'Codex skill installed: %s/SKILL.md\n' "$codex_root/$name"
+printf 'Claude skill installed: %s/SKILL.md\n' "$claude_root/$name"
 printf 'Open a fresh agent session if the skill is not already visible in the skills list.\n'
