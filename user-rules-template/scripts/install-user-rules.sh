@@ -273,12 +273,18 @@ try:
             if text is not None:
                 shutil.copymode(target, tmp)
 
-                backup_fd, backup = tempfile.mkstemp(
-                    dir=parent, prefix=".akh-rules.backup."
-                )
-                # Register the path before close/copy so interruption cannot
-                # strand an untracked rollback file.
-                temps.add(backup)
+                previous_backup_mask = block_commit_signals()
+                try:
+                    backup_fd, backup = tempfile.mkstemp(
+                        dir=parent, prefix=".akh-rules.backup."
+                    )
+                    # Publish the path to cleanup state while managed signals
+                    # are still blocked. A pending signal can only run after
+                    # the backup is tracked.
+                    temps.add(backup)
+                finally:
+                    restore_commit_signals(previous_backup_mask)
+
                 os.close(backup_fd)
                 shutil.copy2(target, backup)
 
