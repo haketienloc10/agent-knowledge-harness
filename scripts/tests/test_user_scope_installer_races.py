@@ -128,6 +128,14 @@ class UserScopeInstallerRaceTests(unittest.TestCase):
 
             self.assertEqual(result.returncode, 128 + 15)
             self.assertNotIn("Traceback", result.stderr)
+            self.assertGreaterEqual(
+                result.stderr.count("descriptor-safe recovery"),
+                2,
+            )
+            self.assertGreaterEqual(
+                len(list(root.glob(".akh-rules.backup.*"))),
+                2,
+            )
             self.assertTrue(claude.exists())
             self.assertTrue(codex.exists())
             self.assertIn(
@@ -356,6 +364,55 @@ late_descriptor_fd = None
 
         script.write_text(text, encoding="utf-8")
         return script
+
+    def test_skill_exact_reinstall_is_noop_without_backup(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            template = root / "writing-template"
+            shutil.copytree(REPO_ROOT / "writing-template", template)
+            script = template / "scripts" / "install-user-skill.sh"
+            codex_root = root / "codex-skills"
+            claude_root = root / "claude-skills"
+
+            first = self.run_installer(
+                script,
+                "--codex-root",
+                str(codex_root),
+                "--claude-root",
+                str(claude_root),
+            )
+            self.assertEqual(first.returncode, 0, first.stderr)
+
+            codex_target = codex_root / "ste-vi"
+            claude_target = claude_root / "ste-vi"
+            codex_skill = codex_target / "SKILL.md"
+            claude_skill = claude_target / "SKILL.md"
+            before = {
+                "codex_target": (codex_target.stat().st_dev, codex_target.stat().st_ino),
+                "claude_target": (claude_target.stat().st_dev, claude_target.stat().st_ino),
+                "codex_skill": (codex_skill.stat().st_dev, codex_skill.stat().st_ino),
+                "claude_skill": (claude_skill.stat().st_dev, claude_skill.stat().st_ino),
+            }
+
+            second = self.run_installer(
+                script,
+                "--codex-root",
+                str(codex_root),
+                "--claude-root",
+                str(claude_root),
+            )
+
+            self.assertEqual(second.returncode, 0, second.stderr)
+            self.assertNotIn("descriptor-safe recovery", second.stderr)
+            self.assertEqual(list(codex_root.glob(".ste-vi.backup.*")), [])
+            self.assertEqual(list(claude_root.glob(".ste-vi.backup.*")), [])
+            after = {
+                "codex_target": (codex_target.stat().st_dev, codex_target.stat().st_ino),
+                "claude_target": (claude_target.stat().st_dev, claude_target.stat().st_ino),
+                "codex_skill": (codex_skill.stat().st_dev, codex_skill.stat().st_ino),
+                "claude_skill": (claude_skill.stat().st_dev, claude_skill.stat().st_ino),
+            }
+            self.assertEqual(after, before)
 
     def test_skill_success_retains_backup_for_late_descriptor_write(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
