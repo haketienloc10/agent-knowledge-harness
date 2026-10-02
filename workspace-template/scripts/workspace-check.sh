@@ -121,6 +121,8 @@ grep -Fq '_drain_durable' "$supervisor_broker" || \
   fail 'Supervisor broker must drain durable backlog before waiting for wakeups'
 grep -Fq 'before_delivery=replay_to_quiescence' "$supervisor_broker" || \
   fail 'Supervisor delivery must replay durable closure evidence at each Lead wakeup'
+grep -Fq 'acquire_delivery_guard' "$supervisor_control" || \
+  fail 'Supervisor delivery must serialize notification selection against semantic closure'
 grep -Fq 'stream_once(yield_ready=True)' "$supervisor_broker" || \
   fail 'Supervisor broker must establish Herdr subscription before its final durable drain'
 grep -Fq '"subscription_started"' "$supervisor_broker" || \
