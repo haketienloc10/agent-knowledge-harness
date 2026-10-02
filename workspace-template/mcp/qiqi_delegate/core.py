@@ -708,6 +708,8 @@ class SessionStore:
                     CHECK (work_item_revision IS NULL OR work_item_revision >= 0),
                 candidate_id TEXT,
                 reason TEXT NOT NULL,
+                owner TEXT,
+                return_checkpoint TEXT,
                 graph_run_id TEXT,
                 node_id TEXT,
                 attempt_id TEXT,
@@ -793,6 +795,20 @@ class SessionStore:
             );
             """
         )
+        lead_disposition_columns = {
+            row["name"] if isinstance(row, sqlite3.Row) else row[1]
+            for row in conn.execute("PRAGMA table_info(lead_dispositions)").fetchall()
+        }
+        lead_disposition_additions = {
+            "owner": "TEXT",
+            "return_checkpoint": "TEXT",
+        }
+        for column, definition in lead_disposition_additions.items():
+            if column not in lead_disposition_columns:
+                conn.execute(
+                    f"ALTER TABLE lead_dispositions ADD COLUMN {column} {definition}"
+                )
+
         supervisor_case_columns = {
             row["name"] if isinstance(row, sqlite3.Row) else row[1]
             for row in conn.execute("PRAGMA table_info(supervisor_cases)").fetchall()
@@ -1115,10 +1131,19 @@ class SessionStore:
                 )
 
             if require_current_source:
-                # TaskGraph reaches this path only for a dependency whose semantic node
-                # state is already satisfied. Re-check only the durable Work Item
-                # freshness invariant here; generic direct consumption intentionally
-                # remains auditable by R2 even when acceptance evidence is missing.
+                # A persisted TaskGraph "satisfied" bit is not sufficient after upgrades:
+                # legacy runs may predate durable Lead dispositions. Require exact ACCEPT
+                # evidence before allowing downstream semantics to consume this turn.
+                disposition = conn.execute(
+                    "SELECT action FROM lead_dispositions WHERE turn_id = ?",
+                    (source_turn,),
+                ).fetchone()
+                if disposition is None or disposition["action"] != "accept":
+                    raise RuntimeError(
+                        "TaskGraph dependency source lacks an explicit ACCEPT disposition: "
+                        f"source_turn_id={source_turn!r}"
+                    )
+
                 source_packet = json.loads(source["task_packet_json"])
                 source_work_item_id, source_revision = _work_item_ref_from_payload(
                     source_packet
@@ -1517,6 +1542,8 @@ class SessionStore:
         work_item_id: str | None = None,
         work_item_revision: int | None = None,
         candidate_id: str | None = None,
+        owner: str | None = None,
+        return_checkpoint: str | None = None,
         graph_run_id: str | None = None,
         node_id: str | None = None,
         attempt_id: str | None = None,
@@ -1538,6 +1565,20 @@ class SessionStore:
         if (clean_work_item_id is None) != (clean_work_item_revision is None):
             raise ValueError("work_item_id and work_item_revision must be provided together")
         clean_candidate_id = self._optional_runtime_text(candidate_id, "candidate_id")
+        clean_owner = self._optional_runtime_text(owner, "owner")
+        clean_return_checkpoint = self._optional_runtime_text(
+            return_checkpoint,
+            "return_checkpoint",
+        )
+        if clean_action == "defer":
+            if clean_owner is None or clean_return_checkpoint is None:
+                raise ValueError(
+                    "defer disposition requires owner and return_checkpoint"
+                )
+        elif clean_owner is not None or clean_return_checkpoint is not None:
+            raise ValueError(
+                "owner and return_checkpoint are only valid for defer disposition"
+            )
         clean_graph_run_id = self._optional_runtime_text(graph_run_id, "graph_run_id")
         clean_node_id = self._optional_runtime_text(node_id, "node_id")
         clean_attempt_id = self._optional_runtime_text(attempt_id, "attempt_id")
@@ -1579,6 +1620,8 @@ class SessionStore:
                 and existing["work_item_id"] == clean_work_item_id
                 and existing["work_item_revision"] == clean_work_item_revision
                 and existing["candidate_id"] == clean_candidate_id
+                and existing["owner"] == clean_owner
+                and existing["return_checkpoint"] == clean_return_checkpoint
                 and existing["graph_run_id"] == clean_graph_run_id
                 and existing["node_id"] == clean_node_id
                 and existing["attempt_id"] == clean_attempt_id
@@ -1594,6 +1637,16 @@ class SessionStore:
 
         disposition_id = str(uuid.uuid4())
         now = time.time_ns()
+        disposition_payload: dict[str, Any] = {
+            "disposition_id": disposition_id,
+            "action": clean_action,
+        }
+        if clean_action == "defer":
+            assert clean_owner is not None
+            assert clean_return_checkpoint is not None
+            disposition_payload["owner"] = clean_owner
+            disposition_payload["return_checkpoint"] = clean_return_checkpoint
+
         event_seq = self._insert_slp_event(
             conn,
             event_type="lead.disposition",
@@ -1607,18 +1660,15 @@ class SessionStore:
             work_item_id=clean_work_item_id,
             work_item_revision=clean_work_item_revision,
             candidate_id=clean_candidate_id,
-            payload={
-                "disposition_id": disposition_id,
-                "action": clean_action,
-            },
+            payload=disposition_payload,
             created_at_ns=now,
         )
         conn.execute(
             "INSERT INTO lead_dispositions("
             "disposition_id, event_seq, turn_id, action, work_item_id, "
-            "work_item_revision, candidate_id, reason, graph_run_id, node_id, "
-            "attempt_id, created_at_ns"
-            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "work_item_revision, candidate_id, reason, owner, return_checkpoint, "
+            "graph_run_id, node_id, attempt_id, created_at_ns"
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 disposition_id,
                 event_seq,
@@ -1628,6 +1678,8 @@ class SessionStore:
                 clean_work_item_revision,
                 clean_candidate_id,
                 clean_reason,
+                clean_owner,
+                clean_return_checkpoint,
                 clean_graph_run_id,
                 clean_node_id,
                 clean_attempt_id,
@@ -1670,6 +1722,8 @@ class SessionStore:
         work_item_id: str | None = None,
         work_item_revision: int | None = None,
         candidate_id: str | None = None,
+        owner: str | None = None,
+        return_checkpoint: str | None = None,
         graph_run_id: str | None = None,
         node_id: str | None = None,
         attempt_id: str | None = None,
@@ -1683,6 +1737,8 @@ class SessionStore:
                 work_item_id=work_item_id,
                 work_item_revision=work_item_revision,
                 candidate_id=candidate_id,
+                owner=owner,
+                return_checkpoint=return_checkpoint,
                 graph_run_id=graph_run_id,
                 node_id=node_id,
                 attempt_id=attempt_id,
