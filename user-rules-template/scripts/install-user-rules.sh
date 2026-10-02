@@ -14,9 +14,9 @@ Usage: install-user-rules.sh [--claude-file PATH] [--codex-file PATH]
 Writes rules/response-rules.md into the block delimited by
 `<!-- AKH: response-rules -->` ... `<!-- /AKH: response-rules -->` in the
 Claude Code and Codex user instruction files. Only the marker block is replaced.
-Content outside the block is preserved. If the file has no block, the block is
-prepended. A missing file is created. Symlinked instruction files keep their
-symlink and update the linked file.
+Content outside the block is preserved, including its existing line endings.
+If the file has no block, the block is prepended. A missing file is created.
+Symlinked instruction files keep their symlink and update the linked file.
 USAGE
 }
 
@@ -43,6 +43,7 @@ python3 - "$source_rules" "$marker" \
   'Claude' "$claude_file" \
   'Codex' "$codex_file" <<'PY'
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -52,18 +53,17 @@ raw_pairs = sys.argv[3:]
 if len(raw_pairs) % 2:
     raise SystemExit("internal error: client/target pairs are incomplete")
 
-with open(source, encoding="utf-8") as f:
-    block = f.read().rstrip("\n")
+with open(source, encoding="utf-8", newline="") as f:
+    source_block = f.read()
+block = source_block.replace("\r\n", "\n").replace("\r", "\n").rstrip("\n")
 start, end = f"<!-- {name} -->", f"<!-- /{name} -->"
-managed = f"{start}\n{block}\n{end}\n"
 
 plans = []
 for client, requested in zip(raw_pairs[0::2], raw_pairs[1::2]):
     requested = os.path.abspath(os.path.expanduser(requested))
-    target = requested
+    target = os.path.realpath(requested)
 
     if os.path.islink(requested):
-        target = os.path.realpath(requested)
         if not os.path.exists(target):
             sys.stderr.write(f"ERROR: {client} instruction symlink is broken: {requested}\n")
             sys.exit(65)
@@ -78,19 +78,30 @@ for client, requested in zip(raw_pairs[0::2], raw_pairs[1::2]):
         if not os.path.isfile(target):
             sys.stderr.write(f"ERROR: {client} instruction target is not a regular file: {target}\n")
             sys.exit(65)
-        with open(target, encoding="utf-8") as f:
+        with open(target, encoding="utf-8", newline="") as f:
             text = f.read()
+
+    if text:
+        match = re.search(r"\r\n|\n|\r", text)
+        eol = match.group(0) if match else "\n"
+    else:
+        eol = "\n"
+
+    managed_block = block.replace("\n", eol)
+    managed = f"{start}{eol}{managed_block}{eol}{end}{eol}"
 
     if text is None:
         new = managed
     else:
         starts, ends = text.count(start), text.count(end)
         if starts == 0 and ends == 0:
-            new = managed + ("\n" + text if text else "")
+            new = managed + (eol + text if text else "")
         elif starts == 1 and ends == 1 and text.index(start) < text.index(end):
             i = text.index(start)
             j = text.index(end) + len(end)
-            if text[j:j + 1] == "\n":
+            if text.startswith("\r\n", j):
+                j += 2
+            elif text[j:j + 1] in ("\n", "\r"):
                 j += 1
             new = text[:i] + managed + text[j:]
         else:
@@ -101,33 +112,63 @@ for client, requested in zip(raw_pairs[0::2], raw_pairs[1::2]):
 
     plans.append((client, requested, target, text, new))
 
-# All targets are valid before any target is changed.
+# Reject identical or nested resolved targets before parent directories are created.
+for index, left in enumerate(plans):
+    left_target = left[2]
+    for right in plans[index + 1:]:
+        right_target = right[2]
+        try:
+            common = os.path.commonpath([left_target, right_target])
+        except ValueError:
+            continue
+        if common in (left_target, right_target):
+            sys.stderr.write(
+                "ERROR: instruction targets overlap after path resolution: "
+                f"{left[0]}={left[1]} -> {left_target}; "
+                f"{right[0]}={right[1]} -> {right_target}\n"
+            )
+            sys.exit(65)
+
+# Prepare every replacement before any target is changed.
 prepared = []
+temps = set()
 try:
     for client, requested, target, text, new in plans:
         if new == text:
-            prepared.append((client, requested, target, text, new, None))
+            prepared.append((client, requested, target, None))
             continue
 
         parent = os.path.dirname(target)
         os.makedirs(parent, exist_ok=True)
         fd, tmp = tempfile.mkstemp(dir=parent, prefix=".akh-rules.")
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(new)
+        temps.add(tmp)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8", newline="") as f:
+                f.write(new)
+        except Exception:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+            raise
+
         if text is not None:
             shutil.copymode(target, tmp)
-        prepared.append((client, requested, target, text, new, tmp))
+        prepared.append((client, requested, target, tmp))
 
-    for client, requested, target, text, new, tmp in prepared:
+    for client, requested, target, tmp in prepared:
         if tmp is None:
             print(f"{client} rules unchanged: {requested}")
             continue
         os.replace(tmp, target)
+        temps.discard(tmp)
         print(f"{client} rules installed: {requested}")
 finally:
-    for *_, tmp in prepared:
-        if tmp and os.path.exists(tmp):
+    for tmp in list(temps):
+        try:
             os.unlink(tmp)
+        except FileNotFoundError:
+            pass
 PY
 
 printf 'Open a fresh agent session to load the updated rules.\n'
