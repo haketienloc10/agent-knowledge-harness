@@ -325,6 +325,74 @@ class Phase4SemanticStoreTests(unittest.TestCase):
         self.assertEqual(event["event_type"], "candidate.reconciled")
         self.assertEqual(event["work_item_revision"], 2)
 
+    def test_candidate_reconciliation_is_immutable_per_turn_revision(self) -> None:
+        stale_packet = build_task_packet(
+            objective="Produce revision 1 candidate.",
+            scope=["repo work"],
+            acceptance_criteria=["tests pass"],
+            context={
+                "trusted_facts": [
+                    {
+                        "fact": (
+                            "work_item_path=/tmp/work-items/e2e-terminal; "
+                            "id=e2e:terminal; revision=1"
+                        ),
+                        "source": "canonical Work Item locator",
+                    }
+                ]
+            },
+        )
+        self.store.record_turn(
+            turn_id="turn-terminal-stale",
+            session_id="session-terminal-stale",
+            repository="repo-a",
+            agent="claude",
+            route="claude-balanced",
+            state="settled",
+            native_turn_id=None,
+            packet=stale_packet,
+            agent_response="revision 1 result",
+        )
+        self.store.record_work_item_revision(
+            work_item_id="e2e:terminal",
+            work_item_revision=2,
+            reason="material requirement change",
+        )
+
+        first = self.store.record_candidate_reconciliation(
+            stale_turn_id="turn-terminal-stale",
+            resolution="abandoned",
+            reason="Lead intentionally abandoned this stale candidate.",
+            work_item_id="e2e:terminal",
+            work_item_revision=2,
+        )
+        repeated = self.store.record_candidate_reconciliation(
+            stale_turn_id="turn-terminal-stale",
+            resolution="abandoned",
+            reason="idempotent retry with updated operator wording",
+            work_item_id="e2e:terminal",
+            work_item_revision=2,
+        )
+        self.assertEqual(repeated, first)
+
+        with self.assertRaisesRegex(RuntimeError, "reconciliation is immutable"):
+            self.store.record_candidate_reconciliation(
+                stale_turn_id="turn-terminal-stale",
+                resolution="revalidated",
+                reason="must not resurrect an abandoned candidate",
+                work_item_id="e2e:terminal",
+                work_item_revision=2,
+            )
+
+        reconciliations = [
+            event
+            for event in self.store.list_slp_events()
+            if event["event_type"] == "candidate.reconciled"
+            and event["turn_id"] == "turn-terminal-stale"
+        ]
+        self.assertEqual(len(reconciliations), 1)
+        self.assertEqual(reconciliations[0]["payload"]["resolution"], "abandoned")
+
     def test_schema_upgrade_backfills_legacy_turn_once(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             db_path = Path(temp) / "legacy.sqlite3"
