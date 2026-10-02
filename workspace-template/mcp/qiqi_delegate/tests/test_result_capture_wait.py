@@ -33,10 +33,17 @@ class ResultCaptureWaitTests(unittest.IsolatedAsyncioTestCase):
         )
 
     def test_claude_handoff_args_register_only_root_result_hooks(self):
-        args = server._build_handoff_args("claude")
+        args = server._build_handoff_args(
+            "claude", sink=self.sink, nonce="nonce-1"
+        )
         self.assertEqual(args[0], "--settings")
         settings = json.loads(args[1])
         self.assertEqual(set(settings["hooks"]), {"Stop", "StopFailure"})
+        command = settings["hooks"]["Stop"][0]["hooks"][0]["command"]
+        self.assertIn("--sink", command)
+        self.assertIn(str(self.sink), command)
+        self.assertIn("--nonce nonce-1", command)
+        self.assertNotIn("--state-root", command)
 
     async def test_pending_background_stop_waits_then_returns_latest_substantial(self):
         self.write_event(
@@ -275,6 +282,34 @@ class ResultCaptureWaitTests(unittest.IsolatedAsyncioTestCase):
         )
 
         with self.assertRaisesRegex(RuntimeError, "upgrade Claude Code"):
+            await server._wait_for_result_capture(
+                self.sink, "nonce-1", "claude", "session-1"
+            )
+
+    async def test_direct_hook_failure_surfaces_before_no_capture_timeout(self):
+        self.write_event(
+            1,
+            {
+                "version": 1,
+                "adapter": "claude",
+                "nonce": "nonce-1",
+                "hook_event": "Stop",
+                "state": "capture_error",
+                "session_id": None,
+                "native_turn_id": None,
+                "agent_response": None,
+                "error": "ValueError: hook payload is missing session_id",
+                "cwd": "/repo/nested",
+                "background_task_count": 0,
+                "hook_failure": True,
+                "captured_at_ns": 10,
+            },
+        )
+
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "native result hook capture failed: ValueError: hook payload is missing session_id",
+        ):
             await server._wait_for_result_capture(
                 self.sink, "nonce-1", "claude", "session-1"
             )
