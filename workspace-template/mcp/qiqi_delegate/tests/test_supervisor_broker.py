@@ -245,6 +245,40 @@ class SupervisorBrokerTests(unittest.TestCase):
         self.broker.process_pending()
         self.assertEqual(self.cases("R4")[0]["status"], "CLOSED")
 
+    def test_r4_runtime_blocked_can_be_explicitly_abandoned_without_turn_row(self) -> None:
+        self.store.register_session("native-abandoned", "repo-a", "claude")
+        self.store.record_slp_event(
+            event_type="peer.signal",
+            turn_id="blocked-abandoned-turn",
+            session_id="native-abandoned",
+            repository="repo-a",
+            route="claude-balanced",
+            payload={"signal": "runtime_blocked"},
+        )
+        self.broker.process_pending()
+        case = self.cases("R4")[0]
+        self.assertEqual(case["status"], "OPEN")
+        self.assertTrue(case["details"]["runtime_blocked"])
+
+        self.store.record_peer_signal_resolution(
+            turn_id="blocked-abandoned-turn",
+            signal="BLOCKED",
+            reason="Lead abandoned continuity and will start fresh.",
+        )
+        self.broker.process_pending()
+
+        self.assertEqual(self.cases("R4")[0]["status"], "CLOSED")
+        self.assertIsNone(
+            next(
+                (
+                    turn
+                    for turn in self.store.list_turns()
+                    if turn["turn_id"] == "blocked-abandoned-turn"
+                ),
+                None,
+            )
+        )
+
     def test_r4_defer_then_explicit_signal_resolution_closes_case(self) -> None:
         self.record_turn("turn-deferred-signal")
         self.store.record_peer_signal(
