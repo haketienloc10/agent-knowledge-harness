@@ -62,11 +62,13 @@ _RULE_CONTRACTS: dict[str, dict[str, Any]] = {
     "R2": {
         "predicate": (
             "A downstream dependency was consumed before the exact upstream Peer "
-            "response had an explicit Lead ACCEPT disposition."
+            "response had an explicit Lead ACCEPT disposition at that consumption "
+            "sequence. A later ACCEPT does not erase the temporal violation."
         ),
         "issue_when": [
             "governance_facts.source_turn_id is present",
-            "the source Peer turn does not have disposition action accept",
+            "governance_facts.accepted_before_consumption is false",
+            "governance_facts.consumption_event_seq identifies the violating consumption",
         ],
     },
     "R3": {
@@ -220,6 +222,7 @@ def build_audit_packet(case: dict[str, Any]) -> dict[str, Any]:
             "source": "lead_dispositions",
             "disposition_id": disposition.get("disposition_id"),
             "action": disposition.get("action"),
+            "event_seq": disposition.get("event_seq"),
             "work_item_revision": disposition.get("work_item_revision"),
             "candidate_id": disposition.get("candidate_id"),
         }
@@ -228,6 +231,23 @@ def build_audit_packet(case: dict[str, Any]) -> dict[str, Any]:
             "recorded": False,
             "source": "lead_dispositions",
         }
+
+    if rule == "R2":
+        consumption_event_seq = details.get("consumption_event_seq")
+        accepted_before_consumption = details.get("accepted_before_consumption")
+        disposition_state["accepted_before_consumption"] = (
+            accepted_before_consumption is True
+        )
+        disposition_state["consumption_event_seq"] = consumption_event_seq
+        if disposition_state["recorded"]:
+            event_seq = disposition_state.get("event_seq")
+            disposition_state["recorded_before_consumption"] = (
+                isinstance(event_seq, int)
+                and isinstance(consumption_event_seq, int)
+                and event_seq < consumption_event_seq
+            )
+        else:
+            disposition_state["recorded_before_consumption"] = False
 
     return {
         "version": 2,
@@ -470,6 +490,7 @@ class SupervisorControlStore:
             rows = conn.execute(
                 "SELECT c.*, d.disposition_id AS disposition_id, "
                 "d.action AS disposition_action, "
+                "d.event_seq AS disposition_event_seq, "
                 "d.work_item_revision AS disposition_work_item_revision, "
                 "d.candidate_id AS disposition_candidate_id "
                 "FROM supervisor_cases c "
@@ -485,12 +506,14 @@ class SupervisorControlStore:
             item["details"] = json.loads(item.pop("details_json"))
             disposition_id = item.pop("disposition_id")
             disposition_action = item.pop("disposition_action")
+            disposition_event_seq = item.pop("disposition_event_seq")
             disposition_revision = item.pop("disposition_work_item_revision")
             disposition_candidate_id = item.pop("disposition_candidate_id")
             if isinstance(disposition_id, str) and disposition_id:
                 item["lead_disposition"] = {
                     "disposition_id": disposition_id,
                     "action": disposition_action,
+                    "event_seq": disposition_event_seq,
                     "work_item_revision": disposition_revision,
                     "candidate_id": disposition_candidate_id,
                 }
