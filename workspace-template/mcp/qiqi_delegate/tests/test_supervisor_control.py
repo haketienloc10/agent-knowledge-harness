@@ -298,6 +298,26 @@ class SupervisorFindingContractTests(unittest.TestCase):
         )
         self.assertIn("consumption_event_seq: 42", r2_message)
 
+        r3_message = render_lead_finding(
+            {
+                "case_id": "case-r3-locator",
+                "status": "issue",
+                "observation": "Repository write scopes overlap.",
+                "evidence": ["two durable claims are active"],
+                "open_question_for_lead": "Which abandoned claim should be released?",
+                "_case_context": {
+                    "repository": "repo-a",
+                    "claim_ids": [
+                        "repo:repo-a:turn:one",
+                        "repo:repo-a:turn:two",
+                    ],
+                },
+            }
+        )
+        self.assertIn("repository: repo-a", r3_message)
+        self.assertIn("write_claim_id: repo:repo-a:turn:one", r3_message)
+        self.assertIn("write_claim_id: repo:repo-a:turn:two", r3_message)
+
     def test_default_supervisor_home_is_outside_workspace_project_tree(self) -> None:
         workspace = Path("/tmp/project/workspace")
         home = default_supervisor_home(
@@ -459,6 +479,44 @@ class AutonomousSupervisorRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             pending[0]["_case_context"]["consumption_event_seq"],
             packet["disposition_state"]["consumption_event_seq"],
+        )
+
+    async def test_r3_delivery_context_hydrates_claim_recovery_locators(self) -> None:
+        self.store.record_write_scope_claim(
+            claim_id="repo:repo-a:turn:r3-one",
+            repository="repo-a",
+            owner="r3-one",
+            scope=["*"],
+            turn_id="r3-one",
+        )
+        self.store.record_write_scope_claim(
+            claim_id="repo:repo-a:turn:r3-two",
+            repository="repo-a",
+            owner="r3-two",
+            scope=["*"],
+            turn_id="r3-two",
+        )
+        self.broker.process_pending()
+
+        fake = _FakeControlPlane("issue")
+        runtime = AutonomousSupervisorRuntime(
+            state_db=self.db_path,
+            control_plane=fake,
+        )
+        await runtime.handle_pending_cases(deliver=False)
+
+        pending = SupervisorControlStore(
+            self.db_path
+        ).issue_findings_needing_delivery()
+        self.assertEqual(len(pending), 1)
+        context = pending[0]["_case_context"]
+        self.assertEqual(context["repository"], "repo-a")
+        self.assertEqual(
+            sorted(context["claim_ids"]),
+            [
+                "repo:repo-a:turn:r3-one",
+                "repo:repo-a:turn:r3-two",
+            ],
         )
 
     async def test_r5_runtime_packet_hydrates_prior_lead_disposition(self) -> None:
