@@ -603,6 +603,41 @@ class AutonomousSupervisorRuntimeTests(unittest.IsolatedAsyncioTestCase):
             "CLOSED",
         )
 
+    async def test_delivery_guard_rejects_unreplayed_closure_evidence(self) -> None:
+        self._record_turn("turn-unreplayed-closure")
+        self.broker.process_pending()
+        fake = _FakeControlPlane("issue")
+        runtime = AutonomousSupervisorRuntime(
+            state_db=self.db_path,
+            control_plane=fake,
+        )
+        await runtime.handle_pending_cases(deliver=False)
+
+        # Simulate a Lead closure committed after the last broker replay but before
+        # notification selection. The materialized case row is still OPEN here.
+        self.store.record_lead_disposition(
+            turn_id="turn-unreplayed-closure",
+            action="reject",
+            reason="Lead resolved this turn before the wakeup was selected",
+        )
+        self.assertEqual(self.broker.list_cases()[0]["status"], "OPEN")
+
+        async def no_op_replay() -> None:
+            return None
+
+        result = await runtime.handle_pending_cases(
+            review=False,
+            deliver=True,
+            before_delivery=no_op_replay,
+        )
+
+        self.assertEqual(result["delivery_attempted"], 1)
+        self.assertEqual(result["delivered_to_lead"], 0)
+        self.assertEqual(fake.lead_findings, [])
+
+        self.broker.process_pending()
+        self.assertEqual(self.broker.list_cases()[0]["status"], "CLOSED")
+
     async def test_runtime_is_idempotent_after_finding_delivery(self) -> None:
         self._record_turn("turn-2")
         self.broker.process_pending()
