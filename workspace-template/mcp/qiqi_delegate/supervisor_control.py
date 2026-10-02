@@ -614,6 +614,100 @@ class SupervisorControlStore:
             result.append(finding)
         return result
 
+    def acquire_delivery_guard(
+        self,
+        case_id: str,
+        *,
+        broker_id: str,
+    ) -> sqlite3.Connection | None:
+        """Acquire a writer-ordered guard for one Lead notification.
+
+        The guard is returned only when the broker cursor has consumed every semantic
+        event visible before BEGIN IMMEDIATE and the case/finding is still deliverable.
+        Keeping this transaction open through the Herdr prompt orders any concurrent
+        closure append after the notification selection.
+        """
+        clean_case_id = _required_text(case_id, "case_id")
+        clean_broker_id = _required_text(broker_id, "broker_id")
+        conn = self._connect()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            state = conn.execute(
+                "SELECT last_processed_seq FROM supervisor_broker_state "
+                "WHERE broker_id = ?",
+                (clean_broker_id,),
+            ).fetchone()
+            latest = conn.execute(
+                "SELECT COALESCE(MAX(seq), 0) AS max_seq FROM slp_events"
+            ).fetchone()
+            if (
+                state is None
+                or latest is None
+                or int(state["last_processed_seq"]) < int(latest["max_seq"])
+            ):
+                conn.rollback()
+                conn.close()
+                return None
+            case = conn.execute(
+                "SELECT status FROM supervisor_cases WHERE case_id = ?",
+                (clean_case_id,),
+            ).fetchone()
+            finding = conn.execute(
+                "SELECT verdict, delivered_to_lead_at_ns FROM supervisor_findings "
+                "WHERE case_id = ?",
+                (clean_case_id,),
+            ).fetchone()
+            if (
+                case is None
+                or case["status"] == "CLOSED"
+                or finding is None
+                or finding["verdict"] != "issue"
+                or finding["delivered_to_lead_at_ns"] is not None
+            ):
+                conn.rollback()
+                conn.close()
+                return None
+            return conn
+        except Exception:
+            conn.close()
+            raise
+
+    @staticmethod
+    def mark_delivered_to_lead_in_transaction(
+        conn: sqlite3.Connection,
+        case_id: str,
+    ) -> bool:
+        clean_case_id = _required_text(case_id, "case_id")
+        now = time.time_ns()
+        finding = conn.execute(
+            "SELECT verdict, delivered_to_lead_at_ns FROM supervisor_findings "
+            "WHERE case_id = ?",
+            (clean_case_id,),
+        ).fetchone()
+        case = conn.execute(
+            "SELECT status FROM supervisor_cases WHERE case_id = ?",
+            (clean_case_id,),
+        ).fetchone()
+        if (
+            case is None
+            or case["status"] == "CLOSED"
+            or finding is None
+            or finding["verdict"] != "issue"
+            or finding["delivered_to_lead_at_ns"] is not None
+        ):
+            return False
+        conn.execute(
+            "UPDATE supervisor_findings SET delivered_to_lead_at_ns = ?, "
+            "updated_at_ns = ? WHERE case_id = ?",
+            (now, now, clean_case_id),
+        )
+        conn.execute(
+            "UPDATE supervisor_cases SET status = 'WAITING_FOR_EVIDENCE', "
+            "updated_at_ns = ? WHERE case_id = ? AND status != 'CLOSED'",
+            (now, clean_case_id),
+        )
+        return True
+
     def mark_delivered_to_lead(self, case_id: str) -> bool:
         case_id = _required_text(case_id, "case_id")
         now = time.time_ns()
@@ -1289,9 +1383,11 @@ class AutonomousSupervisorRuntime:
         *,
         state_db: Path,
         control_plane: HerdrControlPlane,
+        broker_id: str = "slp-supervisor",
     ):
         self.store = SupervisorControlStore(state_db)
         self.control_plane = control_plane
+        self.broker_id = _required_text(broker_id, "broker_id")
 
     async def handle_pending_cases(
         self,
@@ -1334,20 +1430,32 @@ class AutonomousSupervisorRuntime:
         for finding in findings:
             if before_delivery is not None:
                 await before_delivery()
-            current = self.store.get_case(finding["case_id"])
-            if current is None or current["status"] == "CLOSED":
+            guard = self.store.acquire_delivery_guard(
+                finding["case_id"],
+                broker_id=self.broker_id,
+            )
+            if guard is None:
                 continue
             try:
                 await self.control_plane.wake_lead(finding)
-                if self.store.mark_delivered_to_lead(finding["case_id"]):
+                if self.store.mark_delivered_to_lead_in_transaction(
+                    guard,
+                    finding["case_id"],
+                ):
+                    guard.commit()
                     delivered += 1
+                else:
+                    guard.rollback()
             except (RuntimeError, ValueError) as exc:
+                guard.rollback()
                 delivery_failures += 1
                 detail = (
                     f"deliver case {finding.get('case_id')!r}: "
                     f"{type(exc).__name__}: {exc}"
                 )
                 last_error = detail[-2000:]
+            finally:
+                guard.close()
 
         result: dict[str, Any] = {
             "reviewed": reviewed,
