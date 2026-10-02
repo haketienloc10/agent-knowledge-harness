@@ -453,7 +453,7 @@ class AutonomousSupervisorRuntimeTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result["review_failures"], 1)
         self.assertIn("transient supervisor failure", result["last_error"])
-        self.assertIn("turn-fail", result["last_error"])
+        self.assertIn("review case", result["last_error"])
         self.assertEqual(result["reviewed"], 1)
         self.assertEqual(result["delivered_to_lead"], 1)
         self.assertEqual(
