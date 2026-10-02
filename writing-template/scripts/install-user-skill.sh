@@ -198,12 +198,12 @@ def tree_content_fingerprint(root):
         digest.update(
             (
                 f"{relative}\0{kind}\0{stat.S_IMODE(st.st_mode)}\0"
-                f"{st.st_size}\0"
             ).encode("utf-8", "surrogateescape")
         )
         if stat.S_ISLNK(st.st_mode):
             digest.update(os.readlink(path).encode("utf-8", "surrogateescape"))
         elif stat.S_ISREG(st.st_mode):
+            digest.update(f"{st.st_size}\0".encode("ascii"))
             digest.update(file_digest(path).encode("ascii"))
 
     add_entry(".", root)
@@ -323,7 +323,7 @@ def create_source_snapshot(aux_dirs):
         raise RuntimeError(
             "source skill changed while creating the installation snapshot"
         )
-    return snapshot
+    return snapshot, before
 
 
 def cleanup_aux_dirs(aux_dirs, warnings):
@@ -460,8 +460,14 @@ def create_tracked_dir(state, key, prefix):
     return path
 
 
-def stage_skill(state, source_snapshot):
+def stage_skill(state, source_snapshot, source_snapshot_fingerprint):
     assert_root_unchanged(state)
+    if (
+        tree_content_fingerprint(source_snapshot)
+        != source_snapshot_fingerprint
+    ):
+        raise RuntimeError("shared source snapshot changed before staging")
+
     stage_parent = create_tracked_dir(
         state, "stage_parent", f".{name}.stage."
     )
@@ -469,6 +475,11 @@ def stage_skill(state, source_snapshot):
     state["stage_target"] = stage_target
 
     shutil.copytree(source_snapshot, stage_target, symlinks=True)
+    if tree_content_fingerprint(stage_target) != source_snapshot_fingerprint:
+        raise RuntimeError(
+            f"{state['client']} staged source differs from shared snapshot"
+        )
+
     marker = os.path.join(stage_target, marker_name)
     with open(marker, "xb"):
         pass
@@ -706,7 +717,9 @@ def run():
     states = []
 
     try:
-        source_snapshot = create_source_snapshot(aux_dirs)
+        source_snapshot, source_snapshot_fingerprint = create_source_snapshot(
+            aux_dirs
+        )
 
         states = [
             build_state("Codex", raw_codex_root),
@@ -718,7 +731,9 @@ def run():
         # Both clients stage from the same immutable snapshot, so an editor or
         # checkout changing the repository source cannot split installed content.
         for state in states:
-            stage_skill(state, source_snapshot)
+            stage_skill(
+                state, source_snapshot, source_snapshot_fingerprint
+            )
 
         # Reserve backup parents before commit so cleanup state is complete.
         for state in states:
