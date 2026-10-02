@@ -8,7 +8,8 @@ from unittest.mock import AsyncMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from core import SessionStore, build_task_packet  # noqa: E402
+import server  # noqa: E402
+from core import SessionStore, build_task_packet, task_packet_work_item_ref  # noqa: E402
 from mcp import Client  # noqa: E402
 from task_graph_mcp import mcp  # noqa: E402
 from task_graph_runtime import GraphRuntime  # noqa: E402
@@ -109,6 +110,7 @@ class TaskGraphMcpTests(unittest.IsolatedAsyncioTestCase):
         self.slp_store = SessionStore(db_path)
         self.runtime_patch = patch("task_graph_mcp._graph_runtime", self.runtime)
         self.store_patch = patch("task_graph_mcp._store", self.slp_store)
+        self.server_store_patch = patch("server._store", self.slp_store)
         self.registry_patch = patch(
             "task_graph_mcp._load_repo_registry",
             return_value={
@@ -118,10 +120,12 @@ class TaskGraphMcpTests(unittest.IsolatedAsyncioTestCase):
         )
         self.runtime_patch.start()
         self.store_patch.start()
+        self.server_store_patch.start()
         self.registry_patch.start()
 
     def tearDown(self) -> None:
         self.registry_patch.stop()
+        self.server_store_patch.stop()
         self.store_patch.stop()
         self.runtime_patch.stop()
         self.temp.cleanup()
@@ -146,11 +150,13 @@ class TaskGraphMcpTests(unittest.IsolatedAsyncioTestCase):
                 known_unknowns=kwargs.get("known_unknowns"),
             )
             turn_id = result["turn_id"]
-            self.slp_store.record_slp_event(
-                event_type="peer.dispatched",
+            work_item_id, work_item_revision = task_packet_work_item_ref(packet)
+            server._record_peer_dispatch(
                 turn_id=turn_id,
                 repository=kwargs["repository"],
                 route=route,
+                work_item_id=work_item_id,
+                work_item_revision=work_item_revision,
             )
             if result["state"] in {"settled", "failed"}:
                 self.slp_store.record_turn(
