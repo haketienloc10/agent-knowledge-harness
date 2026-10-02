@@ -259,6 +259,8 @@ class SupervisorBrokerTests(unittest.TestCase):
             turn_id="turn-deferred-signal",
             action="defer",
             reason="Owner assigned; return after upstream contract is accepted.",
+            owner="lead",
+            return_checkpoint="after upstream contract is accepted",
         )
         self.broker.process_pending()
         self.assertEqual(self.cases("R4")[0]["status"], "OPEN")
