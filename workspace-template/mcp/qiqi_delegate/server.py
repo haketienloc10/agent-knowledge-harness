@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import functools
 import hashlib
 import json
@@ -15,7 +16,7 @@ import tempfile
 import time
 import uuid
 from pathlib import Path
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Callable, Literal
 
 import yaml
 from mcp.server import MCPServer
@@ -153,6 +154,19 @@ _managed_herdr_server: asyncio.subprocess.Process | None = None
 _state_lock = asyncio.Lock()
 _active_repositories: set[Path] = set()
 _active_sessions: set[str] = set()
+
+_repo_dispatch_boundary_hook: contextvars.ContextVar[
+    Callable[[Any], None] | None
+] = contextvars.ContextVar("repo_dispatch_boundary_hook", default=None)
+
+
+def _set_repo_dispatch_boundary_hook(hook: Callable[[Any], None]):
+    return _repo_dispatch_boundary_hook.set(hook)
+
+
+def _reset_repo_dispatch_boundary_hook(token: contextvars.Token) -> None:
+    _repo_dispatch_boundary_hook.reset(token)
+
 _store = SessionStore(STATE_DB)
 
 
@@ -1391,14 +1405,23 @@ async def delegate_repo_task(
             work_item_revision=work_item_revision,
         )
         write_claim_recorded = True
-        _store.record_slp_event(
-            event_type="peer.dispatched",
-            turn_id=qiqi_turn_id,
-            repository=repository,
-            route=route,
-            work_item_id=work_item_id,
-            work_item_revision=work_item_revision,
-        )
+        # Commit the durable dispatch marker and any TaskGraph dependency-consumption
+        # evidence in one SQLite transaction. The graph hook is context-local, so
+        # concurrent independent delegations cannot cross-contaminate evidence.
+        with _store._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            _store._insert_slp_event(
+                conn,
+                event_type="peer.dispatched",
+                turn_id=qiqi_turn_id,
+                repository=repository,
+                route=route,
+                work_item_id=work_item_id,
+                work_item_revision=work_item_revision,
+            )
+            dispatch_hook = _repo_dispatch_boundary_hook.get()
+            if dispatch_hook is not None:
+                dispatch_hook(conn)
     except Exception:
         try:
             if write_claim_recorded:
