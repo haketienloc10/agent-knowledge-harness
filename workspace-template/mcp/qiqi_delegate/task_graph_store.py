@@ -415,6 +415,19 @@ class GraphRuntimeStore:
         with self._connect() as conn:
             SessionStore._ensure_schema(conn)
             conn.execute("BEGIN IMMEDIATE")
+            for disposition in dispositions:
+                if not isinstance(disposition, dict):
+                    raise ValueError("graph disposition records must be objects")
+                if disposition.get("action") == "accept":
+                    turn_id = disposition.get("turn_id")
+                    if not isinstance(turn_id, str) or not turn_id.strip():
+                        raise RuntimeError(
+                            "TaskGraph accept disposition requires an exact captured turn"
+                        )
+                    slp_store.assert_turn_current_for_acceptance_in_transaction(
+                        conn,
+                        turn_id=turn_id,
+                    )
             self._save_snapshot_in_transaction(
                 conn,
                 graph_run_id,
@@ -422,8 +435,6 @@ class GraphRuntimeStore:
                 expected_revision=expected_revision,
             )
             for disposition in dispositions:
-                if not isinstance(disposition, dict):
-                    raise ValueError("graph disposition records must be objects")
                 slp_store.record_lead_disposition_in_transaction(
                     conn,
                     **disposition,
