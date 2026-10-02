@@ -14,6 +14,8 @@ from server import (
     STATE_DB,
     TaskContextInput,
     _load_repo_registry,
+    _reset_repo_dispatch_boundary_hook,
+    _set_repo_dispatch_boundary_hook,
     _store,
     delegate_repo_task,
     mcp,
@@ -230,6 +232,9 @@ async def _execute_repo_task(
             f"runnable node {node.node_id!r} has no route for repository execution"
         )
     packet = node.task_packet
+    dependency_sources: list[str] = []
+    work_item_id: str | None = None
+    work_item_revision: int | None = None
     if graph_run_id is not None and node.depends_on:
         work_item_id, work_item_revision = task_packet_work_item_ref(packet)
         for dependency_node_id in node.depends_on:
@@ -247,18 +252,33 @@ async def _execute_repo_task(
                     "TaskGraph consumed a satisfied dependency without captured "
                     f"Peer turn evidence: {dependency_node_id!r}"
                 )
-            # Consumption begins when the downstream node is dispatched with the
-            # accepted upstream semantics, not when final-response transport succeeds.
-            _store.record_dependency_consumed(
-                source_turn_id=source_turn_id,
-                consumer_turn_id=None,
-                repository=node.repository,
-                graph_run_id=graph_run_id,
-                node_id=node.node_id,
-                work_item_id=work_item_id,
-                work_item_revision=work_item_revision,
-                require_current_source=True,
-            )
+            dependency_sources.append(source_turn_id)
+
+    dispatch_token = None
+    if dependency_sources:
+        assert graph_run_id is not None
+
+        def record_dependency_consumption(conn: Any) -> None:
+            # This callback runs inside the same BEGIN IMMEDIATE transaction that
+            # records peer.dispatched. Every source is validated before commit, so
+            # one invalid later dependency rolls back all earlier consumption rows.
+            for source_turn_id in dependency_sources:
+                _store.record_dependency_consumed_in_transaction(
+                    conn,
+                    source_turn_id=source_turn_id,
+                    consumer_turn_id=None,
+                    repository=node.repository,
+                    graph_run_id=graph_run_id,
+                    node_id=node.node_id,
+                    work_item_id=work_item_id,
+                    work_item_revision=work_item_revision,
+                    require_current_source=True,
+                )
+
+        dispatch_token = _set_repo_dispatch_boundary_hook(
+            record_dependency_consumption
+        )
+
     try:
         result = await delegate_repo_task(
             repository=node.repository,
@@ -281,6 +301,9 @@ async def _execute_repo_task(
             str(exc),
             session_id=preserved_session_id,
         ) from exc
+    finally:
+        if dispatch_token is not None:
+            _reset_repo_dispatch_boundary_hook(dispatch_token)
 
 
 async def _start_repo_task(node: GraphNode) -> dict[str, Any]:
