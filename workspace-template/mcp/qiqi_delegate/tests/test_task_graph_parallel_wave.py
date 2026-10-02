@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from core import build_task_packet  # noqa: E402
+from core import SessionStore, build_task_packet  # noqa: E402
 from mcp import Client  # noqa: E402
 from task_graph import GraphNode, TaskGraph  # noqa: E402
 from task_graph_mcp import mcp  # noqa: E402
@@ -343,7 +343,9 @@ class ParallelWaveMcpTests(unittest.IsolatedAsyncioTestCase):
         self.temp = tempfile.TemporaryDirectory()
         db_path = Path(self.temp.name) / ".qiqi" / "state" / "qiqi_delegate.sqlite3"
         self.runtime = GraphRuntime(GraphRuntimeStore(db_path))
+        self.slp_store = SessionStore(db_path)
         self.runtime_patch = patch("task_graph_mcp._graph_runtime", self.runtime)
+        self.store_patch = patch("task_graph_mcp._store", self.slp_store)
         self.registry_patch = patch(
             "task_graph_mcp._load_repo_registry",
             return_value={
@@ -354,10 +356,12 @@ class ParallelWaveMcpTests(unittest.IsolatedAsyncioTestCase):
             },
         )
         self.runtime_patch.start()
+        self.store_patch.start()
         self.registry_patch.start()
 
     def tearDown(self) -> None:
         self.registry_patch.stop()
+        self.store_patch.stop()
         self.runtime_patch.stop()
         self.temp.cleanup()
 
@@ -442,9 +446,30 @@ class ParallelWaveMcpTests(unittest.IsolatedAsyncioTestCase):
 
         async def delegated(**kwargs):
             repository = kwargs["repository"]
+            session_id = f"session-{repository}"
+            turn_id = f"turn-{repository}"
+            packet = build_task_packet(
+                objective=kwargs["objective"],
+                scope=kwargs["scope"],
+                acceptance_criteria=kwargs["acceptance_criteria"],
+                out_of_scope=kwargs.get("out_of_scope"),
+                constraints=kwargs.get("constraints"),
+                known_unknowns=kwargs.get("known_unknowns"),
+            )
+            self.slp_store.record_turn(
+                turn_id=turn_id,
+                session_id=session_id,
+                repository=repository,
+                agent="codex",
+                route=kwargs["route"],
+                state="settled",
+                native_turn_id=None,
+                packet=packet,
+                agent_response=f"result-{repository}",
+            )
             return {
-                "session_id": f"session-{repository}",
-                "turn_id": f"turn-{repository}",
+                "session_id": session_id,
+                "turn_id": turn_id,
                 "state": "settled",
                 "agent_response": f"result-{repository}",
             }

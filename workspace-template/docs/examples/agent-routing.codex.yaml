@@ -27,7 +27,7 @@ agents:
 routes:
   codex-balanced:
     agent: codex
-    model: gpt-5.4
+    model: gpt-5.6-luna
     args:
       - -c
       - 'model_reasoning_effort="medium"'

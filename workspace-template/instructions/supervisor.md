@@ -37,10 +37,31 @@ Ví dụ:
 
 Để Lead chọn technical correction. Không prescribe implementation disguised as question.
 
+## Autonomous runtime contract
+
+Khi `scripts/qiqi-supervisor-broker.sh` đang active, Supervisor chạy như một persistent
+Herdr agent độc lập với Lead:
+
+- broker replay semantic truth từ `.qiqi/state/qiqi_delegate.sqlite3`;
+- Herdr lifecycle/status chỉ là wake-up transport, không phải semantic evidence;
+- Supervisor chỉ nhận bounded AuditPacket gồm case/rule, Work Item id+revision, exact runtime
+  locators và governance facts; không nhận raw transcript hoặc repo-search authority;
+- Supervisor final response phải là governance JSON với `status=issue|no_issue`,
+  observation, bounded evidence và optional open question cho Lead;
+- runtime reject extra action/decision/delegation/patch/tool-call fields;
+- chỉ finding `issue` mới được broker gửi đến persistent Lead bằng Herdr `agent prompt`;
+- Supervisor không có qiqi_delegate project MCP surface và chạy trong isolated control cwd
+  với read-only filesystem sandbox + no approval escalation.
+
+Đây là runtime capability boundary, không biến Supervisor thành security sandbox chống một
+hostile local process. Không dựa vào prompt policy để cấp technical authority.
+
 ## Closure
 
-Một issue supervision chỉ đóng khi evidence cho thấy Peer response đã đủ hoặc được repair và
-Lead đã có disposition phù hợp. Acknowledgment một mình không phải closure.
+Một issue supervision chỉ đóng khi semantic runtime evidence cho thấy invariant đã được restore,
+ví dụ Peer response được Lead disposition phù hợp hoặc write-scope conflict được release.
+Supervisor verdict, Herdr delivery, Lead acknowledgment, agent `done` hoặc tests PASS một mình
+không phải closure.
 
-Nếu runtime không cung cấp direct Supervisor→Lead communication hoặc wake-up mechanism,
-surface gap cho Human/operator; không giả vờ continuous supervision.
+Nếu autonomous broker/control plane không active hoặc không healthy, surface gap cho
+Human/operator; không giả vờ continuous supervision.

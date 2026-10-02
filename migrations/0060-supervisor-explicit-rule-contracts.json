@@ -1,0 +1,24 @@
+{
+  "version": 60,
+  "from_ref": "99bbbb0a52622014a7c675fd23ec33ee9b7165ac",
+  "to_ref": "267738c3b6c89eff0f36b580b0c6a9c6c206b6ab",
+  "description": "make deterministic Supervisor broker rule semantics explicit to the isolated Supervisor: upgrade AuditPacket to version 2 with normative bounded rule_contract definitions for R1-R5, instruct Supervisor to evaluate packet facts against issue_when rather than infer opaque rule ids from general judgment, preserve the existing governance-only response/authority boundary, and add contract tests/docs/checks for every supported rule",
+  "workspace": {
+    "merge": [
+      "workspace-template/docs/SUPERVISOR_RUNTIME.md",
+      "workspace-template/scripts/workspace-check.sh"
+    ],
+    "replace": [
+      "workspace-template/mcp/qiqi_delegate/supervisor_control.py",
+      "workspace-template/mcp/qiqi_delegate/tests/test_supervisor_control.py"
+    ],
+    "delete": [],
+    "manual_review": []
+  },
+  "repo": {
+    "merge": [],
+    "replace": [],
+    "delete": [],
+    "manual_review": []
+  }
+}

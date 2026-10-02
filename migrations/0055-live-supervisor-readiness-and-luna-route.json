@@ -1,0 +1,26 @@
+{
+  "version": 55,
+  "from_ref": "47aa5e61b415590d60560f85622ad4dd3d15b2d6",
+  "to_ref": "458a638e82a182b767e0470e6f5c58503318086f",
+  "description": "harden the live autonomous Supervisor E2E and update the Codex balanced route: require Herdr named agents to be prompt-ready rather than merely present, prevent shell command substitution in the live E2E Lead prompt, move codex-balanced from gpt-5.4 to gpt-5.6-luna, and extend runtime regression/contract coverage for stale named-agent readiness and the new route",
+  "workspace": {
+    "merge": [
+      "workspace-template/scripts/workspace-check.sh"
+    ],
+    "replace": [
+      "workspace-template/docs/examples/agent-routing.codex.yaml",
+      "workspace-template/instructions/agent-routing.yaml",
+      "workspace-template/mcp/qiqi_delegate/supervisor_control.py",
+      "workspace-template/mcp/qiqi_delegate/tests/test_supervisor_control.py",
+      "workspace-template/scripts/e2e-autonomous-supervisor.sh"
+    ],
+    "delete": [],
+    "manual_review": []
+  },
+  "repo": {
+    "merge": [],
+    "replace": [],
+    "delete": [],
+    "manual_review": []
+  }
+}

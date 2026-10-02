@@ -11,14 +11,19 @@ required=(
   identity.md
   repos.yaml
   docs/WORKSPACE_PROTOCOL.md
+  docs/SUPERVISOR_RUNTIME.md
   work-items/.gitkeep
   instructions/supervisor.md
   instructions/agent-routing.yaml
   instructions/model-routing.md
   scripts/qiqi-mcp-server.sh
+  scripts/qiqi-supervisor-broker.sh
+  scripts/e2e-autonomous-supervisor.sh
   scripts/migrate-work-item-filenames-v27.py
   mcp/qiqi_delegate/server.py
   mcp/qiqi_delegate/core.py
+  mcp/qiqi_delegate/supervisor_broker.py
+  mcp/qiqi_delegate/supervisor_control.py
   .codex/config.toml
 )
 for rel in "${required[@]}"; do
@@ -30,6 +35,11 @@ command -v uv >/dev/null 2>&1 || fail 'missing command: uv'
 command -v python3 >/dev/null 2>&1 || fail 'missing command: python3'
 
 launcher="$workspace_root/scripts/qiqi-mcp-server.sh"
+supervisor_launcher="$workspace_root/scripts/qiqi-supervisor-broker.sh"
+supervisor_e2e="$workspace_root/scripts/e2e-autonomous-supervisor.sh"
+supervisor_broker="$mcp_project/supervisor_broker.py"
+supervisor_control="$mcp_project/supervisor_control.py"
+supervisor_runtime_doc="$workspace_root/docs/SUPERVISOR_RUNTIME.md"
 routing="$workspace_root/instructions/agent-routing.yaml"
 config="$workspace_root/.codex/config.toml"
 agents="$workspace_root/AGENTS.md"
@@ -45,7 +55,186 @@ for pattern in \
   grep -Fq -- "$pattern" "$launcher" || fail "launcher missing delegated Work Items contract: $pattern"
 done
 
+for pattern in \
+  'QIQI_HERDR_SESSION' \
+  'supervisor_broker.py'; do
+  grep -Fq -- "$pattern" "$supervisor_launcher" || fail "Supervisor launcher missing runtime contract: $pattern"
+done
+if grep -Fq 'QIQI_HERDR_SESSION:-qiqi-delegate' "$supervisor_launcher"; then
+  fail 'Supervisor launcher must not restore the legacy global Herdr session default'
+fi
+
+for pattern in \
+  'interactive_ready' \
+  'launch_pending' \
+  'agent_status' \
+  '"code":"agent_not_ready"' \
+  'hashlib.sha256' \
+  'qiqi-delegate-' \
+  'Keep the initial Work Item revision unchanged' \
+  'MUST NOT increment revision'; do
+  grep -Fq -- "$pattern" "$supervisor_e2e" || \
+    fail "live Supervisor E2E missing Lead readiness guard: $pattern"
+done
+
+grep -Fq 'events.subscribe' "$supervisor_broker" || \
+  fail 'Supervisor broker must use Herdr events.subscribe as its primary wakeup stream'
+if grep -Eq 'pane[.]read|agent[.]read' "$supervisor_broker"; then
+  fail 'Supervisor broker must not read terminal/pane output as semantic truth'
+fi
+
+for pattern in \
+  '"workspace",' \
+  '"create",' \
+  '"--label",' \
+  'CONTROL_ID' \
+  '"pane",' \
+  '"split",' \
+  '"agent",' \
+  '"start",' \
+  '"prompt",' \
+  '"--sandbox",' \
+  '"read-only"' \
+  '"--ask-for-approval"' \
+  '"never"'; do
+  grep -Fq -- "$pattern" "$supervisor_control" || \
+    fail "Supervisor control plane missing persistent/runtime boundary: $pattern"
+done
+if grep -Eq 'pane[.]read|agent[.]read|delegate_repo_task|record_lead_disposition|record_work_item_revision|record_peer_signal|record_peer_signal_resolution|record_candidate_reconciliation|record_dependency_consumed' "$supervisor_control"; then
+  fail 'Supervisor control plane must not expose terminal reads, Peer delegation, Work Item/runtime mutation, or Lead disposition mutation'
+fi
+grep -Fq 'DEFAULT_MODEL = "gpt-5.6-luna"' "$supervisor_control" || \
+  fail 'persistent Lead/Supervisor control plane must use gpt-5.6-luna by default'
+grep -Fq '"recorded": True' "$supervisor_control" || \
+  fail 'Supervisor AuditPacket must expose an existing Lead disposition'
+grep -Fq 'LEFT JOIN lead_dispositions d ON d.turn_id = c.turn_id' "$supervisor_control" || \
+  fail 'Supervisor pending cases must hydrate disposition state by exact Peer turn'
+grep -Fq '_RULE_CONTRACTS' "$supervisor_control" || \
+  fail 'Supervisor AuditPacket must define deterministic R1-R5 rule contracts'
+grep -Fq '"version": 2' "$supervisor_control" || \
+  fail 'Supervisor AuditPacket contract version must include explicit rule semantics'
+grep -Fq 'rule_contract is the normative meaning' "$supervisor_control" || \
+  fail 'Supervisor prompt must treat rule_contract as normative'
+grep -Fq '_agent_matches_pane' "$supervisor_control" || \
+  fail 'Supervisor control plane must validate named-agent pane identity'
+grep -Fq '_drain_durable' "$supervisor_broker" || \
+  fail 'Supervisor broker must drain durable backlog before waiting for wakeups'
+grep -Fq 'before_delivery=replay_to_quiescence' "$supervisor_broker" || \
+  fail 'Supervisor delivery must replay durable closure evidence at each Lead wakeup'
+grep -Fq 'reserve_issue_finding_for_delivery' "$supervisor_control" || \
+  fail 'Supervisor delivery must durably reserve notification selection against semantic closure'
+grep -Fq 'delivery_reserved_at_ns' "$mcp_project/core.py" || \
+  fail 'Supervisor delivery reservation must be persisted in the shared SQLite schema'
+grep -Fq 'stream_once(yield_ready=True)' "$supervisor_broker" || \
+  fail 'Supervisor broker must establish Herdr subscription before its final durable drain'
+grep -Fq '"subscription_started"' "$supervisor_broker" || \
+  fail 'Supervisor broker must wait for Herdr subscription acknowledgement'
+grep -Fq 'candidate.reconciled' "$supervisor_broker" || \
+  fail 'Supervisor broker must close R5 only from explicit stale-candidate evidence'
+for rule in R1 R2 R3 R4 R5; do
+  grep -Fq "\"$rule\":" "$supervisor_control" || \
+    fail "Supervisor AuditPacket missing deterministic rule contract: $rule"
+done
+
+for pattern in \
+  'bounded AuditPacket' \
+  'read-only filesystem sandbox' \
+  'Herdr delivery' \
+  'không phải closure'; do
+  grep -Fq -- "$pattern" "$supervisor" || \
+    fail "supervisor.md missing autonomous runtime boundary: $pattern"
+done
+
+for pattern in \
+  'workspace: slp-control' \
+  'Supervisor responses are captured through the native Stop hook' \
+  '`pane.read` or `agent.read` as semantic input.' \
+  'must not claim continuous supervision' \
+  'work_item.revision_changed' \
+  'record_dependency_consumed' \
+  'record_candidate_reconciliation' \
+  'record_peer_signal_resolution' \
+  'record_dependency_consumption_resolution' \
+  'release_write_scope_claim' \
+  'write_scope.claimed/released' \
+  'autonomous E2E-08 state-machine integration test' \
+  'normative `rule_contract`' \
+  'R1: actual Peer response exists without an explicit Lead disposition' \
+  'bash scripts/e2e-autonomous-supervisor.sh <repository-name>'; do
+  grep -Fq -- "$pattern" "$supervisor_runtime_doc" || \
+    fail "SUPERVISOR_RUNTIME.md missing runtime contract: $pattern"
+done
+
+for tool_name in \
+  'record_lead_disposition' \
+  'record_work_item_revision' \
+  'record_peer_signal' \
+  'record_peer_signal_resolution' \
+  'record_candidate_reconciliation' \
+  'record_dependency_consumed' \
+  'record_dependency_consumption_resolution' \
+  'release_write_scope_claim'; do
+  grep -Fq -- "$tool_name" "$config" || \
+    fail "QiQi config missing SLP semantic runtime tool: $tool_name"
+done
+
+for invocation in \
+  'bash scripts/qiqi-supervisor-broker.sh' \
+  'bash scripts/qiqi-supervisor-broker.sh --supervise-once' \
+  'bash scripts/qiqi-supervisor-broker.sh --once'; do
+  grep -Fq -- "$invocation" "$supervisor_runtime_doc" || \
+    fail "SUPERVISOR_RUNTIME.md must invoke the non-executable broker launcher through bash: $invocation"
+done
+
 grep -Fq 'command: codex' "$routing" || fail 'Codex must resolve the native codex CLI'
+grep -Fq 'model: gpt-5.6-luna' "$routing" || \
+  fail 'codex-balanced route must use gpt-5.6-luna'
+grep -Fq 'save_snapshot_with_dispositions' "$mcp_project/task_graph_store.py" || \
+  fail 'TaskGraph graph decisions and Lead dispositions must commit atomically'
+grep -Fq 'record_lead_disposition_in_transaction' "$mcp_project/core.py" || \
+  fail 'SessionStore must expose transactional Lead disposition persistence'
+grep -Fq 'cannot be accepted without' "$mcp_project/task_graph_mcp.py" || \
+  fail 'TaskGraph accept must require an exact captured Peer turn'
+grep -Fq 'class BrokerInstanceLock' "$supervisor_broker" || \
+  fail 'Supervisor broker must enforce one process per state database'
+grep -Fq 'instance_lock.acquire()' "$supervisor_broker" || \
+  fail 'Supervisor broker main path must acquire the singleton lock'
+grep -Fq 'health_status = '\''retrying'\''' "$supervisor_broker" || \
+  fail 'Supervisor broker must persist retrying health state'
+grep -Fq 'retrying after supervision failure' "$supervisor_broker" || \
+  fail 'Supervisor broker must surface retry failures on stderr'
+grep -Fq 'result = asyncio.run(_drain_durable(broker, runtime))' "$supervisor_broker" || \
+  fail '--supervise-once must use the full durable drain loop'
+grep -Fq 'backfilled_from' "$mcp_project/core.py" || \
+  fail 'SessionStore schema upgrade must backfill legacy turns into peer.response events'
+grep -Fq 'does not match the captured Peer turn' "$mcp_project/core.py" || \
+  fail 'Lead disposition must reject Work Item provenance mismatches'
+grep -Fq 'requires owner and return_checkpoint' "$mcp_project/task_graph_runtime.py" || \
+  fail 'TaskGraph replan/block decisions must require owner + return checkpoint'
+grep -Fq 'partially created slp-control workspace' "$supervisor_control" || \
+  fail 'Supervisor control-plane creation must clean up provisional topology on failure'
+grep -Fq 'record_write_scope_recovery_release' "$mcp_project/core.py" || \
+  fail 'SessionStore must expose an explicit orphan write-claim recovery path'
+grep -Fq 'was retained for explicit recovery' "$mcp_project/server.py" || \
+  fail 'delegation cleanup must retain durable ownership when cleanup persistence is unconfirmed'
+grep -Fq 'cleanup_state = "workspace_close_unconfirmed"' "$mcp_project/server.py" || \
+  fail 'delegation shutdown failure must preserve captured semantic result with recovery metadata'
+grep -Fq '"write_claim_release_unconfirmed"' "$mcp_project/server.py" || \
+  fail 'durable claim-release failure must preserve captured semantic result with recovery metadata'
+grep -Fq 'consumption_event_seq:' "$supervisor_control" || \
+  fail 'R2 Lead wakeups must expose the exact dependency consumption sequence'
+grep -Fq 'write_claim_id:' "$supervisor_control" || \
+  fail 'R3 Lead wakeups must expose exact durable write-claim identifiers'
+grep -Fq 'record_dependency_consumption_resolution' "$mcp_project/core.py" || \
+  fail 'SessionStore must expose explicit R2 remediation evidence'
+grep -Fq 'candidate already has a terminal reconciliation' "$mcp_project/core.py" || \
+  fail 'terminal candidate reconciliation must remain terminal across later revisions'
+grep -Fq 'write_claim_recorded = False' "$mcp_project/server.py" || \
+  fail 'direct delegation must track whether the durable write claim was persisted'
+grep -Fq 'if write_claim_recorded:' "$mcp_project/server.py" || \
+  fail 'direct delegation must release durable claim when dispatch recording fails'
+grep -Fq 'State/phase/progress/evidence/disposition/report reconciliation' "$agents" || \
+  fail 'Lead Work Item policy must forbid revision bumps for state-only reconciliation'
 grep -Fq 'command: claude' "$routing" || fail 'Claude must resolve the native claude CLI'
 [[ "$(grep -Fc 'env: QIQI_WORK_ITEMS_DIR' "$routing")" -eq 2 ]] || \
   fail 'Codex and Claude must both declare QIQI_WORK_ITEMS_DIR additional_dirs'
@@ -124,7 +313,13 @@ for pattern in \
   'Peer judgment + Lead disposition' \
   'filesystem authorization' \
   'downstream Peer không cần và không được tự dereference sibling repo' \
-  'explicit `ACCEPT` / `REJECT`'; do
+  'explicit `ACCEPT` / `REJECT`' \
+  'record_work_item_revision' \
+  'record_peer_signal' \
+  'record_peer_signal_resolution' \
+  'record_candidate_reconciliation' \
+  'record_dependency_consumed' \
+  'write_scope.claimed/released'; do
   grep -Fq -- "$pattern" "$agents" || fail "AGENTS.md missing SLP Lead policy: $pattern"
 done
 
@@ -314,8 +509,12 @@ PY
 fi
 
 bash -n "$launcher"
+bash -n "$supervisor_launcher"
+bash -n "$supervisor_e2e"
 bash -n "$workspace_root/scripts/workspace-check.sh"
 python3 -m py_compile "$workspace_root/scripts/migrate-work-item-filenames-v27.py"
+python3 -m py_compile "$supervisor_broker"
+python3 -m py_compile "$supervisor_control"
 
 uv run --project "$mcp_project" python -m unittest discover -s "$mcp_project/tests" -v
 
