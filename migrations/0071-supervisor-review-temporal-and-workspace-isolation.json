@@ -1,5 +1,5 @@
 {
-  "version": 70,
+  "version": 71,
   "from_ref": "e331b2493e6a60dadfe1eb08d2ab48bd409ecf2f",
   "to_ref": "9a29be7c84a2698258cc0c7333f5611f26195cc1",
   "description": "fix tenth Codex review of autonomous Supervisor governance: evaluate dependency ACCEPT evidence as of the exact consumption sequence and preserve historical R2 violations, make candidate reconciliation immutable per stale turn and Work Item revision, reject TaskGraph acceptance of captured candidates that became stale while awaiting review inside the same graph/disposition transaction, and namespace the default Herdr session by workspace identity so independently installed workspaces do not collide on fixed control-agent names",

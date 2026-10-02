@@ -1,5 +1,5 @@
 {
-  "version": 71,
+  "version": 72,
   "from_ref": "29fe89ecde94ba1f62603578cd3311457a670862",
   "to_ref": "e45182f3b1db8cc9225ad0cd804196561f9382d0",
   "description": "fix eleventh Codex review of autonomous Supervisor governance: validate direct ACCEPT dispositions against the current Work Item revision under an immediate transaction, preserve workspace-scoped Herdr session defaults through the documented launcher, and encode R2 acceptance timing explicitly in durable case facts and Supervisor AuditPackets so a later ACCEPT cannot hide consume-before-accept violations",
