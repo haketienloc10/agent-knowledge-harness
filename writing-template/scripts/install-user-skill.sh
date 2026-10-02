@@ -261,6 +261,7 @@ def build_state(client, raw_root):
         "stage_fingerprint": None,
         "backup_parent": None,
         "backup_target": None,
+        "backup_fingerprint": None,
         "moved_aside": False,
         "installed": False,
         "installed_fingerprint": None,
@@ -378,11 +379,15 @@ def commit_one(state):
         if state["original_exists"]:
             os.rename(state["target"], state["backup_target"])
             state["moved_aside"] = True
+            state["backup_fingerprint"] = tree_fingerprint(
+                state["backup_target"]
+            )
 
             # Detect a race that changed the target between the pre-check and
-            # rename. The exact object moved aside must still match preflight.
+            # rename. Rollback can still restore the exact object moved aside,
+            # even when it no longer matches the preflight snapshot.
             if (
-                tree_fingerprint(state["backup_target"])
+                state["backup_fingerprint"]
                 != state["original_fingerprint"]
             ):
                 raise RuntimeError(
@@ -449,9 +454,14 @@ def rollback_one(state, errors, retained_backups):
             state["rollback_failed"] = True
             return
 
-        if tree_fingerprint(backup) != state["original_fingerprint"]:
+        expected_backup = state["backup_fingerprint"]
+        if (
+            expected_backup is None
+            or tree_fingerprint(backup) != expected_backup
+        ):
             errors.append(
-                f"{client}: rollback backup changed; retained at {backup}"
+                f"{client}: rollback backup changed after it was moved aside; "
+                f"retained at {backup}"
             )
             retained_backups.add(state["backup_parent"])
             state["rollback_failed"] = True
@@ -476,6 +486,7 @@ def rollback_one(state, errors, retained_backups):
         os.rmdir(state["backup_parent"])
         state["backup_parent"] = None
         state["backup_target"] = None
+        state["backup_fingerprint"] = None
 
 
 def cleanup_stage(state, warnings):
