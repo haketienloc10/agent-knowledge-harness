@@ -174,10 +174,12 @@ The runtime now emits/records the semantic inputs consumed by the deterministic 
   verifies the old writer is terminated or intentionally abandoned,
   `release_write_scope_claim(claim_id, repository, reason)` records an explicit recovery release
   instead of auto-expiring ownership. If a semantic Peer result was already captured and persisted
-  before shutdown failed, delegation still returns that exact result plus
-  `cleanup_state=workspace_close_unconfirmed`, the durable `write_claim_id`,
-  `write_claim_repository`, workspace locator, and recovery action; cleanup failure does not
-  discard the candidate or turn it into an executor exception;
+  before cleanup failed, delegation still returns that exact result plus durable recovery locators.
+  Unconfirmed workspace shutdown returns `cleanup_state=workspace_close_unconfirmed`; a confirmed
+  shutdown whose `write_scope.released` persistence fails returns
+  `cleanup_state=write_claim_release_unconfirmed`. Both include the durable `write_claim_id`,
+  `write_claim_repository`, workspace locator, and recovery action; neither cleanup failure
+  discards the candidate or turns it into an executor exception;
 - explicit Lead `accept` also emits `candidate.accepted`; any explicit Work Item id/revision
   passed with a disposition must exactly match the canonical locator captured in that turn's
   TaskPacket or the write fails closed;
