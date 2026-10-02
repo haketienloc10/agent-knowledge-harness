@@ -31,6 +31,19 @@ done
   exit 66
 }
 
+command -v python3 >/dev/null 2>&1 || {
+  printf 'ERROR: missing command: python3\n' >&2
+  exit 69
+}
+
+resolve_path() {
+  python3 - "$1" <<'PY'
+import os
+import sys
+print(os.path.realpath(os.path.abspath(os.path.expanduser(sys.argv[1]))))
+PY
+}
+
 preflight_root() {
   local client="$1" root="$2"
   local probe="$root"
@@ -116,17 +129,6 @@ reserve_backup_path() {
   printf -v "$result_var" '%s' "$placeholder"
 }
 
-rollback_target() {
-  local target="$1" backup="$2" had_original="$3"
-
-  if [[ -e "$target" || -L "$target" ]]; then
-    rm -rf "$target" || true
-  fi
-  if [[ "$had_original" == "1" && -n "$backup" && -d "$backup" ]]; then
-    mv "$backup" "$target" || true
-  fi
-}
-
 commit_staged() {
   local client="$1" root="$2" stage="$3" backup="$4" had_original="$5"
   local target="$root/$name"
@@ -138,11 +140,15 @@ commit_staged() {
     fi
   fi
 
+  # A target appearing here means a race or an alias escaped preflight. Do not
+  # let mv treat the existing directory as a destination and create ste-vi/ste-vi.
+  if [[ -e "$target" || -L "$target" ]]; then
+    printf 'ERROR: %s skill target appeared during install: %s\n' "$client" "$target" >&2
+    return 1
+  fi
+
   if ! mv "$stage/$name" "$target"; then
     printf 'ERROR: cannot install staged %s skill: %s\n' "$client" "$target" >&2
-    if [[ "$had_original" == "1" && -d "$backup" ]]; then
-      mv "$backup" "$target" || true
-    fi
     return 1
   fi
 
@@ -155,55 +161,109 @@ preflight_root 'Claude' "$claude_root"
 preflight_skill 'Codex' "$codex_root"
 preflight_skill 'Claude' "$claude_root"
 
+codex_resolved_root="$(resolve_path "$codex_root")"
+claude_resolved_root="$(resolve_path "$claude_root")"
+codex_resolved_target="$(resolve_path "$codex_root/$name")"
+claude_resolved_target="$(resolve_path "$claude_root/$name")"
+
+if [[ "$codex_resolved_root" == "$claude_resolved_root" || \
+      "$codex_resolved_target" == "$claude_resolved_target" ]]; then
+  printf 'ERROR: Codex and Claude skill destinations alias the same path: %s\n' \
+    "$codex_resolved_target" >&2
+  exit 78
+fi
+
 codex_stage=""
 claude_stage=""
 codex_backup=""
 claude_backup=""
 codex_had_original=0
 claude_had_original=0
+transaction_complete=0
+
+if [[ -d "$codex_root/$name" ]]; then
+  codex_had_original=1
+fi
+if [[ -d "$claude_root/$name" ]]; then
+  claude_had_original=1
+fi
+
+rollback_one() {
+  local target="$1" backup="$2" had_original="$3" stage="$4"
+
+  if [[ "$had_original" == "1" ]]; then
+    if [[ -n "$backup" && -d "$backup" ]]; then
+      if [[ -e "$target" || -L "$target" ]]; then
+        rm -rf "$target" || return 1
+      fi
+      mv "$backup" "$target" || return 1
+    fi
+    return 0
+  fi
+
+  # For a previously absent target, remove it only if its staged source has
+  # already been consumed. That identifies a partial commit without touching
+  # an untouched destination during a staging failure.
+  if [[ -z "$stage" || ! -e "$stage/$name" ]]; then
+    if [[ -e "$target" || -L "$target" ]]; then
+      rm -rf "$target" || return 1
+    fi
+  fi
+}
 
 cleanup() {
+  local status=$?
+  set +e
+  trap - EXIT HUP INT TERM
+
+  if [[ "$transaction_complete" != "1" ]]; then
+    # Reverse commit order.
+    rollback_one "$claude_root/$name" "$claude_backup" "$claude_had_original" "$claude_stage"
+    rollback_one "$codex_root/$name" "$codex_backup" "$codex_had_original" "$codex_stage"
+  fi
+
   if [[ -n "$codex_stage" && -d "$codex_stage" ]]; then
     rm -rf "$codex_stage"
   fi
   if [[ -n "$claude_stage" && -d "$claude_stage" ]]; then
     rm -rf "$claude_stage"
   fi
-  if [[ -n "$codex_backup" && -d "$codex_backup" ]]; then
-    rm -rf "$codex_backup"
+
+  if [[ "$transaction_complete" == "1" ]]; then
+    if [[ -n "$codex_backup" && -d "$codex_backup" ]]; then
+      rm -rf "$codex_backup"
+    fi
+    if [[ -n "$claude_backup" && -d "$claude_backup" ]]; then
+      rm -rf "$claude_backup"
+    fi
   fi
-  if [[ -n "$claude_backup" && -d "$claude_backup" ]]; then
-    rm -rf "$claude_backup"
-  fi
+
+  exit "$status"
 }
 trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 # Stage both complete copies first. This verifies that both roots are writable
 # before either installed skill is touched.
 stage_skill 'Codex' "$codex_root" codex_stage
 stage_skill 'Claude' "$claude_root" claude_stage
 
-if [[ -d "$codex_root/$name" ]]; then
-  codex_had_original=1
+if [[ "$codex_had_original" == "1" ]]; then
   reserve_backup_path "$codex_root" codex_backup
 fi
-if [[ -d "$claude_root/$name" ]]; then
-  claude_had_original=1
+if [[ "$claude_had_original" == "1" ]]; then
   reserve_backup_path "$claude_root" claude_backup
 fi
 
-# Commit Codex, then Claude. Keep Codex backup until Claude succeeds so a
-# second-client failure can roll back the first client.
-if ! commit_staged 'Codex' "$codex_root" "$codex_stage" "$codex_backup" "$codex_had_original"; then
-  exit 1
-fi
+commit_staged 'Codex' "$codex_root" "$codex_stage" "$codex_backup" "$codex_had_original"
 codex_stage=""
 
-if ! commit_staged 'Claude' "$claude_root" "$claude_stage" "$claude_backup" "$claude_had_original"; then
-  rollback_target "$codex_root/$name" "$codex_backup" "$codex_had_original"
-  exit 1
-fi
+commit_staged 'Claude' "$claude_root" "$claude_stage" "$claude_backup" "$claude_had_original"
 claude_stage=""
+
+transaction_complete=1
 
 if [[ -n "$codex_backup" && -d "$codex_backup" ]]; then
   rm -rf "$codex_backup"
@@ -214,7 +274,7 @@ fi
 codex_backup=""
 claude_backup=""
 
-trap - EXIT
+trap - EXIT HUP INT TERM
 printf 'Codex skill installed: %s/SKILL.md\n' "$codex_root/$name"
 printf 'Claude skill installed: %s/SKILL.md\n' "$claude_root/$name"
 printf 'Open a fresh agent session if the skill is not already visible in the skills list.\n'
