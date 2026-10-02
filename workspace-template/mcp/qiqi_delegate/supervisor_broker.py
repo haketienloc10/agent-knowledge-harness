@@ -1141,34 +1141,73 @@ async def _drain_durable(
         "delivery_failures": 0,
     }
     last_broker_result: dict[str, int] | None = None
-    while True:
-        broker_result = broker.process_pending(limit=BROKER_BATCH_LIMIT)
-        runtime_result = await runtime.handle_pending_cases(limit=SUPERVISOR_BATCH_LIMIT)
-        last_broker_result = broker_result
+
+    def accumulate_broker(result: dict[str, int]) -> None:
+        nonlocal last_broker_result
+        last_broker_result = result
         for key in broker_totals:
-            broker_totals[key] += int(broker_result[key])
-        for key in supervisor_totals:
-            supervisor_totals[key] += int(runtime_result[key])
-        if runtime_result["review_failures"] or runtime_result["delivery_failures"]:
-            raise RuntimeError(
-                "Supervisor processing left retryable case/delivery failures"
+            broker_totals[key] += int(result[key])
+
+    while True:
+        # Replay the complete durable semantic log before asking the Supervisor to
+        # review any resulting case. Otherwise an OPEN near one batch boundary can
+        # be reviewed before its immediately-following CLOSE event is replayed.
+        while True:
+            broker_result = broker.process_pending(limit=BROKER_BATCH_LIMIT)
+            accumulate_broker(broker_result)
+            if broker_result["processed"] < BROKER_BATCH_LIMIT:
+                break
+
+        while True:
+            runtime_result = await runtime.handle_pending_cases(
+                limit=SUPERVISOR_BATCH_LIMIT
             )
-        if (
-            broker_result["processed"] < BROKER_BATCH_LIMIT
-            and runtime_result["review_attempted"] < SUPERVISOR_BATCH_LIMIT
-            and runtime_result["delivery_attempted"] < SUPERVISOR_BATCH_LIMIT
-        ):
-            broker.mark_healthy()
-            assert last_broker_result is not None
-            return {
-                "broker": {
-                    **broker_totals,
-                    "from_seq": last_broker_result["from_seq"],
-                    "last_processed_seq": last_broker_result["last_processed_seq"],
-                },
-                "supervisor": supervisor_totals,
-                "health": broker.health_state(),
-            }
+            for key in supervisor_totals:
+                supervisor_totals[key] += int(runtime_result[key])
+            if runtime_result["review_failures"] or runtime_result["delivery_failures"]:
+                raise RuntimeError(
+                    "Supervisor processing left retryable case/delivery failures"
+                )
+            if (
+                runtime_result["review_attempted"] < SUPERVISOR_BATCH_LIMIT
+                and runtime_result["delivery_attempted"] < SUPERVISOR_BATCH_LIMIT
+            ):
+                break
+
+        # Supervision/delivery may itself persist semantic evidence. Probe once after
+        # the review phase; if anything new appeared, loop back and fully replay it
+        # before another review phase.
+        probe = broker.process_pending(limit=BROKER_BATCH_LIMIT)
+        accumulate_broker(probe)
+        if probe["processed"] != 0:
+            continue
+
+        broker.mark_healthy()
+        assert last_broker_result is not None
+        return {
+            "broker": {
+                **broker_totals,
+                "from_seq": last_broker_result["from_seq"],
+                "last_processed_seq": last_broker_result["last_processed_seq"],
+            },
+            "supervisor": supervisor_totals,
+            "health": broker.health_state(),
+        }
+
+
+def _mark_retrying_best_effort(
+    broker: SupervisorBroker,
+    error: BaseException,
+) -> None:
+    try:
+        broker.mark_retrying(error)
+    except sqlite3.DatabaseError as health_error:
+        print(
+            "[slp-supervisor] could not persist retry health after SQLite failure: "
+            f"{type(health_error).__name__}: {health_error}",
+            file=sys.stderr,
+            flush=True,
+        )
 
 
 async def serve(
@@ -1201,11 +1240,12 @@ async def serve(
         except (
             EOFError,
             OSError,
+            sqlite3.DatabaseError,
             HerdrSubscriptionError,
             RuntimeError,
             ValueError,
         ) as exc:
-            broker.mark_retrying(exc)
+            _mark_retrying_best_effort(broker, exc)
             print(
                 "[slp-supervisor] retrying after supervision failure: "
                 f"{type(exc).__name__}: {exc}",
@@ -1246,12 +1286,14 @@ def main(argv: list[str] | None = None) -> int:
     workspace_root = default_workspace_root()
     db_path = (args.db or default_state_db()).expanduser().resolve()
     broker = SupervisorBroker(db_path)
-    if args.once:
-        print(json.dumps(broker.process_pending(), sort_keys=True))
-        return 0
-
     instance_lock = BrokerInstanceLock(db_path)
     instance_lock.acquire()
+    if args.once:
+        try:
+            print(json.dumps(broker.process_pending(), sort_keys=True))
+            return 0
+        finally:
+            instance_lock.release()
 
     session = (
         args.session
@@ -1277,8 +1319,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.supervise_once:
         try:
             result = asyncio.run(_drain_durable(broker, runtime))
-        except (RuntimeError, ValueError, OSError) as exc:
-            broker.mark_retrying(exc)
+        except (RuntimeError, ValueError, OSError, sqlite3.DatabaseError) as exc:
+            _mark_retrying_best_effort(broker, exc)
             print(
                 "[slp-supervisor] supervise-once failed: "
                 f"{type(exc).__name__}: {exc}",
@@ -1287,6 +1329,7 @@ def main(argv: list[str] | None = None) -> int:
             )
             raise
         print(json.dumps(result, sort_keys=True))
+        instance_lock.release()
         return 0
 
     socket_path = resolve_herdr_socket(
@@ -1305,6 +1348,8 @@ def main(argv: list[str] | None = None) -> int:
         )
     except KeyboardInterrupt:
         return 130
+    finally:
+        instance_lock.release()
     return 0
 
 
