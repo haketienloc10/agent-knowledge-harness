@@ -918,7 +918,6 @@ class SupervisorBroker:
                 case["rule"] == "R4"
                 and case.get("turn_id") == turn_id
                 and case["details"].get("signal") == signal
-                and case["details"].get("runtime_blocked") is not True
             ),
         )
         return 0, closed
