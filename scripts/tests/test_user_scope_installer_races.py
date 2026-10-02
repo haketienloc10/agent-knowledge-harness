@@ -144,6 +144,80 @@ class UserScopeInstallerRaceTests(unittest.TestCase):
                 codex.read_text(encoding="utf-8"),
             )
 
+    def test_rules_success_retains_backup_for_late_descriptor_write(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            template = root / "user-rules-template"
+            shutil.copytree(REPO_ROOT / "user-rules-template", template)
+            script = template / "scripts" / "install-user-rules.sh"
+            text = script.read_text(encoding="utf-8")
+            text = replace_once(
+                text,
+                """preserved_backups = set()
+completed_backups = set()
+transaction_complete = False
+""",
+                """preserved_backups = set()
+completed_backups = set()
+transaction_complete = False
+late_descriptor_fd = None
+""",
+                "rules success descriptor state",
+            )
+            text = replace_once(
+                text,
+                """                if text is not None:
+                    os.replace(target, backup)
+""",
+                """                if text is not None:
+                    if client == "Claude":
+                        late_descriptor_fd = os.open(
+                            target, os.O_WRONLY | os.O_APPEND
+                        )
+                    os.replace(target, backup)
+""",
+                "rules success descriptor open",
+            )
+            text = replace_once(
+                text,
+                """        transaction_complete = True
+""",
+                """        transaction_complete = True
+        if late_descriptor_fd is not None:
+            os.write(late_descriptor_fd, b"\\nlate-success-descriptor-write\\n")
+            os.fsync(late_descriptor_fd)
+            os.close(late_descriptor_fd)
+            late_descriptor_fd = None
+""",
+                "rules success descriptor write",
+            )
+            script.write_text(text, encoding="utf-8")
+
+            claude = root / "CLAUDE.md"
+            codex = root / "AGENTS.md"
+            claude.write_text("claude-original\n", encoding="utf-8")
+            codex.write_text("codex-original\n", encoding="utf-8")
+
+            result = self.run_installer(
+                script,
+                "--claude-file",
+                str(claude),
+                "--codex-file",
+                str(codex),
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("descriptor-safe recovery", result.stderr)
+            backups = list(root.glob(".akh-rules.backup.*"))
+            self.assertGreaterEqual(len(backups), 2)
+            self.assertTrue(
+                any(
+                    "late-success-descriptor-write"
+                    in backup.read_text(encoding="utf-8")
+                    for backup in backups
+                )
+            )
+
     def test_rules_open_descriptor_write_survives_rollback_quarantine(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -287,6 +361,83 @@ class UserScopeInstallerRaceTests(unittest.TestCase):
 
         script.write_text(text, encoding="utf-8")
         return script
+
+    def test_skill_success_retains_backup_for_late_descriptor_write(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            template = root / "writing-template"
+            shutil.copytree(REPO_ROOT / "writing-template", template)
+            script = template / "scripts" / "install-user-skill.sh"
+            codex_root = root / "codex-skills"
+            claude_root = root / "claude-skills"
+
+            baseline = self.run_installer(
+                script,
+                "--codex-root",
+                str(codex_root),
+                "--claude-root",
+                str(claude_root),
+            )
+            self.assertEqual(baseline.returncode, 0, baseline.stderr)
+
+            text = script.read_text(encoding="utf-8")
+            text = replace_once(
+                text,
+                """        if state["original_exists"]:
+            rename_noreplace(state["target"], state["backup_target"])
+""",
+                """        if state["original_exists"]:
+            if state["client"] == "Codex":
+                state["test_descriptor_fd"] = os.open(
+                    os.path.join(state["target"], "SKILL.md"),
+                    os.O_WRONLY | os.O_APPEND,
+                )
+            rename_noreplace(state["target"], state["backup_target"])
+""",
+                "skill success descriptor open",
+            )
+            text = replace_once(
+                text,
+                """        transaction_complete = True
+
+        # Block managed signals while deleting rollback material.
+""",
+                """        transaction_complete = True
+        for state in states:
+            descriptor_fd = state.get("test_descriptor_fd")
+            if descriptor_fd is not None:
+                os.write(
+                    descriptor_fd,
+                    b"\\nlate-success-descriptor-write\\n",
+                )
+                os.fsync(descriptor_fd)
+                os.close(descriptor_fd)
+                state["test_descriptor_fd"] = None
+
+        # Block managed signals while deleting rollback material.
+""",
+                "skill success descriptor write",
+            )
+            script.write_text(text, encoding="utf-8")
+
+            result = self.run_installer(
+                script,
+                "--codex-root",
+                str(codex_root),
+                "--claude-root",
+                str(claude_root),
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("descriptor-safe recovery", result.stderr)
+            retained = list(
+                codex_root.glob(".ste-vi.backup.*/ste-vi/SKILL.md")
+            )
+            self.assertEqual(len(retained), 1)
+            self.assertIn(
+                "late-success-descriptor-write",
+                retained[0].read_text(encoding="utf-8"),
+            )
 
     def test_skill_open_descriptor_write_survives_quarantine(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
