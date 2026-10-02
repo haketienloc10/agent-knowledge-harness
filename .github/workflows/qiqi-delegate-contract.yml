@@ -321,3 +321,40 @@ jobs:
           fi
           test "$(cat "$t/rollback-claude.md")" = "external-writer"
           test "$(cat "$t/rollback-codex.md")" = "codex-original"
+
+
+          skill_race_template="$t/skill-race-template"
+          cp -R writing-template "$skill_race_template"
+          python3 - "$skill_race_template/scripts/install-user-skill.sh" <<'PY'
+          from pathlib import Path
+          import sys
+
+          path = Path(sys.argv[1])
+          text = path.read_text(encoding="utf-8")
+          needle = '''        rename_noreplace(state["stage_target"], state["target"])
+'''
+          injected = '''        rename_noreplace(state["stage_target"], state["target"])
+        if state["client"] == "Codex":
+            with open(
+                os.path.join(state["target"], "SKILL.md"),
+                "w",
+                encoding="utf-8",
+            ) as handle:
+                handle.write("external-writer-skill\\n")
+'''
+          if text.count(needle) != 1:
+              raise SystemExit("skill race injection anchor mismatch")
+          path.write_text(text.replace(needle, injected), encoding="utf-8")
+          PY
+
+          skill_codex_root="$t/skill-race-codex"
+          skill_claude_root="$t/skill-race-claude"
+          if bash "$skill_race_template/scripts/install-user-skill.sh" \
+            --codex-root "$skill_codex_root" \
+            --claude-root "$skill_claude_root"; then
+            echo 'post-publish external skill rewrite must abort transaction' >&2
+            exit 1
+          fi
+          test -f "$skill_codex_root/ste-vi/SKILL.md"
+          test "$(cat "$skill_codex_root/ste-vi/SKILL.md")" = "external-writer-skill"
+          test ! -e "$skill_claude_root/ste-vi"
