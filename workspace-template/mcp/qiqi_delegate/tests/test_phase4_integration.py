@@ -91,6 +91,57 @@ class Phase4SemanticStoreTests(unittest.TestCase):
             disposition["disposition_id"],
         )
 
+    def test_direct_defer_requires_and_persists_owner_checkpoint(self) -> None:
+        packet = build_task_packet(
+            objective="Produce actionable response.",
+            scope=["repo work"],
+            acceptance_criteria=["lead closes loop"],
+        )
+        self.store.record_turn(
+            turn_id="turn-defer",
+            session_id="session-defer",
+            repository="repo-a",
+            agent="claude",
+            route="claude-balanced",
+            state="settled",
+            native_turn_id=None,
+            packet=packet,
+            agent_response="DEPENDENCY_REQUEST: need upstream contract",
+        )
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "defer disposition requires owner and return_checkpoint",
+        ):
+            self.store.record_lead_disposition(
+                turn_id="turn-defer",
+                action="defer",
+                reason="waiting for upstream contract",
+            )
+
+        disposition = self.store.record_lead_disposition(
+            turn_id="turn-defer",
+            action="defer",
+            reason="waiting for upstream contract",
+            owner="lead",
+            return_checkpoint="after upstream contract is accepted",
+        )
+        self.assertEqual(disposition["owner"], "lead")
+        self.assertEqual(
+            disposition["return_checkpoint"],
+            "after upstream contract is accepted",
+        )
+        event = [
+            item
+            for item in self.store.list_slp_events()
+            if item["event_type"] == "lead.disposition"
+        ][0]
+        self.assertEqual(event["payload"]["owner"], "lead")
+        self.assertEqual(
+            event["payload"]["return_checkpoint"],
+            "after upstream contract is accepted",
+        )
+
     def test_disposition_rejects_work_item_override_mismatch(self) -> None:
         packet = build_task_packet(
             objective="Produce tracked candidate.",
@@ -820,6 +871,11 @@ class TaskGraphPhase4IntegrationTests(unittest.IsolatedAsyncioTestCase):
                 packet=source_packet,
                 agent_response="upstream evidence",
             )
+            store.record_lead_disposition(
+                turn_id="turn-upstream-failure",
+                action="accept",
+                reason="upstream accepted before downstream dispatch",
+            )
             consumer_packet = build_task_packet(
                 objective="Consume upstream contract.",
                 scope=["downstream"],
@@ -863,6 +919,69 @@ class TaskGraphPhase4IntegrationTests(unittest.IsolatedAsyncioTestCase):
                 "turn-upstream-failure",
             )
             self.assertIsNone(events[0]["turn_id"])
+
+    async def test_legacy_satisfied_dependency_without_accept_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            store = SessionStore(Path(temp) / "qiqi_delegate.sqlite3")
+            source_packet = build_task_packet(
+                objective="Legacy upstream result.",
+                scope=["contract"],
+                acceptance_criteria=["contract evidence"],
+            )
+            store.record_turn(
+                turn_id="turn-legacy-upstream",
+                session_id="session-legacy-upstream",
+                repository="upstream",
+                agent="claude",
+                route="claude-balanced",
+                state="settled",
+                native_turn_id=None,
+                packet=source_packet,
+                agent_response="legacy upstream evidence",
+            )
+            node = GraphNode(
+                node_id="downstream",
+                repository="downstream",
+                task_packet=build_task_packet(
+                    objective="Consume upstream contract.",
+                    scope=["downstream"],
+                    acceptance_criteria=["downstream evidence"],
+                ),
+                depends_on=("upstream",),
+                route="claude-balanced",
+            )
+            graph_store = MagicMock()
+            graph_store.get_node.return_value = {"turn_id": "turn-legacy-upstream"}
+            graph_runtime = SimpleNamespace(store=graph_store)
+            delegate = AsyncMock(
+                return_value={
+                    "session_id": "session-downstream",
+                    "turn_id": "turn-downstream",
+                    "state": "settled",
+                    "agent_response": "must not run",
+                }
+            )
+
+            with (
+                patch.object(task_graph_mcp, "_store", store),
+                patch.object(task_graph_mcp, "_graph_runtime", graph_runtime),
+                patch.object(task_graph_mcp, "delegate_repo_task", delegate),
+            ):
+                with self.assertRaisesRegex(
+                    RuntimeError,
+                    "lacks an explicit ACCEPT disposition",
+                ):
+                    await task_graph_mcp._execute_repo_task(
+                        node,
+                        session_id=None,
+                        graph_run_id="legacy-graph",
+                    )
+
+            delegate.assert_not_awaited()
+            self.assertNotIn(
+                "dependency.consumed",
+                [event["event_type"] for event in store.list_slp_events()],
+            )
 
 
 class _AutonomousE2EControlPlane:
