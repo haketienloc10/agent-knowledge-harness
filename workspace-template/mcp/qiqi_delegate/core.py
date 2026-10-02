@@ -773,6 +773,7 @@ class SessionStore:
                 case_id TEXT PRIMARY KEY,
                 verdict TEXT NOT NULL CHECK (verdict IN ('issue', 'no_issue')),
                 finding_json TEXT NOT NULL,
+                delivery_reserved_at_ns INTEGER,
                 delivered_to_lead_at_ns INTEGER,
                 created_at_ns INTEGER NOT NULL,
                 updated_at_ns INTEGER NOT NULL,
@@ -835,6 +836,16 @@ class SessionStore:
             "CREATE INDEX IF NOT EXISTS supervisor_cases_turn_idx "
             "ON supervisor_cases(turn_id, status)"
         )
+        supervisor_finding_columns = {
+            row["name"] if isinstance(row, sqlite3.Row) else row[1]
+            for row in conn.execute("PRAGMA table_info(supervisor_findings)").fetchall()
+        }
+        if "delivery_reserved_at_ns" not in supervisor_finding_columns:
+            conn.execute(
+                "ALTER TABLE supervisor_findings "
+                "ADD COLUMN delivery_reserved_at_ns INTEGER"
+            )
+
         supervisor_control_columns = {
             row["name"] if isinstance(row, sqlite3.Row) else row[1]
             for row in conn.execute("PRAGMA table_info(supervisor_control_plane)").fetchall()
