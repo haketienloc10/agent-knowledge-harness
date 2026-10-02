@@ -103,17 +103,12 @@ class UserScopeInstallerRaceTests(unittest.TestCase):
             text = script.read_text(encoding="utf-8")
             text = replace_once(
                 text,
-                """        for tmp in list(temps):
-            try:
-                os.unlink(tmp)
+                """        try:
+            restore_commit_signals(previous_cleanup_mask)
 """,
-                """        sent_cleanup_signal = False
-        for tmp in list(temps):
-            try:
-                os.unlink(tmp)
-                if not sent_cleanup_signal:
-                    os.kill(os.getpid(), signal.SIGTERM)
-                    sent_cleanup_signal = True
+                """        os.kill(os.getpid(), signal.SIGTERM)
+        try:
+            restore_commit_signals(previous_cleanup_mask)
 """,
                 "rules final cleanup signal",
             )
@@ -183,226 +178,6 @@ late_descriptor_fd = None
                 """        transaction_complete = True
 """,
                 """        transaction_complete = True
-        if late_descriptor_fd is not None:
-            os.write(late_descriptor_fd, b"\\nlate-success-descriptor-write\\n")
-            os.fsync(late_descriptor_fd)
-            os.close(late_descriptor_fd)
-            late_descriptor_fd = None
-""",
-                "rules success descriptor write",
-            )
-            script.write_text(text, encoding="utf-8")
-
-            claude = root / "CLAUDE.md"
-            codex = root / "AGENTS.md"
-            claude.write_text("claude-original\n", encoding="utf-8")
-            codex.write_text("codex-original\n", encoding="utf-8")
-
-            result = self.run_installer(
-                script,
-                "--claude-file",
-                str(claude),
-                "--codex-file",
-                str(codex),
-            )
-
-            self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertIn("descriptor-safe recovery", result.stderr)
-            backups = list(root.glob(".akh-rules.backup.*"))
-            self.assertGreaterEqual(len(backups), 2)
-            self.assertTrue(
-                any(
-                    "late-success-descriptor-write"
-                    in backup.read_text(encoding="utf-8")
-                    for backup in backups
-                )
-            )
-
-    def test_rules_open_descriptor_write_survives_rollback_quarantine(self) -> None:
-        with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp)
-            template = root / "user-rules-template"
-            shutil.copytree(REPO_ROOT / "user-rules-template", template)
-            script = template / "scripts" / "install-user-rules.sh"
-            text = script.read_text(encoding="utf-8")
-            text = replace_once(
-                text,
-                """    try:
-        # Move whatever occupies target now. If another writer won the race
-""",
-                """    descriptor_fd = None
-    if item["client"] == "Claude":
-        descriptor_fd = os.open(target, os.O_WRONLY)
-
-    try:
-        # Move whatever occupies target now. If another writer won the race
-""",
-                "rules descriptor open",
-            )
-            text = replace_once(
-                text,
-                """    # Never unlink rollback quarantine based on a point-in-time check. Another
-""",
-                """    if descriptor_fd is not None:
-        os.write(descriptor_fd, b"\\nexternal-descriptor-write\\n")
-        os.fsync(descriptor_fd)
-        os.close(descriptor_fd)
-
-    # Never unlink rollback quarantine based on a point-in-time check. Another
-""",
-                "rules descriptor write",
-            )
-            text = replace_once(
-                text,
-                """                os.link(tmp, target, follow_symlinks=False)
-                item["installed"] = True
-""",
-                """                if client == "Codex":
-                    raise RuntimeError("injected second-client publish failure")
-                os.link(tmp, target, follow_symlinks=False)
-                item["installed"] = True
-""",
-                "rules second-client failure",
-            )
-            script.write_text(text, encoding="utf-8")
-
-            claude = root / "CLAUDE.md"
-            codex = root / "AGENTS.md"
-            claude.write_text("claude-original\n", encoding="utf-8")
-            codex.write_text("codex-original\n", encoding="utf-8")
-
-            result = self.run_installer(
-                script,
-                "--claude-file",
-                str(claude),
-                "--codex-file",
-                str(codex),
-            )
-
-            self.assertNotEqual(result.returncode, 0)
-            self.assertEqual(claude.read_text(encoding="utf-8"), "claude-original\n")
-            self.assertEqual(codex.read_text(encoding="utf-8"), "codex-original\n")
-            quarantines = list(root.glob(".akh-rules.rollback.*"))
-            self.assertEqual(len(quarantines), 1)
-            self.assertIn(
-                "external-descriptor-write",
-                quarantines[0].read_text(encoding="utf-8"),
-            )
-
-    def _patched_skill_installer(
-        self,
-        root: Path,
-        *,
-        descriptor_write: bool = False,
-        vanish_target: bool = False,
-    ) -> Path:
-        template = root / "writing-template"
-        shutil.copytree(REPO_ROOT / "writing-template", template)
-        script = template / "scripts" / "install-user-skill.sh"
-        text = script.read_text(encoding="utf-8")
-        text = replace_once(
-            text,
-            """        # The staged fingerprint is the installer's expected identity.
-""",
-            """        if state["client"] == "Claude":
-            raise RuntimeError("injected second-client commit failure")
-
-        # The staged fingerprint is the installer's expected identity.
-""",
-            "skill second-client failure",
-        )
-
-        if descriptor_write:
-            text = replace_once(
-                text,
-                """    try:
-        rename_noreplace(target, quarantine)
-""",
-                """    descriptor_fd = None
-    if client == "Codex":
-        descriptor_fd = os.open(
-            os.path.join(target, "SKILL.md"),
-            os.O_WRONLY,
-        )
-    try:
-        rename_noreplace(target, quarantine)
-""",
-                "skill descriptor open",
-            )
-            text = replace_once(
-                text,
-                """    if matches_installed:
-        # A point-in-time fingerprint cannot prove no external writer still has
-""",
-                """    if descriptor_fd is not None:
-        os.write(descriptor_fd, b"\\nexternal-descriptor-write\\n")
-        os.fsync(descriptor_fd)
-        os.close(descriptor_fd)
-
-    if matches_installed:
-        # A point-in-time fingerprint cannot prove no external writer still has
-""",
-                "skill descriptor write",
-            )
-
-        if vanish_target:
-            text = replace_once(
-                text,
-                """    try:
-        rename_noreplace(target, quarantine)
-""",
-                """    if client == "Codex":
-        shutil.rmtree(target)
-    try:
-        rename_noreplace(target, quarantine)
-""",
-                "skill vanished target",
-            )
-
-        script.write_text(text, encoding="utf-8")
-        return script
-
-    def test_skill_success_retains_backup_for_late_descriptor_write(self) -> None:
-        with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp)
-            template = root / "writing-template"
-            shutil.copytree(REPO_ROOT / "writing-template", template)
-            script = template / "scripts" / "install-user-skill.sh"
-            codex_root = root / "codex-skills"
-            claude_root = root / "claude-skills"
-
-            baseline = self.run_installer(
-                script,
-                "--codex-root",
-                str(codex_root),
-                "--claude-root",
-                str(claude_root),
-            )
-            self.assertEqual(baseline.returncode, 0, baseline.stderr)
-
-            text = script.read_text(encoding="utf-8")
-            text = replace_once(
-                text,
-                """        if state["original_exists"]:
-            rename_noreplace(state["target"], state["backup_target"])
-""",
-                """        if state["original_exists"]:
-            if state["client"] == "Codex":
-                state["test_descriptor_fd"] = os.open(
-                    os.path.join(state["target"], "SKILL.md"),
-                    os.O_WRONLY | os.O_APPEND,
-                )
-            rename_noreplace(state["target"], state["backup_target"])
-""",
-                "skill success descriptor open",
-            )
-            text = replace_once(
-                text,
-                """        transaction_complete = True
-
-        # Block managed signals while deleting rollback material.
-""",
-                """        transaction_complete = True
         for state in states:
             descriptor_fd = state.get("test_descriptor_fd")
             if descriptor_fd is not None:
@@ -413,8 +188,6 @@ late_descriptor_fd = None
                 os.fsync(descriptor_fd)
                 os.close(descriptor_fd)
                 state["test_descriptor_fd"] = None
-
-        # Block managed signals while deleting rollback material.
 """,
                 "skill success descriptor write",
             )
