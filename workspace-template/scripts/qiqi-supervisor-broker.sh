@@ -16,6 +16,7 @@ command -v uv >/dev/null 2>&1 || {
 }
 
 export QIQI_WORKSPACE_ROOT="$workspace_root"
-export QIQI_HERDR_SESSION="${QIQI_HERDR_SESSION:-qiqi-delegate}"
 
+# Preserve an explicit QIQI_HERDR_SESSION from the caller, but do not synthesize a
+# global default here. supervisor_broker.py derives the default from workspace identity.
 exec uv run --project "$project_dir" python "$broker" "$@"
