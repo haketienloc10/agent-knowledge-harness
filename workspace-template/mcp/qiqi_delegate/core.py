@@ -32,6 +32,7 @@ SLP_EVENT_TYPES = frozenset(
         "candidate.accepted",
         "candidate.reconciled",
         "dependency.consumed",
+        "dependency.consumption_resolved",
         "write_scope.claimed",
         "write_scope.released",
         "work_item.revision_changed",
