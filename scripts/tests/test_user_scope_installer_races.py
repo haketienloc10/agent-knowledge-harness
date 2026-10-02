@@ -121,6 +121,8 @@ class UserScopeInstallerRaceTests(unittest.TestCase):
 
             claude = root / "CLAUDE.md"
             codex = root / "AGENTS.md"
+            claude.write_text("claude-original\n", encoding="utf-8")
+            codex.write_text("codex-original\n", encoding="utf-8")
             result = self.run_installer(
                 script,
                 "--claude-file",
