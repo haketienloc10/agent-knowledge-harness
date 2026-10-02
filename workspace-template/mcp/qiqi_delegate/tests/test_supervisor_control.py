@@ -658,6 +658,25 @@ class _PartialCreateFailureControlPlane(_RecordingHerdrControlPlane):
         await super()._start_agent(name, pane_id, args)
 
 
+class _CleanupFailureControlPlane(_PartialCreateFailureControlPlane):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.fail_close_once = True
+
+    async def _run(
+        self,
+        *args: str,
+        check: bool = True,
+        session: str | None = None,
+    ):
+        if args[:2] == ("workspace", "close") and self.fail_close_once:
+            self.fail_close_once = False
+            self.commands.append(tuple(args))
+            self.command_sessions.append(session)
+            return 1, "", "simulated close failure"
+        return await super()._run(*args, check=check, session=session)
+
+
 class HerdrControlPlaneCommandTests(unittest.IsolatedAsyncioTestCase):
     async def test_cli_command_timeout_terminates_stalled_process(self) -> None:
         class HangingProcess:
@@ -770,6 +789,65 @@ class HerdrControlPlaneTopologyTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(recovered["workspace_id"], "w-control")
             self.assertIn("lead", control.agent_names)
             self.assertIn("supervisor", control.agent_names)
+
+    async def test_failed_partial_cleanup_retains_provisional_topology(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            workspace = root / "workspace"
+            workspace.mkdir()
+            state_db = workspace / ".qiqi" / "state" / "qiqi_delegate.sqlite3"
+            control = _CleanupFailureControlPlane(
+                workspace_root=workspace,
+                state_db=state_db,
+                supervisor_home=root / "isolated-supervisor",
+            )
+
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "failed to clean up partially created slp-control workspace",
+            ):
+                await control.ensure_started()
+
+            provisional = control.store.get_control_plane()
+            self.assertIsNotNone(provisional)
+            self.assertEqual(provisional["workspace_id"], "w-control")
+            self.assertEqual(provisional["lead_pane_id"], "w-control:p1")
+            self.assertEqual(provisional["supervisor_pane_id"], "w-control:p2")
+
+            recovered = await control.ensure_started()
+            self.assertEqual(recovered["workspace_id"], "w-control")
+
+    async def test_old_session_topology_is_closed_in_stored_session(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            workspace = root / "workspace"
+            workspace.mkdir()
+            state_db = workspace / ".qiqi" / "state" / "qiqi_delegate.sqlite3"
+            supervisor_home = root / "isolated-supervisor"
+            control = _RecordingHerdrControlPlane(
+                workspace_root=workspace,
+                state_db=state_db,
+                supervisor_home=supervisor_home,
+                session="new-session",
+            )
+            control.agent_names.update({"lead", "supervisor"})
+            control.store.save_control_plane(
+                workspace_id="w-old",
+                lead_pane_id="w-old:p1",
+                supervisor_pane_id="w-old:p2",
+                herdr_session="old-session",
+                lead_model=DEFAULT_MODEL,
+                supervisor_model=DEFAULT_MODEL,
+                supervisor_home=supervisor_home,
+                supervisor_capture_dir=supervisor_home / "captures",
+                supervisor_capture_nonce="old-nonce",
+            )
+
+            state = await control.ensure_started()
+
+            close_index = control.commands.index(("workspace", "close", "w-old"))
+            self.assertEqual(control.command_sessions[close_index], "old-session")
+            self.assertEqual(state["herdr_session"], "new-session")
 
     async def test_partial_initial_creation_is_closed_before_retry(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
