@@ -736,6 +736,14 @@ class SupervisorBroker:
                 "consumer_node_id": event.get("node_id"),
                 "consumer_work_item_id": event.get("work_item_id"),
                 "consumer_work_item_revision": event.get("work_item_revision"),
+                "consumption_event_seq": int(event["seq"]),
+                "accepted_before_consumption": False,
+                "prior_disposition_action": (
+                    disposition["action"] if disposition is not None else None
+                ),
+                "prior_disposition_event_seq": (
+                    int(disposition["event_seq"]) if disposition is not None else None
+                ),
             },
             turn_id=source_turn_id,
             work_item_id=(
