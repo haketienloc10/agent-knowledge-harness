@@ -166,10 +166,33 @@ claude_resolved_root="$(resolve_path "$claude_root")"
 codex_resolved_target="$(resolve_path "$codex_root/$name")"
 claude_resolved_target="$(resolve_path "$claude_root/$name")"
 
-if [[ "$codex_resolved_root" == "$claude_resolved_root" || \
-      "$codex_resolved_target" == "$claude_resolved_target" ]]; then
-  printf 'ERROR: Codex and Claude skill destinations alias the same path: %s\n' \
-    "$codex_resolved_target" >&2
+path_contains() {
+  python3 - "$1" "$2" <<'PY'
+import os
+import sys
+
+parent, child = sys.argv[1:3]
+try:
+    contains = os.path.commonpath([parent, child]) == parent
+except ValueError:
+    contains = False
+sys.exit(0 if contains else 1)
+PY
+}
+
+# Client roots may not alias each other, and neither client's target may contain
+# the other client's root or target. Otherwise staging one client can create or
+# mutate the other client's target before the transaction begins.
+if [[ "$codex_resolved_root" == "$claude_resolved_root" ]] || \
+   path_contains "$codex_resolved_target" "$claude_resolved_root" || \
+   path_contains "$claude_resolved_target" "$codex_resolved_root" || \
+   path_contains "$codex_resolved_target" "$claude_resolved_target" || \
+   path_contains "$claude_resolved_target" "$codex_resolved_target"; then
+  printf 'ERROR: Codex and Claude skill destinations overlap after path resolution:\n' >&2
+  printf '  Codex root:   %s\n' "$codex_resolved_root" >&2
+  printf '  Codex target: %s\n' "$codex_resolved_target" >&2
+  printf '  Claude root:  %s\n' "$claude_resolved_root" >&2
+  printf '  Claude target:%s\n' "$claude_resolved_target" >&2
   exit 78
 fi
 
