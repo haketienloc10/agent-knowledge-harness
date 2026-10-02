@@ -393,6 +393,8 @@ def build_state(client, raw_root):
         "stage_parent": None,
         "stage_target": None,
         "stage_fingerprint": None,
+        "stage_content_fingerprint": None,
+        "no_op": False,
         "backup_parent": None,
         "backup_target": None,
         "backup_fingerprint": None,
@@ -488,10 +490,24 @@ def stage_skill(state, source_snapshot, source_snapshot_fingerprint):
         pass
 
     state["stage_fingerprint"] = tree_fingerprint(stage_target)
+    state["stage_content_fingerprint"] = tree_content_fingerprint(stage_target)
+
+
+def mark_noop_if_current(state):
+    if not state["original_exists"]:
+        return
+    assert_root_unchanged(state)
+    assert_target_unchanged(state)
+    assert_stage_unchanged(state)
+    if (
+        tree_content_fingerprint(state["target"])
+        == state["stage_content_fingerprint"]
+    ):
+        state["no_op"] = True
 
 
 def reserve_backup(state):
-    if not state["original_exists"]:
+    if state["no_op"] or not state["original_exists"]:
         return
     backup_parent = create_tracked_dir(
         state, "backup_parent", f".{name}.backup."
@@ -513,6 +529,18 @@ def assert_stage_unchanged(state):
 
 
 def commit_one(state):
+    if state["no_op"]:
+        assert_root_unchanged(state)
+        assert_target_unchanged(state)
+        if (
+            tree_content_fingerprint(state["target"])
+            != state["stage_content_fingerprint"]
+        ):
+            raise RuntimeError(
+                f"{state['client']} managed skill changed after no-op detection"
+            )
+        return
+
     assert_root_unchanged(state)
     assert_target_unchanged(state)
     assert_stage_unchanged(state)
@@ -830,8 +858,9 @@ def run():
             stage_skill(
                 state, source_snapshot, source_snapshot_fingerprint
             )
+            mark_noop_if_current(state)
 
-        # Reserve backup parents before commit so cleanup state is complete.
+        # Reserve backup parents only for clients that require replacement.
         for state in states:
             reserve_backup(state)
 
@@ -843,7 +872,17 @@ def run():
         # operation into a rollback attempt instead of a false success.
         for state in states:
             assert_root_unchanged(state)
-            if not target_matches_installed(state):
+            if state["no_op"]:
+                assert_target_unchanged(state)
+                if (
+                    tree_content_fingerprint(state["target"])
+                    != state["stage_content_fingerprint"]
+                ):
+                    raise RuntimeError(
+                        f"{state['client']} managed skill changed before "
+                        "transaction completion"
+                    )
+            elif not target_matches_installed(state):
                 raise RuntimeError(
                     f"{state['client']} installed skill changed before "
                     "transaction completion"
