@@ -1384,6 +1384,59 @@ class SessionStore:
                 payload={"signal": clean_signal, "reason": clean_reason},
             )
 
+    def assert_turn_current_for_acceptance_in_transaction(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        turn_id: str,
+    ) -> None:
+        clean_turn = self._optional_runtime_text(turn_id, "turn_id")
+        if clean_turn is None:
+            raise ValueError("turn_id must not be empty")
+        turn = conn.execute(
+            "SELECT task_packet_json FROM turns WHERE turn_id = ?",
+            (clean_turn,),
+        ).fetchone()
+        if turn is None:
+            raise RuntimeError(
+                "candidate acceptance requires an existing captured Peer turn: "
+                f"unknown turn_id={clean_turn!r}"
+            )
+        packet = json.loads(turn["task_packet_json"])
+        work_item_id, captured_revision = _work_item_ref_from_payload(packet)
+        if work_item_id is None or captured_revision is None:
+            return
+
+        latest = conn.execute(
+            "SELECT work_item_revision FROM slp_events "
+            "WHERE event_type = 'work_item.revision_changed' "
+            "AND work_item_id = ? ORDER BY seq DESC LIMIT 1",
+            (work_item_id,),
+        ).fetchone()
+        if latest is None:
+            return
+        current_revision = int(latest["work_item_revision"])
+        if current_revision <= captured_revision:
+            return
+
+        reconciliation = conn.execute(
+            "SELECT work_item_revision, payload_json FROM slp_events "
+            "WHERE event_type = 'candidate.reconciled' "
+            "AND turn_id = ? AND work_item_id = ? "
+            "AND work_item_revision = ? ORDER BY seq DESC LIMIT 1",
+            (clean_turn, work_item_id, current_revision),
+        ).fetchone()
+        if reconciliation is not None:
+            payload = json.loads(reconciliation["payload_json"])
+            if payload.get("resolution") == "revalidated":
+                return
+
+        raise RuntimeError(
+            "candidate acceptance requires current-revision evidence: "
+            f"turn_id={clean_turn!r}, captured_revision={captured_revision}, "
+            f"current_revision={current_revision}"
+        )
+
     def record_candidate_reconciliation(
         self,
         *,
@@ -1453,6 +1506,28 @@ class SessionStore:
                     "candidate reconciliation must target the latest recorded Work Item "
                     "revision: "
                     f"current={current_revision}, provided={clean_revision}"
+                )
+
+            existing = conn.execute(
+                "SELECT seq, payload_json FROM slp_events "
+                "WHERE event_type = 'candidate.reconciled' "
+                "AND turn_id = ? AND work_item_id = ? "
+                "AND work_item_revision = ? ORDER BY seq DESC LIMIT 1",
+                (clean_stale, clean_work_item_id, clean_revision),
+            ).fetchone()
+            if existing is not None:
+                existing_payload = json.loads(existing["payload_json"])
+                existing_resolution = existing_payload.get("resolution")
+                existing_replacement = existing_payload.get("replacement_turn_id")
+                if (
+                    existing_resolution == clean_resolution
+                    and existing_replacement == clean_replacement
+                ):
+                    return int(existing["seq"])
+                raise RuntimeError(
+                    "candidate reconciliation is immutable for one stale turn and "
+                    "Work Item revision: "
+                    f"existing={existing_resolution!r}, attempted={clean_resolution!r}"
                 )
 
             if clean_replacement is not None:
