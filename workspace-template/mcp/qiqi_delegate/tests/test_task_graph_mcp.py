@@ -680,6 +680,11 @@ class TaskGraphMcpTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload["review_required"], [])
         disposition = self.slp_store.get_lead_disposition("qiqi-turn-contracts")
         self.assertIsNotNone(disposition)
+        self.assertEqual(disposition["owner"], "lead")
+        self.assertEqual(
+            disposition["return_checkpoint"],
+            "after replacement graph is authored",
+        )
         self.assertIn("owner=lead", disposition["reason"])
         self.assertIn(
             "return_checkpoint=after replacement graph is authored",
