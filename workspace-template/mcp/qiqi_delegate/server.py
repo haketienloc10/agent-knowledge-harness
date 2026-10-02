@@ -1313,6 +1313,64 @@ async def record_dependency_consumed(
 
 @mcp.tool()
 @_public_tool_errors
+async def release_write_scope_claim(
+    claim_id: str,
+    repository: RepositoryName,
+    reason: str,
+) -> dict[str, Any]:
+    """Explicitly release one verified-abandoned durable repository write claim.
+
+    Use this only after the prior delegation process/session is known to be terminated
+    or intentionally abandoned. The runtime never auto-releases a durable claim solely
+    because a new process cannot observe its original owner.
+    """
+    repository = repository.strip()
+    if not repository:
+        raise ValueError("repository must not be empty")
+    repo = _resolve_repo(repository)
+    async with _state_lock:
+        if repo in _active_repositories:
+            raise RuntimeError(
+                "cannot recovery-release a write-scope claim while this process has "
+                f"an active delegation for repository={repository!r}"
+            )
+        seq = _store.record_write_scope_recovery_release(
+            claim_id=claim_id,
+            repository=repository,
+            reason=reason,
+        )
+    return {
+        "event_seq": seq,
+        "claim_id": claim_id,
+        "repository": repository,
+        "released": True,
+    }
+
+
+@mcp.tool()
+@_public_tool_errors
+async def record_dependency_consumption_resolution(
+    consumption_event_seq: int,
+    reason: str,
+) -> dict[str, Any]:
+    """Record explicit remediation of one historical consume-before-ACCEPT violation.
+
+    consumption_event_seq is the exact dependency.consumed event identified by the
+    Supervisor R2 finding. This closes the case without rewriting the historical fact
+    that downstream consumption happened before acceptance.
+    """
+    seq = _store.record_dependency_consumption_resolution(
+        consumption_event_seq=consumption_event_seq,
+        reason=reason,
+    )
+    return {
+        "event_seq": seq,
+        "consumption_event_seq": consumption_event_seq,
+        "resolved": True,
+    }
+
+@mcp.tool()
+@_public_tool_errors
 async def get_turn_capture_review(capture_review_id: str) -> dict[str, Any]:
     """Hydrate raw Stop candidates for one previously ambiguous delegated turn."""
     capture_review_id = capture_review_id.strip()
