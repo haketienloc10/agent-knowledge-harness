@@ -836,10 +836,7 @@ async def _create_herdr_workspace(repo: Path, label: str) -> tuple[str, str]:
 
 
 async def _close_herdr_workspace(workspace_id: str) -> None:
-    try:
-        await _run_herdr("workspace", "close", workspace_id)
-    except Exception:
-        pass
+    await _run_herdr("workspace", "close", workspace_id)
 
 
 def _agent_from_payload(payload: dict[str, Any], context: str) -> dict[str, Any]:
@@ -1621,11 +1618,15 @@ async def delegate_repo_task(
             }
     finally:
         _remove_active_capture(capture_path)
-        try:
-            if workspace_id:
-                await _close_herdr_workspace(workspace_id)
-        finally:
+        close_error: Exception | None = None
+        if workspace_id:
             try:
+                await _close_herdr_workspace(workspace_id)
+            except Exception as exc:
+                close_error = exc
+
+        try:
+            if close_error is None:
                 _store.record_write_scope_release(
                     claim_id=write_claim_id,
                     repository=repository,
@@ -1633,8 +1634,19 @@ async def delegate_repo_task(
                     work_item_id=work_item_id,
                     work_item_revision=work_item_revision,
                 )
-            finally:
-                await _release_resources(repo, session_id)
+        finally:
+            # The in-process ownership guard may be released because the durable
+            # claim remains authoritative when Herdr shutdown was not confirmed.
+            # A later delegation therefore still fails closed until explicit
+            # verified-abandonment recovery releases that durable claim.
+            await _release_resources(repo, session_id)
+
+        if close_error is not None:
+            raise RuntimeError(
+                "failed to confirm delegated Herdr workspace shutdown; durable "
+                f"write-scope claim {write_claim_id!r} was retained for explicit "
+                "recovery"
+            ) from close_error
 
 
 if __name__ == "__main__":
