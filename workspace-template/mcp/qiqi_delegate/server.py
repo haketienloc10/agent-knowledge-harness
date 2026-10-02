@@ -1473,6 +1473,7 @@ async def delegate_repo_task(
 
     workspace_id: str | None = None
     capture_path: Path | None = None
+    result_payload: dict[str, Any] | None = None
     write_claim_id = f"repo:{repository}:turn:{qiqi_turn_id}"
     write_claim_recorded = False
     try:
@@ -1555,13 +1556,14 @@ async def delegate_repo_task(
                     work_item_revision=work_item_revision,
                     payload={"signal": "runtime_blocked"},
                 )
-                return {
+                result_payload = {
                     "session_id": native_session_id,
                     "turn_id": qiqi_turn_id,
                     "state": "blocked",
                     "agent_response": None,
                     "blocker_type": "agent_blocked",
                 }
+                return result_payload
 
             try:
                 event = await _wait_for_result_capture(
@@ -1589,7 +1591,7 @@ async def delegate_repo_task(
                     route=route,
                     events=capture_events,
                 )
-                return {
+                result_payload = {
                     "session_id": native_session_id,
                     "turn_id": qiqi_turn_id,
                     "state": "capture_ambiguous",
@@ -1597,6 +1599,7 @@ async def delegate_repo_task(
                     "capture_review_id": qiqi_turn_id,
                     "candidate_count": int(event.get("candidate_count") or 0),
                 }
+                return result_payload
 
             response = event["agent_response"]
             _store.record_turn(
@@ -1610,12 +1613,13 @@ async def delegate_repo_task(
                 packet=packet,
                 agent_response=response,
             )
-            return {
+            result_payload = {
                 "session_id": native_session_id,
                 "turn_id": qiqi_turn_id,
                 "state": state,
                 "agent_response": response,
             }
+            return result_payload
     finally:
         _remove_active_capture(capture_path)
         close_error: Exception | None = None
@@ -1642,11 +1646,32 @@ async def delegate_repo_task(
             await _release_resources(repo, session_id)
 
         if close_error is not None:
-            raise RuntimeError(
-                "failed to confirm delegated Herdr workspace shutdown; durable "
-                f"write-scope claim {write_claim_id!r} was retained for explicit "
-                "recovery"
-            ) from close_error
+            if result_payload is not None:
+                # Do not discard an already-captured semantic result merely because
+                # transport cleanup failed afterward. The durable claim stays active
+                # and the returned recovery locators make that degraded state explicit.
+                result_payload.update(
+                    {
+                        "cleanup_state": "workspace_close_unconfirmed",
+                        "cleanup_error": (
+                            "failed to confirm delegated Herdr workspace shutdown"
+                        ),
+                        "write_claim_id": write_claim_id,
+                        "write_claim_repository": repository,
+                        "workspace_id": workspace_id,
+                        "recovery_action": (
+                            "verify the delegated Peer is terminated or intentionally "
+                            "abandoned, then call release_write_scope_claim with the "
+                            "returned write_claim_id and write_claim_repository"
+                        ),
+                    }
+                )
+            else:
+                raise RuntimeError(
+                    "failed to confirm delegated Herdr workspace shutdown; durable "
+                    f"write-scope claim {write_claim_id!r} was retained for explicit "
+                    "recovery"
+                ) from close_error
 
 
 if __name__ == "__main__":
