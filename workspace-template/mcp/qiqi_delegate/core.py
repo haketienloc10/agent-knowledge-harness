@@ -1052,6 +1052,10 @@ class SessionStore:
             raise ValueError("work_item_revision is required")
         clean_reason = self._optional_runtime_text(reason, "reason")
         with self._connect() as conn:
+            # Serialize read -> monotonicity validation -> append. Without the
+            # writer reservation, concurrent revision 2 / revision 3 writers can
+            # both observe the same predecessor and commit out of order.
+            conn.execute("BEGIN IMMEDIATE")
             latest = conn.execute(
                 "SELECT seq, work_item_revision FROM slp_events "
                 "WHERE event_type = 'work_item.revision_changed' AND work_item_id = ? "
@@ -1469,6 +1473,10 @@ class SessionStore:
         )
 
         with self._connect() as conn:
+            # Reconciliation is a state transition for one captured candidate.
+            # Serialize all validation plus append so concurrent terminal /
+            # revalidation calls cannot both observe an empty predecessor set.
+            conn.execute("BEGIN IMMEDIATE")
             stale = conn.execute(
                 "SELECT turn_id, session_id, repository, route, task_packet_json "
                 "FROM turns WHERE turn_id = ?",
@@ -1506,6 +1514,32 @@ class SessionStore:
                     "candidate reconciliation must target the latest recorded Work Item "
                     "revision: "
                     f"current={current_revision}, provided={clean_revision}"
+                )
+
+            terminal_rows = conn.execute(
+                "SELECT seq, work_item_revision, payload_json FROM slp_events "
+                "WHERE event_type = 'candidate.reconciled' "
+                "AND turn_id = ? AND work_item_id = ? ORDER BY seq DESC",
+                (clean_stale, clean_work_item_id),
+            ).fetchall()
+            for terminal in terminal_rows:
+                terminal_payload = json.loads(terminal["payload_json"])
+                terminal_resolution = terminal_payload.get("resolution")
+                if terminal_resolution not in {"superseded", "abandoned"}:
+                    continue
+                terminal_replacement = terminal_payload.get("replacement_turn_id")
+                if (
+                    clean_resolution == terminal_resolution
+                    and clean_replacement == terminal_replacement
+                ):
+                    # Terminal retirement is candidate-wide, not revision-local.
+                    # Repeating the same semantic retirement after another Work Item
+                    # revision is an idempotent retry of the existing terminal fact.
+                    return int(terminal["seq"])
+                raise RuntimeError(
+                    "candidate already has a terminal reconciliation and cannot be "
+                    "reopened or changed at a later Work Item revision: "
+                    f"existing={terminal_resolution!r}, attempted={clean_resolution!r}"
                 )
 
             existing = conn.execute(
@@ -1709,6 +1743,114 @@ class SessionStore:
             work_item_revision=clean_work_item_revision,
             payload={"claim_id": clean_claim},
         )
+
+    def record_write_scope_recovery_release(
+        self,
+        *,
+        claim_id: str,
+        repository: str,
+        reason: str,
+    ) -> int:
+        """Explicitly release one verified-abandoned durable repository claim."""
+        clean_claim = self._optional_runtime_text(claim_id, "claim_id")
+        clean_repository = self._optional_runtime_text(repository, "repository")
+        clean_reason = self._optional_runtime_text(reason, "reason")
+        if clean_claim is None or clean_repository is None or clean_reason is None:
+            raise ValueError("claim_id, repository and reason are required")
+
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            active = self._active_write_scope_claims_in_transaction(
+                conn,
+                repository=clean_repository,
+            )
+            claim = active.get(clean_claim)
+            if claim is None:
+                raise RuntimeError(
+                    "write-scope recovery requires an active durable claim in the "
+                    f"specified repository: claim_id={clean_claim!r}, "
+                    f"repository={clean_repository!r}"
+                )
+            return self._insert_slp_event(
+                conn,
+                event_type="write_scope.released",
+                turn_id=claim.get("turn_id"),
+                repository=clean_repository,
+                work_item_id=claim.get("work_item_id"),
+                work_item_revision=claim.get("work_item_revision"),
+                payload={
+                    "claim_id": clean_claim,
+                    "reason": clean_reason,
+                    "recovery": True,
+                },
+            )
+
+    def record_dependency_consumption_resolution(
+        self,
+        *,
+        consumption_event_seq: int,
+        reason: str,
+    ) -> int:
+        """Record explicit remediation of one historical consume-before-ACCEPT event."""
+        if (
+            isinstance(consumption_event_seq, bool)
+            or not isinstance(consumption_event_seq, int)
+            or consumption_event_seq <= 0
+        ):
+            raise ValueError("consumption_event_seq must be a positive integer")
+        clean_reason = self._optional_runtime_text(reason, "reason")
+        if clean_reason is None:
+            raise ValueError("reason must not be empty")
+
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            consumed = conn.execute(
+                "SELECT * FROM slp_events WHERE seq = ?",
+                (consumption_event_seq,),
+            ).fetchone()
+            if consumed is None or consumed["event_type"] != "dependency.consumed":
+                raise RuntimeError(
+                    "dependency consumption resolution requires an exact "
+                    "dependency.consumed event sequence"
+                )
+            consumed_payload = json.loads(consumed["payload_json"])
+            source_turn_id = consumed_payload.get("source_turn_id")
+            if not isinstance(source_turn_id, str) or not source_turn_id.strip():
+                source_turn_id = None
+
+            prior_rows = conn.execute(
+                "SELECT seq, payload_json FROM slp_events "
+                "WHERE event_type = 'dependency.consumption_resolved' "
+                "ORDER BY seq DESC"
+            ).fetchall()
+            for prior in prior_rows:
+                payload = json.loads(prior["payload_json"])
+                if payload.get("consumption_event_seq") != consumption_event_seq:
+                    continue
+                if payload.get("reason") == clean_reason:
+                    return int(prior["seq"])
+                raise RuntimeError(
+                    "dependency consumption event already has a different explicit "
+                    "resolution"
+                )
+
+            return self._insert_slp_event(
+                conn,
+                event_type="dependency.consumption_resolved",
+                turn_id=source_turn_id,
+                repository=consumed["repository"],
+                graph_run_id=consumed["graph_run_id"],
+                node_id=consumed["node_id"],
+                attempt_id=consumed["attempt_id"],
+                work_item_id=consumed["work_item_id"],
+                work_item_revision=consumed["work_item_revision"],
+                candidate_id=consumed["candidate_id"],
+                payload={
+                    "consumption_event_seq": consumption_event_seq,
+                    "source_turn_id": source_turn_id,
+                    "reason": clean_reason,
+                },
+            )
 
     def list_slp_events(
         self, *, after_seq: int = 0, limit: int = 100
