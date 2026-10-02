@@ -634,6 +634,22 @@ class HerdrControlPlane:
     def _argv(self, *args: str) -> list[str]:
         return [self.herdr_bin, "--session", self.session, *args]
 
+    def _outer_command_timeout(self, args: tuple[str, ...]) -> float:
+        timeout = self.command_timeout_seconds
+        for index, arg in enumerate(args[:-1]):
+            if arg != "--timeout":
+                continue
+            try:
+                declared_ms = int(args[index + 1])
+            except (TypeError, ValueError):
+                continue
+            if declared_ms > 0:
+                timeout = max(
+                    timeout,
+                    (declared_ms / 1000) + HERDR_CLI_TERMINATE_GRACE_SECONDS,
+                )
+        return timeout
+
     async def _run(
         self,
         *args: str,
@@ -645,10 +661,11 @@ class HerdrControlPlane:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
+        outer_timeout = self._outer_command_timeout(args)
         try:
             stdout, stderr = await asyncio.wait_for(
                 proc.communicate(),
-                timeout=self.command_timeout_seconds,
+                timeout=outer_timeout,
             )
         except asyncio.TimeoutError as exc:
             try:
@@ -668,7 +685,7 @@ class HerdrControlPlane:
                 await proc.wait()
             raise RuntimeError(
                 "Herdr command timed out after "
-                f"{self.command_timeout_seconds:g}s: {' '.join(args)}"
+                f"{outer_timeout:g}s: {' '.join(args)}"
             ) from exc
         out_text = stdout.decode("utf-8", errors="replace")
         err_text = stderr.decode("utf-8", errors="replace")
@@ -1041,13 +1058,11 @@ class HerdrControlPlane:
                 "supervisor_pane_id",
             )
 
-            await self._start_agent(LEAD_AGENT_NAME, lead_pane_id, self._lead_args())
-            await self._start_agent(
-                SUPERVISOR_AGENT_NAME,
-                supervisor_pane_id,
-                self._supervisor_args(capture_dir, nonce),
-            )
-            return self.store.save_control_plane(
+            # Persist the complete provisional topology before creating fixed-name
+            # agents. If the broker is terminated after an agent starts, restart can
+            # still recover/close the exact workspace instead of being poisoned by an
+            # orphaned fixed-name agent on an unknown pane.
+            provisional_state = self.store.save_control_plane(
                 workspace_id=workspace_id,
                 lead_pane_id=lead_pane_id,
                 supervisor_pane_id=supervisor_pane_id,
@@ -1058,6 +1073,14 @@ class HerdrControlPlane:
                 supervisor_capture_dir=capture_dir,
                 supervisor_capture_nonce=nonce,
             )
+
+            await self._start_agent(LEAD_AGENT_NAME, lead_pane_id, self._lead_args())
+            await self._start_agent(
+                SUPERVISOR_AGENT_NAME,
+                supervisor_pane_id,
+                self._supervisor_args(capture_dir, nonce),
+            )
+            return provisional_state
         except Exception as exc:
             # Creation is not considered durable until save_control_plane succeeds.
             # Tear down the provisional Herdr workspace so fixed agent names cannot
@@ -1182,14 +1205,23 @@ class AutonomousSupervisorRuntime:
         self.store = SupervisorControlStore(state_db)
         self.control_plane = control_plane
 
-    async def handle_pending_cases(self, *, limit: int = 20) -> dict[str, int]:
+    async def handle_pending_cases(
+        self,
+        *,
+        limit: int = 20,
+        review: bool = True,
+        deliver: bool = True,
+    ) -> dict[str, Any]:
+        if not isinstance(review, bool) or not isinstance(deliver, bool):
+            raise ValueError("review and deliver must be booleans")
         await self.control_plane.ensure_started()
         reviewed = 0
         delivered = 0
         review_failures = 0
         delivery_failures = 0
+        last_error: str | None = None
 
-        cases = self.store.pending_unreviewed_cases(limit=limit)
+        cases = self.store.pending_unreviewed_cases(limit=limit) if review else []
         for case in cases:
             try:
                 finding = await self.control_plane.prompt_supervisor(
@@ -1197,10 +1229,19 @@ class AutonomousSupervisorRuntime:
                 )
                 if self.store.record_finding(finding):
                     reviewed += 1
-            except (RuntimeError, ValueError):
+            except (RuntimeError, ValueError) as exc:
                 review_failures += 1
+                detail = (
+                    f"review case {case.get('case_id')!r}: "
+                    f"{type(exc).__name__}: {exc}"
+                )
+                last_error = detail[-2000:]
 
-        findings = self.store.issue_findings_needing_delivery(limit=limit)
+        findings = (
+            self.store.issue_findings_needing_delivery(limit=limit)
+            if deliver
+            else []
+        )
         for finding in findings:
             current = self.store.get_case(finding["case_id"])
             if current is None or current["status"] == "CLOSED":
@@ -1209,10 +1250,15 @@ class AutonomousSupervisorRuntime:
                 await self.control_plane.wake_lead(finding)
                 if self.store.mark_delivered_to_lead(finding["case_id"]):
                     delivered += 1
-            except (RuntimeError, ValueError):
+            except (RuntimeError, ValueError) as exc:
                 delivery_failures += 1
+                detail = (
+                    f"deliver case {finding.get('case_id')!r}: "
+                    f"{type(exc).__name__}: {exc}"
+                )
+                last_error = detail[-2000:]
 
-        return {
+        result: dict[str, Any] = {
             "reviewed": reviewed,
             "delivered_to_lead": delivered,
             "review_attempted": len(cases),
@@ -1220,3 +1266,6 @@ class AutonomousSupervisorRuntime:
             "review_failures": review_failures,
             "delivery_failures": delivery_failures,
         }
+        if last_error is not None:
+            result["last_error"] = last_error
+        return result
