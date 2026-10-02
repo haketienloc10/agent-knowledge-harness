@@ -121,6 +121,49 @@ class SupervisorFindingContractTests(unittest.TestCase):
                 }
             )
 
+    def test_r2_audit_packet_preserves_acceptance_timing(self) -> None:
+        packet = build_audit_packet(
+            {
+                "case_id": "case-r2-temporal",
+                "rule": "R2",
+                "turn_id": "turn-source",
+                "work_item_id": "e2e:r2",
+                "work_item_revision": 1,
+                "candidate_id": None,
+                "details": {
+                    "source_turn_id": "turn-source",
+                    "consumer_turn_id": "turn-consumer",
+                    "consumption_event_seq": 12,
+                    "accepted_before_consumption": False,
+                },
+                "lead_disposition": {
+                    "disposition_id": "disp-late",
+                    "action": "accept",
+                    "event_seq": 15,
+                    "work_item_revision": 1,
+                    "candidate_id": None,
+                },
+            }
+        )
+
+        self.assertTrue(packet["disposition_state"]["recorded"])
+        self.assertEqual(packet["disposition_state"]["action"], "accept")
+        self.assertEqual(packet["disposition_state"]["event_seq"], 15)
+        self.assertEqual(packet["disposition_state"]["consumption_event_seq"], 12)
+        self.assertFalse(
+            packet["disposition_state"]["accepted_before_consumption"]
+        )
+        self.assertFalse(
+            packet["disposition_state"]["recorded_before_consumption"]
+        )
+        self.assertIn(
+            "later ACCEPT does not erase the temporal violation",
+            packet["rule_contract"]["predicate"],
+        )
+        self.assertFalse(
+            packet["governance_facts"]["accepted_before_consumption"]
+        )
+
     def test_audit_packet_reports_existing_lead_disposition(self) -> None:
         packet = build_audit_packet(
             {
@@ -358,6 +401,45 @@ class AutonomousSupervisorRuntimeTests(unittest.IsolatedAsyncioTestCase):
         )
         self.broker.process_pending()
         self.assertEqual(self.broker.list_cases()[0]["status"], "CLOSED")
+
+    async def test_r2_runtime_packet_keeps_late_accept_temporally_invalid(self) -> None:
+        self._record_turn("turn-r2-temporal")
+        self.store.record_slp_event(
+            event_type="dependency.consumed",
+            turn_id="turn-r2-consumer",
+            repository="repo-b",
+            payload={"source_turn_id": "turn-r2-temporal"},
+        )
+        self.store.record_lead_disposition(
+            turn_id="turn-r2-temporal",
+            action="accept",
+            reason="accepted only after downstream consumption",
+        )
+        self.broker.process_pending()
+
+        fake = _FakeControlPlane("issue")
+        runtime = AutonomousSupervisorRuntime(
+            state_db=self.db_path,
+            control_plane=fake,
+        )
+        await runtime.handle_pending_cases(deliver=False)
+
+        r2_packets = [
+            packet for packet in fake.supervisor_packets if packet["rule"] == "R2"
+        ]
+        self.assertEqual(len(r2_packets), 1)
+        packet = r2_packets[0]
+        self.assertEqual(packet["disposition_state"]["action"], "accept")
+        self.assertFalse(
+            packet["disposition_state"]["accepted_before_consumption"]
+        )
+        self.assertFalse(
+            packet["disposition_state"]["recorded_before_consumption"]
+        )
+        self.assertGreater(
+            packet["disposition_state"]["event_seq"],
+            packet["disposition_state"]["consumption_event_seq"],
+        )
 
     async def test_r5_runtime_packet_hydrates_prior_lead_disposition(self) -> None:
         packet = build_task_packet(
@@ -1056,6 +1138,18 @@ class HerdrControlPlaneTopologyTests(unittest.IsolatedAsyncioTestCase):
 
             with self.assertRaisesRegex(RuntimeError, "topology mismatch"):
                 await control.ensure_started()
+
+    def test_launcher_does_not_force_global_herdr_session(self) -> None:
+        launcher = (
+            Path(__file__).resolve().parents[3]
+            / "scripts"
+            / "qiqi-supervisor-broker.sh"
+        ).read_text(encoding="utf-8")
+        self.assertNotIn(
+            'QIQI_HERDR_SESSION="${QIQI_HERDR_SESSION:-qiqi-delegate}"',
+            launcher,
+        )
+        self.assertIn("supervisor_broker.py derives the default", launcher)
 
     async def test_control_room_starts_independent_lead_and_read_only_supervisor(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
