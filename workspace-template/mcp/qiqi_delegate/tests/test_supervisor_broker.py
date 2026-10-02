@@ -171,6 +171,40 @@ class SupervisorBrokerTests(unittest.TestCase):
         self.broker.process_pending()
         self.assertEqual(self.cases("R2")[0]["status"], "OPEN")
 
+    def test_r2_explicit_consumption_resolution_closes_without_rewriting_history(
+        self,
+    ) -> None:
+        self.record_turn("turn-r2-resolve")
+        consumed_seq = self.store.record_slp_event(
+            event_type="dependency.consumed",
+            turn_id="turn-r2-consumer",
+            repository="repo-b",
+            payload={"source_turn_id": "turn-r2-resolve"},
+        )
+        self.broker.process_pending()
+        case = self.cases("R2")[0]
+        self.assertEqual(case["status"], "OPEN")
+        self.assertEqual(
+            case["details"]["consumption_event_seq"],
+            consumed_seq,
+        )
+
+        resolution_seq = self.store.record_dependency_consumption_resolution(
+            consumption_event_seq=consumed_seq,
+            reason="Lead repaired the downstream premise and re-ran affected validation",
+        )
+        self.broker.process_pending()
+
+        closed = self.cases("R2")[0]
+        self.assertEqual(closed["status"], "CLOSED")
+        self.assertEqual(closed["closed_event_seq"], resolution_seq)
+        consumed = next(
+            event
+            for event in self.store.list_slp_events()
+            if event["seq"] == consumed_seq
+        )
+        self.assertEqual(consumed["event_type"], "dependency.consumed")
+
     def test_r2_broker_lag_does_not_let_later_accept_hide_violation(self) -> None:
         self.record_turn("turn-lagged-source")
         self.store.record_slp_event(
