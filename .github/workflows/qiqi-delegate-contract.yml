@@ -331,17 +331,19 @@ jobs:
 
           path = Path(sys.argv[1])
           text = path.read_text(encoding="utf-8")
-          needle = '''        rename_noreplace(state["stage_target"], state["target"])
-'''
-          injected = '''        rename_noreplace(state["stage_target"], state["target"])
-        if state["client"] == "Codex":
-            with open(
-                os.path.join(state["target"], "SKILL.md"),
-                "w",
-                encoding="utf-8",
-            ) as handle:
-                handle.write("external-writer-skill\\n")
-'''
+          needle = (
+              '        rename_noreplace(state["stage_target"], state["target"])\\n'
+          )
+          injected = (
+              '        rename_noreplace(state["stage_target"], state["target"])\\n'
+              '        if state["client"] == "Codex":\\n'
+              '            with open(\\n'
+              '                os.path.join(state["target"], "SKILL.md"),\\n'
+              '                "w",\\n'
+              '                encoding="utf-8",\\n'
+              '            ) as handle:\\n'
+              '                handle.write("external-writer-skill\\\\n")\\n'
+          )
           if text.count(needle) != 1:
               raise SystemExit("skill race injection anchor mismatch")
           path.write_text(text.replace(needle, injected), encoding="utf-8")
