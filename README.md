@@ -6,6 +6,8 @@ Harness cho multi-repository QiQi workspace với các thành phần chính:
 - `repo-template/`: execution-agent policy cho từng Git root;
 - `work-item-template/`: workspace-scoped filesystem-native Work Item lifecycle skill/templates;
 - `knowledge-template/`: user-scoped Shared Knowledge MCP cho reusable durable knowledge;
+- `user-rules-template/`: user-scoped response/orchestration rules cho Claude Code và Codex;
+- `writing-template/`: user-scoped writing skills, bắt đầu với `ste-vi`;
 - `migrations/`: upgrade definitions cho workspace/repo đã cài harness.
 
 ## Sources of truth
@@ -20,6 +22,21 @@ Repo source/test       = implementation truth
 Work Item không còn là MCP/SQLite service. `qiqi_delegate` mount `<workspace>/work-items` vào supported child agents bằng shared directory runtime contract.
 
 Work Item là current semantic state, không phải execution history. Multi-turn investigation/implementation rewrite living state; requirement changes rewrite effective current requirements rồi reconcile prior findings theo materiality.
+
+## User-scope response và writing
+
+Cài skill viết và response rules cho cả Codex và Claude Code:
+
+```bash
+bash writing-template/scripts/install-user-skill.sh
+bash user-rules-template/scripts/install-user-rules.sh
+```
+
+`ste-vi` áp dụng STE-lite cho tiếng Việt: câu ngắn, thuật ngữ ổn định, technical name giữ nguyên và quan hệ nhân quả rõ. Đây là cách viết lấy cảm hứng từ ASD-STE100, không phải tuyên bố compliance ASD-STE100 cho tiếng Việt.
+
+`user-rules-template` giữ policy chọn hình thức giải thích ở tầng response: bắt đầu bằng text, chuyển sang diagram khi độ khó nằm ở quan hệ/luồng, và cân nhắc interactive HTML khi cần thao tác với state hoặc input.
+
+Hai template này cài vào user home, không materialize vào workspace/repo con và không cần migration chỉ vì thay đổi nội dung của chúng.
 
 ## Work Item template
 
