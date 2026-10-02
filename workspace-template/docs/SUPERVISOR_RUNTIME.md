@@ -173,7 +173,11 @@ The runtime now emits/records the semantic inputs consumed by the deterministic 
   crashes, the claim remains active and subsequent writers fail closed. After an operator/Lead
   verifies the old writer is terminated or intentionally abandoned,
   `release_write_scope_claim(claim_id, repository, reason)` records an explicit recovery release
-  instead of auto-expiring ownership;
+  instead of auto-expiring ownership. If a semantic Peer result was already captured and persisted
+  before shutdown failed, delegation still returns that exact result plus
+  `cleanup_state=workspace_close_unconfirmed`, the durable `write_claim_id`,
+  `write_claim_repository`, workspace locator, and recovery action; cleanup failure does not
+  discard the candidate or turn it into an executor exception;
 - explicit Lead `accept` also emits `candidate.accepted`; any explicit Work Item id/revision
   passed with a disposition must exactly match the canonical locator captured in that turn's
   TaskPacket or the write fails closed;
@@ -214,8 +218,10 @@ so Lead can write semantic evidence while handling the wakeup. A closure committ
 reservation therefore suppresses the obsolete wakeup; a closure committed afterward is durably
 ordered after notification selection. Undelivered reservations are cleared when the broker
 singleton runtime restarts, so a crash between reservation and transport does not strand delivery.
-R2 wakeups carry the exact `consumption_event_seq` in the deterministic runtime locator; Lead does
-not have to rely on model-authored evidence text to recover the remediation key.
+R2 wakeups carry the exact `consumption_event_seq` in the deterministic runtime locator. R3
+wakeups likewise carry the exact repository and every overlapping durable `write_claim_id`. Lead
+therefore does not have to rely on model-authored evidence text to recover the keys required by
+`record_dependency_consumption_resolution` or `release_write_scope_claim`.
 
 ## Operations
 
