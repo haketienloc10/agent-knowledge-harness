@@ -575,6 +575,70 @@ class DirectDelegationPhase4IntegrationTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(release_event["work_item_revision"], 4)
 
 
+    async def test_durable_write_claim_blocks_restart_overlap_before_dispatch(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            repo_path = root / "repo-a"
+            repo_path.mkdir()
+            hook_path = root / "result-hook.py"
+            hook_path.write_text("# hook\n", encoding="utf-8")
+            store = SessionStore(root / "qiqi_delegate.sqlite3")
+            store.record_write_scope_claim(
+                claim_id="repo:repo-a:turn:orphaned",
+                repository="repo-a",
+                owner="orphaned-turn",
+                scope=["*"],
+                turn_id="orphaned-turn",
+            )
+            release = AsyncMock()
+
+            with (
+                patch.object(server, "_store", store),
+                patch.object(server, "_resolve_repo", return_value=repo_path),
+                patch.object(
+                    server,
+                    "_resolve_route",
+                    return_value=(
+                        "claude",
+                        {"adapter": "claude", "command": "claude"},
+                        {"model": "sonnet", "args": []},
+                    ),
+                ),
+                patch.object(server.shutil, "which", return_value="/bin/true"),
+                patch.object(server, "RESULT_HOOK_PATH", hook_path),
+                patch.object(server, "_ensure_herdr_server", new=AsyncMock()),
+                patch.object(server, "_require_current_integration", new=AsyncMock()),
+                patch.object(server, "_claim_resources", new=AsyncMock()),
+                patch.object(server, "_release_resources", new=release),
+                patch.object(server, "_record_peer_dispatch") as dispatch,
+            ):
+                with self.assertRaisesRegex(
+                    ToolError,
+                    "active durable write-scope claim",
+                ):
+                    await server.delegate_repo_task(
+                        repository="repo-a",
+                        route="claude-balanced",
+                        objective="Start a replacement writer.",
+                        scope=["pricing"],
+                        acceptance_criteria=["tests pass"],
+                    )
+
+            dispatch.assert_not_called()
+            release.assert_awaited_once()
+            active = store.list_active_write_scope_claims(repository="repo-a")
+            self.assertEqual([item["claim_id"] for item in active], [
+                "repo:repo-a:turn:orphaned"
+            ])
+            self.assertEqual(
+                [
+                    event["event_type"]
+                    for event in store.list_slp_events()
+                    if event["turn_id"] != "orphaned-turn"
+                ],
+                [],
+            )
+
     async def test_write_scope_release_survives_peer_dispatch_recording_failure(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
