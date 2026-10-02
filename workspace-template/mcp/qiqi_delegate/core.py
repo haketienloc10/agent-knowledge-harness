@@ -1315,26 +1315,50 @@ class SessionStore:
                 "WHERE turn_id = ?",
                 (clean_turn,),
             ).fetchone()
-            if turn is None:
-                raise RuntimeError(
-                    "Peer signal resolution requires an existing captured Peer turn: "
-                    f"unknown turn_id={clean_turn!r}"
-                )
             signal_rows = conn.execute(
-                "SELECT payload_json FROM slp_events "
+                "SELECT session_id, repository, route, work_item_id, "
+                "work_item_revision, payload_json FROM slp_events "
                 "WHERE event_type = 'peer.signal' AND turn_id = ? ORDER BY seq",
                 (clean_turn,),
             ).fetchall()
-            if not any(
-                json.loads(row["payload_json"]).get("signal") == clean_signal
-                for row in signal_rows
-            ):
+            accepted_signals = (
+                {"BLOCKED", "runtime_blocked"}
+                if clean_signal == "BLOCKED"
+                else {clean_signal}
+            )
+            matching_signal = next(
+                (
+                    row
+                    for row in reversed(signal_rows)
+                    if json.loads(row["payload_json"]).get("signal")
+                    in accepted_signals
+                ),
+                None,
+            )
+            if matching_signal is None:
                 raise RuntimeError(
                     "Peer signal resolution requires a matching prior explicit Peer signal: "
                     f"turn_id={clean_turn!r}, signal={clean_signal!r}"
                 )
-            packet_payload = json.loads(turn["task_packet_json"])
-            inferred_id, inferred_revision = _work_item_ref_from_payload(packet_payload)
+
+            if turn is not None:
+                packet_payload = json.loads(turn["task_packet_json"])
+                inferred_id, inferred_revision = _work_item_ref_from_payload(
+                    packet_payload
+                )
+                session_id = turn["session_id"]
+                repository = turn["repository"]
+                route = turn["route"]
+            else:
+                # Runtime-blocked delegations intentionally return before a turns row
+                # exists. Their durable peer.signal event is therefore the canonical
+                # locator for explicit abandonment/resolution.
+                inferred_id = matching_signal["work_item_id"]
+                inferred_revision = matching_signal["work_item_revision"]
+                session_id = matching_signal["session_id"]
+                repository = matching_signal["repository"]
+                route = matching_signal["route"]
+
             if clean_work_item_id is None:
                 clean_work_item_id = inferred_id
                 clean_work_item_revision = inferred_revision
@@ -1343,7 +1367,7 @@ class SessionStore:
                 or clean_work_item_revision != inferred_revision
             ):
                 raise RuntimeError(
-                    "explicit Work Item locator does not match the captured Peer turn: "
+                    "explicit Work Item locator does not match the durable Peer signal: "
                     f"turn_id={clean_turn!r}, "
                     f"captured={inferred_id!r}@{inferred_revision!r}, "
                     f"provided={clean_work_item_id!r}@{clean_work_item_revision!r}"
@@ -1352,9 +1376,9 @@ class SessionStore:
                 conn,
                 event_type="peer.signal_resolved",
                 turn_id=clean_turn,
-                session_id=turn["session_id"],
-                repository=turn["repository"],
-                route=turn["route"],
+                session_id=session_id,
+                repository=repository,
+                route=route,
                 work_item_id=clean_work_item_id,
                 work_item_revision=clean_work_item_revision,
                 payload={"signal": clean_signal, "reason": clean_reason},
