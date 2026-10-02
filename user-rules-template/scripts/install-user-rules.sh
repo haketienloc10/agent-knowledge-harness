@@ -243,6 +243,7 @@ def restore_commit_signals(previous):
 # Prepare every replacement and rollback backup before any target is changed.
 prepared = []
 temps = set()
+preserved_backups = set()
 committed = []
 try:
     try:
@@ -275,8 +276,10 @@ try:
                 backup_fd, backup = tempfile.mkstemp(
                     dir=parent, prefix=".akh-rules.backup."
                 )
-                os.close(backup_fd)
+                # Register the path before close/copy so interruption cannot
+                # strand an untracked rollback file.
                 temps.add(backup)
+                os.close(backup_fd)
                 shutil.copy2(target, backup)
 
             prepared.append(
@@ -339,8 +342,15 @@ try:
                 else:
                     os.unlink(target)
             except BaseException as rollback_error:
+                retained = ""
+                if backup is not None and os.path.exists(backup):
+                    # The backup is the only preserved original when restore
+                    # fails. Keep it out of generic temp cleanup and report it.
+                    temps.discard(backup)
+                    preserved_backups.add(backup)
+                    retained = f"; original backup retained at {backup}"
                 rollback_errors.append(
-                    f"{client} ({requested}): {rollback_error}"
+                    f"{client} ({requested}): {rollback_error}{retained}"
                 )
 
         if rollback_errors:
@@ -355,11 +365,21 @@ try:
         raise
 
 finally:
-    for tmp in list(temps):
-        try:
-            os.unlink(tmp)
-        except FileNotFoundError:
-            pass
+    # Cleanup is best-effort but should not be interrupted by another managed
+    # signal. Failed rollback backups were removed from `temps` above.
+    previous_cleanup_mask = block_commit_signals()
+    try:
+        for tmp in list(temps):
+            try:
+                os.unlink(tmp)
+            except FileNotFoundError:
+                pass
+            except OSError as cleanup_error:
+                sys.stderr.write(
+                    f"WARNING: could not remove temporary file {tmp}: {cleanup_error}\n"
+                )
+    finally:
+        restore_commit_signals(previous_cleanup_mask)
 
 PY
 
