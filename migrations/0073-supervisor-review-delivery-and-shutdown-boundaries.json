@@ -1,7 +1,7 @@
 {
   "version": 73,
   "from_ref": "0f786aacc51b26cac4b766d972fee66528daaec8",
-  "to_ref": "bf414972f2f8497be06af78d0b8ac0defef7ecc0",
+  "to_ref": "6b34661e1cdb8b0e3faff331dbcc662d4a6ae5fe",
   "description": "fix twelfth Codex review of autonomous Supervisor governance: replay durable semantic evidence immediately before each Lead wakeup, expose the exact R2 consumption event sequence in deterministic Lead runtime locators, and retain durable repository ownership when delegated Herdr workspace shutdown is not confirmed",
   "workspace": {
     "merge": [],
