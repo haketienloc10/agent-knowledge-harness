@@ -37,8 +37,7 @@ preflight_root() {
   local parent
 
   # Existing roots must resolve to directories. For a missing root, walk upward
-  # to the nearest existing ancestor so mkdir -p cannot later fail on a file
-  # after the other client has already been updated.
+  # to the nearest existing ancestor so mkdir -p cannot later fail on a file.
   while [[ ! -e "$probe" && ! -L "$probe" ]]; do
     parent="$(dirname "$probe")"
     [[ "$parent" != "$probe" ]] || break
@@ -62,7 +61,6 @@ preflight_skill() {
   local marker="$target/.agent-knowledge-harness-managed"
 
   # Test -L before -e/-d because a dangling symlink is neither -e nor -d.
-  # Reject all same-name symlinks so the installer never replaces a user-managed link.
   if [[ -L "$target" ]]; then
     printf 'ERROR: %s skill target is a symlink and will not be replaced: %s\n' "$client" "$target" >&2
     printf 'Move/remove the symlink explicitly, then rerun installer.\n' >&2
@@ -82,13 +80,19 @@ preflight_skill() {
   fi
 }
 
-install_skill() {
-  local client="$1" root="$2"
-  local target="$root/$name"
+stage_skill() {
+  local client="$1" root="$2" result_var="$3"
   local temp_parent
 
-  mkdir -p "$root"
-  temp_parent="$(mktemp -d "$root/.$name.XXXXXX")"
+  mkdir -p "$root" || {
+    printf 'ERROR: cannot create %s skill root: %s\n' "$client" "$root" >&2
+    return 78
+  }
+
+  temp_parent="$(mktemp -d "$root/.$name.XXXXXX")" || {
+    printf 'ERROR: cannot create staging directory in %s skill root: %s\n' "$client" "$root" >&2
+    return 78
+  }
 
   if ! cp -R "$source_skill" "$temp_parent/$name"; then
     rm -rf "$temp_parent"
@@ -100,27 +104,100 @@ install_skill() {
     return 1
   fi
 
-  if [[ -d "$target" ]] && ! rm -rf "$target"; then
-    rm -rf "$temp_parent"
+  printf -v "$result_var" '%s' "$temp_parent"
+}
+
+reserve_backup_path() {
+  local root="$1" result_var="$2"
+  local placeholder
+
+  placeholder="$(mktemp -d "$root/.$name.backup.XXXXXX")" || return 1
+  rmdir "$placeholder" || return 1
+  printf -v "$result_var" '%s' "$placeholder"
+}
+
+rollback_target() {
+  local target="$1" backup="$2" had_original="$3"
+
+  if [[ -e "$target" || -L "$target" ]]; then
+    rm -rf "$target" || true
+  fi
+  if [[ "$had_original" == "1" && -n "$backup" && -d "$backup" ]]; then
+    mv "$backup" "$target" || true
+  fi
+}
+
+commit_staged() {
+  local client="$1" root="$2" stage="$3" backup="$4" had_original="$5"
+  local target="$root/$name"
+
+  if [[ "$had_original" == "1" ]]; then
+    if ! mv "$target" "$backup"; then
+      printf 'ERROR: cannot move existing %s skill aside: %s\n' "$client" "$target" >&2
+      return 1
+    fi
+  fi
+
+  if ! mv "$stage/$name" "$target"; then
+    printf 'ERROR: cannot install staged %s skill: %s\n' "$client" "$target" >&2
+    if [[ "$had_original" == "1" && -d "$backup" ]]; then
+      mv "$backup" "$target" || true
+    fi
     return 1
   fi
 
-  if ! mv "$temp_parent/$name" "$target"; then
-    rm -rf "$temp_parent"
-    return 1
-  fi
-
-  rmdir "$temp_parent"
+  rmdir "$stage" || true
   printf '%s skill installed: %s/SKILL.md\n' "$client" "$target"
 }
 
-# Validate both roots and destinations before mutating either client.
+# Validate both roots and destinations before preparing either target.
 preflight_root 'Codex' "$codex_root"
 preflight_root 'Claude' "$claude_root"
 preflight_skill 'Codex' "$codex_root"
 preflight_skill 'Claude' "$claude_root"
 
-install_skill 'Codex' "$codex_root"
-install_skill 'Claude' "$claude_root"
+codex_stage=""
+claude_stage=""
+codex_backup=""
+claude_backup=""
+codex_had_original=0
+claude_had_original=0
 
+cleanup() {
+  [[ -n "$codex_stage" && -d "$codex_stage" ]] && rm -rf "$codex_stage"
+  [[ -n "$claude_stage" && -d "$claude_stage" ]] && rm -rf "$claude_stage"
+}
+trap cleanup EXIT
+
+# Stage both complete copies first. This verifies that both roots are writable
+# before either installed skill is touched.
+stage_skill 'Codex' "$codex_root" codex_stage
+stage_skill 'Claude' "$claude_root" claude_stage
+
+if [[ -d "$codex_root/$name" ]]; then
+  codex_had_original=1
+  reserve_backup_path "$codex_root" codex_backup
+fi
+if [[ -d "$claude_root/$name" ]]; then
+  claude_had_original=1
+  reserve_backup_path "$claude_root" claude_backup
+fi
+
+# Commit Codex, then Claude. Keep Codex backup until Claude succeeds so a
+# second-client failure can roll back the first client.
+if ! commit_staged 'Codex' "$codex_root" "$codex_stage" "$codex_backup" "$codex_had_original"; then
+  exit 1
+fi
+codex_stage=""
+
+if ! commit_staged 'Claude' "$claude_root" "$claude_stage" "$claude_backup" "$claude_had_original"; then
+  rollback_target "$codex_root/$name" "$codex_backup" "$codex_had_original"
+  exit 1
+fi
+claude_stage=""
+
+[[ -n "$codex_backup" && -d "$codex_backup" ]] && rm -rf "$codex_backup"
+[[ -n "$claude_backup" && -d "$claude_backup" ]] && rm -rf "$claude_backup"
+
+trap - EXIT
 printf 'Open a fresh agent session if the skill is not already visible in the skills list.\n'
