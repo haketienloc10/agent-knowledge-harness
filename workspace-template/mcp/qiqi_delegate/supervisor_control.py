@@ -27,9 +27,16 @@ LEAD_AGENT_NAME = "lead"
 SUPERVISOR_AGENT_NAME = "supervisor"
 DEFAULT_MODEL = "gpt-5.6-luna"
 HERDR_AGENT_START_TIMEOUT_MS = 60_000
+HERDR_CLI_TIMEOUT_SECONDS = 15.0
+HERDR_CLI_TERMINATE_GRACE_SECONDS = 1.0
 SUPERVISOR_PROMPT_TIMEOUT_MS = 120_000
 SUPERVISOR_CAPTURE_WAIT_SECONDS = 5.0
 RESULT_HOOK_PATH = Path(__file__).with_name("result_hook.py").resolve()
+
+
+class HerdrAgentNotReadyError(RuntimeError):
+    """Persisted same-pane agent cannot safely receive prompts."""
+
 
 _FINDING_KEYS = frozenset(
     {
@@ -600,6 +607,7 @@ class HerdrControlPlane:
         supervisor_home: Path | None = None,
         lead_model: str = DEFAULT_MODEL,
         supervisor_model: str = DEFAULT_MODEL,
+        command_timeout_seconds: float = HERDR_CLI_TIMEOUT_SECONDS,
     ):
         self.workspace_root = workspace_root.resolve()
         self.state_db = state_db.resolve()
@@ -613,6 +621,13 @@ class HerdrControlPlane:
         )
         self.lead_model = _required_text(lead_model, "Lead model")
         self.supervisor_model = _required_text(supervisor_model, "Supervisor model")
+        if (
+            isinstance(command_timeout_seconds, bool)
+            or not isinstance(command_timeout_seconds, (int, float))
+            or command_timeout_seconds <= 0
+        ):
+            raise ValueError("command_timeout_seconds must be a positive number")
+        self.command_timeout_seconds = float(command_timeout_seconds)
         self._prompt_lock = asyncio.Lock()
         self._managed_server: asyncio.subprocess.Process | None = None
 
@@ -630,7 +645,31 @@ class HerdrControlPlane:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        stdout, stderr = await proc.communicate()
+        try:
+            stdout, stderr = await asyncio.wait_for(
+                proc.communicate(),
+                timeout=self.command_timeout_seconds,
+            )
+        except asyncio.TimeoutError as exc:
+            try:
+                proc.terminate()
+            except ProcessLookupError:
+                pass
+            try:
+                await asyncio.wait_for(
+                    proc.wait(),
+                    timeout=HERDR_CLI_TERMINATE_GRACE_SECONDS,
+                )
+            except asyncio.TimeoutError:
+                try:
+                    proc.kill()
+                except ProcessLookupError:
+                    pass
+                await proc.wait()
+            raise RuntimeError(
+                "Herdr command timed out after "
+                f"{self.command_timeout_seconds:g}s: {' '.join(args)}"
+            ) from exc
         out_text = stdout.decode("utf-8", errors="replace")
         err_text = stderr.decode("utf-8", errors="replace")
         returncode = proc.returncode or 0
@@ -766,7 +805,7 @@ class HerdrControlPlane:
             if self._agent_prompt_ready(last_info):
                 return last_info
             await asyncio.sleep(0.1)
-        raise RuntimeError(
+        raise HerdrAgentNotReadyError(
             f"Herdr named agent {name!r} exists but is not prompt-ready after "
             f"{timeout_ms}ms; last_info={last_info!r}"
         )
@@ -945,6 +984,16 @@ class HerdrControlPlane:
                         state["supervisor_capture_nonce"],
                     ),
                 )
+            except HerdrAgentNotReadyError:
+                # A named agent can remain registered on the correct pane after the
+                # underlying process has exited or become permanently non-interactive.
+                # Replace the persisted control room instead of retrying the same dead
+                # agent forever.
+                await self._discard_stale_control_plane(
+                    state,
+                    require_close_success=False,
+                )
+                state = None
             except RuntimeError as exc:
                 if "agent_pane_not_found" not in str(exc):
                     raise RuntimeError(
