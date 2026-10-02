@@ -192,7 +192,7 @@ if [[ "$codex_resolved_root" == "$claude_resolved_root" ]] || \
   printf '  Codex root:   %s\n' "$codex_resolved_root" >&2
   printf '  Codex target: %s\n' "$codex_resolved_target" >&2
   printf '  Claude root:  %s\n' "$claude_resolved_root" >&2
-  printf '  Claude target:%s\n' "$claude_resolved_target" >&2
+  printf '  Claude target: %s\n' "$claude_resolved_target" >&2
   exit 78
 fi
 
