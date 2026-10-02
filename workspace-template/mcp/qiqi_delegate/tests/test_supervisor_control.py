@@ -678,6 +678,35 @@ class _CleanupFailureControlPlane(_PartialCreateFailureControlPlane):
 
 
 class HerdrControlPlaneCommandTests(unittest.IsolatedAsyncioTestCase):
+    async def test_default_session_is_namespaced_by_workspace_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            workspace_a = root / "workspace-a"
+            workspace_b = root / "workspace-b"
+            workspace_a.mkdir()
+            workspace_b.mkdir()
+            control_a = HerdrControlPlane(
+                workspace_root=workspace_a,
+                state_db=workspace_a / ".qiqi" / "state" / "qiqi_delegate.sqlite3",
+                supervisor_home=root / "supervisor-a",
+            )
+            control_b = HerdrControlPlane(
+                workspace_root=workspace_b,
+                state_db=workspace_b / ".qiqi" / "state" / "qiqi_delegate.sqlite3",
+                supervisor_home=root / "supervisor-b",
+            )
+            explicit = HerdrControlPlane(
+                workspace_root=workspace_b,
+                state_db=workspace_b / ".qiqi" / "state" / "explicit.sqlite3",
+                supervisor_home=root / "supervisor-explicit",
+                session="shared-by-user-choice",
+            )
+
+            self.assertNotEqual(control_a.session, control_b.session)
+            self.assertTrue(control_a.session.startswith("qiqi-delegate-"))
+            self.assertTrue(control_b.session.startswith("qiqi-delegate-"))
+            self.assertEqual(explicit.session, "shared-by-user-choice")
+
     async def test_cli_command_timeout_terminates_stalled_process(self) -> None:
         class HangingProcess:
             def __init__(self):
@@ -889,7 +918,7 @@ class HerdrControlPlaneTopologyTests(unittest.IsolatedAsyncioTestCase):
                 workspace_id="w-old",
                 lead_pane_id="w-old:p1",
                 supervisor_pane_id="w-old:p2",
-                herdr_session="qiqi-delegate",
+                herdr_session=control.session,
                 lead_model=DEFAULT_MODEL,
                 supervisor_model=DEFAULT_MODEL,
                 supervisor_home=supervisor_home,
@@ -930,7 +959,7 @@ class HerdrControlPlaneTopologyTests(unittest.IsolatedAsyncioTestCase):
                 workspace_id="w-old",
                 lead_pane_id="w-old:p1",
                 supervisor_pane_id="w-old:p2",
-                herdr_session="qiqi-delegate",
+                herdr_session=control.session,
                 lead_model="gpt-5.4",
                 supervisor_model="gpt-5.4",
                 supervisor_home=supervisor_home,
@@ -976,7 +1005,7 @@ class HerdrControlPlaneTopologyTests(unittest.IsolatedAsyncioTestCase):
                 workspace_id="w-control",
                 lead_pane_id="w-control:p1",
                 supervisor_pane_id="w-control:p2",
-                herdr_session="qiqi-delegate",
+                herdr_session=control.session,
                 lead_model=DEFAULT_MODEL,
                 supervisor_model=DEFAULT_MODEL,
                 supervisor_home=root / "isolated-supervisor",
@@ -1017,7 +1046,7 @@ class HerdrControlPlaneTopologyTests(unittest.IsolatedAsyncioTestCase):
                 workspace_id="w-control",
                 lead_pane_id="w-control:p1",
                 supervisor_pane_id="w-control:p2",
-                herdr_session="qiqi-delegate",
+                herdr_session=control.session,
                 lead_model=DEFAULT_MODEL,
                 supervisor_model=DEFAULT_MODEL,
                 supervisor_home=root / "isolated-supervisor",
