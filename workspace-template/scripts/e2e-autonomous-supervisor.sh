@@ -5,7 +5,20 @@ workspace_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 project_dir="$workspace_root/mcp/qiqi_delegate"
 broker_launcher="$workspace_root/scripts/qiqi-supervisor-broker.sh"
 state_db="$workspace_root/.qiqi/state/qiqi_delegate.sqlite3"
-session="${QIQI_HERDR_SESSION:-qiqi-delegate}"
+if [[ -n "${QIQI_HERDR_SESSION:-}" ]]; then
+  session="$QIQI_HERDR_SESSION"
+else
+  session="$(python3 - "$workspace_root" <<'PY'
+import hashlib
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1]).resolve()
+digest = hashlib.sha256(str(root).encode("utf-8")).hexdigest()[:12]
+print(f"qiqi-delegate-{digest}")
+PY
+)"
+fi
 timeout_seconds="${QIQI_E2E_TIMEOUT_SECONDS:-600}"
 
 usage() {
