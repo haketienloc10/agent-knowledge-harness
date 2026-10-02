@@ -332,17 +332,17 @@ jobs:
           path = Path(sys.argv[1])
           text = path.read_text(encoding="utf-8")
           needle = (
-              '        rename_noreplace(state["stage_target"], state["target"])\\n'
+              '        rename_noreplace(state["stage_target"], state["target"])\n'
           )
           injected = (
-              '        rename_noreplace(state["stage_target"], state["target"])\\n'
-              '        if state["client"] == "Codex":\\n'
-              '            with open(\\n'
-              '                os.path.join(state["target"], "SKILL.md"),\\n'
-              '                "w",\\n'
-              '                encoding="utf-8",\\n'
-              '            ) as handle:\\n'
-              '                handle.write("external-writer-skill\\\\n")\\n'
+              '        rename_noreplace(state["stage_target"], state["target"])\n'
+              '        if state["client"] == "Codex":\n'
+              '            with open(\n'
+              '                os.path.join(state["target"], "SKILL.md"),\n'
+              '                "w",\n'
+              '                encoding="utf-8",\n'
+              '            ) as handle:\n'
+              '                handle.write("external-writer-skill\\n")\n'
           )
           if text.count(needle) != 1:
               raise SystemExit("skill race injection anchor mismatch")
