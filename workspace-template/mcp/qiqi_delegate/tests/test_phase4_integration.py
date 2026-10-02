@@ -91,6 +91,74 @@ class Phase4SemanticStoreTests(unittest.TestCase):
             disposition["disposition_id"],
         )
 
+    def test_direct_accept_rejects_stale_candidate_until_revalidated(self) -> None:
+        packet = build_task_packet(
+            objective="Produce tracked candidate.",
+            scope=["repo work"],
+            acceptance_criteria=["tests pass"],
+            context={
+                "trusted_facts": [
+                    {
+                        "fact": (
+                            "work_item_path=/tmp/work-items/e2e-direct-accept; "
+                            "id=e2e:direct-accept; revision=1"
+                        ),
+                        "source": "canonical Work Item locator",
+                    }
+                ]
+            },
+        )
+        self.store.record_turn(
+            turn_id="turn-direct-stale",
+            session_id="session-direct-stale",
+            repository="repo-a",
+            agent="claude",
+            route="claude-balanced",
+            state="settled",
+            native_turn_id=None,
+            packet=packet,
+            agent_response="revision 1 candidate",
+        )
+        self.store.record_work_item_revision(
+            work_item_id="e2e:direct-accept",
+            work_item_revision=2,
+            reason="material requirement change before Lead disposition",
+        )
+
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "candidate acceptance requires current-revision evidence",
+        ):
+            self.store.record_lead_disposition(
+                turn_id="turn-direct-stale",
+                action="accept",
+                reason="must not accept stale candidate directly",
+            )
+
+        self.assertIsNone(self.store.get_lead_disposition("turn-direct-stale"))
+        self.assertNotIn(
+            "candidate.accepted",
+            [event["event_type"] for event in self.store.list_slp_events()],
+        )
+
+        self.store.record_candidate_reconciliation(
+            stale_turn_id="turn-direct-stale",
+            resolution="revalidated",
+            reason="candidate remains valid under revision 2",
+            work_item_id="e2e:direct-accept",
+            work_item_revision=2,
+        )
+        accepted = self.store.record_lead_disposition(
+            turn_id="turn-direct-stale",
+            action="accept",
+            reason="accepted after explicit current-revision revalidation",
+        )
+        self.assertEqual(accepted["action"], "accept")
+        self.assertIn(
+            "candidate.accepted",
+            [event["event_type"] for event in self.store.list_slp_events()],
+        )
+
     def test_direct_defer_requires_and_persists_owner_checkpoint(self) -> None:
         packet = build_task_packet(
             objective="Produce actionable response.",
