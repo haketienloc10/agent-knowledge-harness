@@ -103,17 +103,12 @@ class UserScopeInstallerRaceTests(unittest.TestCase):
             text = script.read_text(encoding="utf-8")
             text = replace_once(
                 text,
-                """        for tmp in list(temps):
-            try:
-                os.unlink(tmp)
+                """        try:
+            restore_commit_signals(previous_cleanup_mask)
 """,
-                """        sent_cleanup_signal = False
-        for tmp in list(temps):
-            try:
-                os.unlink(tmp)
-                if not sent_cleanup_signal:
-                    os.kill(os.getpid(), signal.SIGTERM)
-                    sent_cleanup_signal = True
+                """        os.kill(os.getpid(), signal.SIGTERM)
+        try:
+            restore_commit_signals(previous_cleanup_mask)
 """,
                 "rules final cleanup signal",
             )
