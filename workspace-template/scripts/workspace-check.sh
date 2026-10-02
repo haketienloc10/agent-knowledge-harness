@@ -217,8 +217,12 @@ grep -Fq 'record_write_scope_recovery_release' "$mcp_project/core.py" || \
   fail 'SessionStore must expose an explicit orphan write-claim recovery path'
 grep -Fq 'write-scope claim {write_claim_id!r} was retained for explicit' "$mcp_project/server.py" || \
   fail 'delegation cleanup must retain durable ownership when Peer shutdown is unconfirmed'
+grep -Fq '"cleanup_state": "workspace_close_unconfirmed"' "$mcp_project/server.py" || \
+  fail 'delegation cleanup failure must preserve captured semantic result with recovery metadata'
 grep -Fq 'consumption_event_seq:' "$supervisor_control" || \
   fail 'R2 Lead wakeups must expose the exact dependency consumption sequence'
+grep -Fq 'write_claim_id:' "$supervisor_control" || \
+  fail 'R3 Lead wakeups must expose exact durable write-claim identifiers'
 grep -Fq 'record_dependency_consumption_resolution' "$mcp_project/core.py" || \
   fail 'SessionStore must expose explicit R2 remediation evidence'
 grep -Fq 'candidate already has a terminal reconciliation' "$mcp_project/core.py" || \
