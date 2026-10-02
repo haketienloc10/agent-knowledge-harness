@@ -3,7 +3,9 @@ from __future__ import annotations
 import sqlite3
 import sys
 import tempfile
+import threading
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
 from pathlib import Path
 from types import SimpleNamespace
@@ -56,6 +58,42 @@ class Phase4SemanticStoreTests(unittest.TestCase):
                 work_item_id="e2e:008",
                 work_item_revision=2,
             )
+
+    def test_concurrent_work_item_revisions_cannot_commit_out_of_order(self) -> None:
+        self.store.record_work_item_revision(
+            work_item_id="e2e:revision-race",
+            work_item_revision=1,
+            reason="initial revision",
+        )
+        barrier = threading.Barrier(2)
+
+        def write_revision(revision: int) -> tuple[str, int]:
+            store = SessionStore(self.db_path)
+            barrier.wait()
+            try:
+                store.record_work_item_revision(
+                    work_item_id="e2e:revision-race",
+                    work_item_revision=revision,
+                    reason=f"concurrent revision {revision}",
+                )
+                return ("ok", revision)
+            except RuntimeError:
+                return ("rejected", revision)
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            outcomes = list(pool.map(write_revision, (2, 3)))
+
+        events = [
+            event
+            for event in self.store.list_slp_events()
+            if event["event_type"] == "work_item.revision_changed"
+            and event["work_item_id"] == "e2e:revision-race"
+        ]
+        revisions = [event["work_item_revision"] for event in events]
+        self.assertEqual(revisions[0], 1)
+        self.assertEqual(revisions[-1], 3)
+        self.assertEqual(revisions, sorted(revisions))
+        self.assertIn(("ok", 3), outcomes)
 
     def test_accept_disposition_emits_candidate_accepted_transition(self) -> None:
         packet = build_task_packet(
@@ -460,6 +498,175 @@ class Phase4SemanticStoreTests(unittest.TestCase):
         ]
         self.assertEqual(len(reconciliations), 1)
         self.assertEqual(reconciliations[0]["payload"]["resolution"], "abandoned")
+
+    def test_candidate_reconciliation_is_serialized_under_concurrency(self) -> None:
+        stale_packet = build_task_packet(
+            objective="Produce revision 1 candidate.",
+            scope=["repo work"],
+            acceptance_criteria=["tests pass"],
+            context={
+                "trusted_facts": [
+                    {
+                        "fact": (
+                            "work_item_path=/tmp/work-items/e2e-reconcile-race; "
+                            "id=e2e:reconcile-race; revision=1"
+                        ),
+                        "source": "canonical Work Item locator",
+                    }
+                ]
+            },
+        )
+        self.store.record_turn(
+            turn_id="turn-reconcile-race",
+            session_id="session-reconcile-race",
+            repository="repo-a",
+            agent="claude",
+            route="claude-balanced",
+            state="settled",
+            native_turn_id=None,
+            packet=stale_packet,
+            agent_response="revision 1 result",
+        )
+        self.store.record_work_item_revision(
+            work_item_id="e2e:reconcile-race",
+            work_item_revision=2,
+            reason="material requirement change",
+        )
+        barrier = threading.Barrier(2)
+
+        def reconcile(resolution: str) -> str:
+            store = SessionStore(self.db_path)
+            barrier.wait()
+            try:
+                store.record_candidate_reconciliation(
+                    stale_turn_id="turn-reconcile-race",
+                    resolution=resolution,
+                    reason=f"concurrent {resolution}",
+                    work_item_id="e2e:reconcile-race",
+                    work_item_revision=2,
+                )
+                return "ok"
+            except RuntimeError:
+                return "rejected"
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            outcomes = list(pool.map(reconcile, ("abandoned", "revalidated")))
+
+        self.assertEqual(sorted(outcomes), ["ok", "rejected"])
+        reconciliations = [
+            event
+            for event in self.store.list_slp_events()
+            if event["event_type"] == "candidate.reconciled"
+            and event["turn_id"] == "turn-reconcile-race"
+        ]
+        self.assertEqual(len(reconciliations), 1)
+
+    def test_terminal_candidate_cannot_be_revalidated_on_later_revision(self) -> None:
+        stale_packet = build_task_packet(
+            objective="Produce revision 1 candidate.",
+            scope=["repo work"],
+            acceptance_criteria=["tests pass"],
+            context={
+                "trusted_facts": [
+                    {
+                        "fact": (
+                            "work_item_path=/tmp/work-items/e2e-terminal-later; "
+                            "id=e2e:terminal-later; revision=1"
+                        ),
+                        "source": "canonical Work Item locator",
+                    }
+                ]
+            },
+        )
+        self.store.record_turn(
+            turn_id="turn-terminal-later",
+            session_id="session-terminal-later",
+            repository="repo-a",
+            agent="claude",
+            route="claude-balanced",
+            state="settled",
+            native_turn_id=None,
+            packet=stale_packet,
+            agent_response="revision 1 result",
+        )
+        self.store.record_work_item_revision(
+            work_item_id="e2e:terminal-later",
+            work_item_revision=2,
+            reason="revision 2",
+        )
+        terminal_seq = self.store.record_candidate_reconciliation(
+            stale_turn_id="turn-terminal-later",
+            resolution="abandoned",
+            reason="candidate retired permanently",
+            work_item_id="e2e:terminal-later",
+            work_item_revision=2,
+        )
+        self.store.record_work_item_revision(
+            work_item_id="e2e:terminal-later",
+            work_item_revision=3,
+            reason="revision 3",
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "terminal reconciliation"):
+            self.store.record_candidate_reconciliation(
+                stale_turn_id="turn-terminal-later",
+                resolution="revalidated",
+                reason="must not resurrect",
+                work_item_id="e2e:terminal-later",
+                work_item_revision=3,
+            )
+
+        repeated = self.store.record_candidate_reconciliation(
+            stale_turn_id="turn-terminal-later",
+            resolution="abandoned",
+            reason="idempotent terminal retry",
+            work_item_id="e2e:terminal-later",
+            work_item_revision=3,
+        )
+        self.assertEqual(repeated, terminal_seq)
+
+    def test_orphan_write_claim_has_explicit_recovery_release(self) -> None:
+        self.store.record_write_scope_claim(
+            claim_id="repo:repo-a:turn:orphan-recovery",
+            repository="repo-a",
+            owner="orphan-recovery",
+            scope=["*"],
+            turn_id="orphan-recovery",
+        )
+        with self.assertRaisesRegex(RuntimeError, "active durable write-scope claim"):
+            self.store.record_write_scope_claim(
+                claim_id="repo:repo-a:turn:new-writer",
+                repository="repo-a",
+                owner="new-writer",
+                scope=["*"],
+                turn_id="new-writer",
+                require_repository_clear=True,
+            )
+
+        release_seq = self.store.record_write_scope_recovery_release(
+            claim_id="repo:repo-a:turn:orphan-recovery",
+            repository="repo-a",
+            reason="operator verified the crashed writer is terminated",
+        )
+        release = next(
+            event
+            for event in self.store.list_slp_events()
+            if event["seq"] == release_seq
+        )
+        self.assertEqual(release["event_type"], "write_scope.released")
+        self.assertTrue(release["payload"]["recovery"])
+        self.assertEqual(
+            self.store.list_active_write_scope_claims(repository="repo-a"),
+            [],
+        )
+        self.store.record_write_scope_claim(
+            claim_id="repo:repo-a:turn:new-writer",
+            repository="repo-a",
+            owner="new-writer",
+            scope=["*"],
+            turn_id="new-writer",
+            require_repository_clear=True,
+        )
 
     def test_schema_upgrade_backfills_legacy_turn_once(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
