@@ -1832,6 +1832,12 @@ class SessionStore:
             result["idempotent"] = True
             return result
 
+        if clean_action == "accept":
+            self.assert_turn_current_for_acceptance_in_transaction(
+                conn,
+                turn_id=clean_turn_id,
+            )
+
         disposition_id = str(uuid.uuid4())
         now = time.time_ns()
         disposition_payload: dict[str, Any] = {
@@ -1926,6 +1932,10 @@ class SessionStore:
         attempt_id: str | None = None,
     ) -> dict[str, Any]:
         with self._connect() as conn:
+            # Direct dispositions need the same revision-race protection as TaskGraph
+            # decisions. Hold the writer reservation across freshness validation and
+            # disposition/candidate.accepted insertion.
+            conn.execute("BEGIN IMMEDIATE")
             return self.record_lead_disposition_in_transaction(
                 conn,
                 turn_id=turn_id,
