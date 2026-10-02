@@ -94,6 +94,54 @@ class UserScopeInstallerRaceTests(unittest.TestCase):
             self.assertEqual(alternate.read_text(encoding="utf-8"), "alternate-original\n")
             self.assertEqual(alias.resolve(), alternate.resolve())
 
+    def test_rules_pending_signal_after_cleanup_reports_signal_exit_without_rollback(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            template = root / "user-rules-template"
+            shutil.copytree(REPO_ROOT / "user-rules-template", template)
+            script = template / "scripts" / "install-user-rules.sh"
+            text = script.read_text(encoding="utf-8")
+            text = replace_once(
+                text,
+                """        for tmp in list(temps):
+            try:
+                os.unlink(tmp)
+""",
+                """        sent_cleanup_signal = False
+        for tmp in list(temps):
+            try:
+                os.unlink(tmp)
+                if not sent_cleanup_signal:
+                    os.kill(os.getpid(), signal.SIGTERM)
+                    sent_cleanup_signal = True
+""",
+                "rules final cleanup signal",
+            )
+            script.write_text(text, encoding="utf-8")
+
+            claude = root / "CLAUDE.md"
+            codex = root / "AGENTS.md"
+            result = self.run_installer(
+                script,
+                "--claude-file",
+                str(claude),
+                "--codex-file",
+                str(codex),
+            )
+
+            self.assertEqual(result.returncode, 128 + 15)
+            self.assertNotIn("Traceback", result.stderr)
+            self.assertTrue(claude.exists())
+            self.assertTrue(codex.exists())
+            self.assertIn(
+                "<!-- AKH: response-rules -->",
+                claude.read_text(encoding="utf-8"),
+            )
+            self.assertIn(
+                "<!-- AKH: response-rules -->",
+                codex.read_text(encoding="utf-8"),
+            )
+
     def test_rules_open_descriptor_write_survives_rollback_quarantine(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
