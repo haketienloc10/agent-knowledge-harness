@@ -34,6 +34,10 @@ bash user-rules-template/scripts/install-user-rules.sh
 
 `ste-vi` áp dụng STE-lite cho tiếng Việt: câu ngắn, thuật ngữ ổn định, technical name giữ nguyên và quan hệ nhân quả rõ. Đây là cách viết lấy cảm hứng từ ASD-STE100, không phải tuyên bố compliance ASD-STE100 cho tiếng Việt.
 
+Codex đọc user instruction từ `${CODEX_HOME:-$HOME/.codex}/AGENTS.md` và user skill từ
+`${CODEX_HOME:-$HOME/.codex}/skills/ste-vi`. Hai installer tôn trọng `CODEX_HOME` khi biến này
+được cấu hình.
+
 `user-rules-template` giữ policy chọn hình thức giải thích ở tầng response: bắt đầu bằng text, chuyển sang diagram khi độ khó nằm ở quan hệ/luồng, và cân nhắc interactive HTML khi cần thao tác với state hoặc input.
 
 Hai template này cài vào user home, không materialize vào workspace/repo con và không cần migration chỉ vì thay đổi nội dung của chúng.
