@@ -1159,17 +1159,30 @@ class DirectDelegationPhase4IntegrationTests(unittest.IsolatedAsyncioTestCase):
                         ),
                     )
                 )
-                with self.assertRaisesRegex(
-                    ToolError,
-                    "durable write-scope claim.*retained",
-                ):
-                    await server.delegate_repo_task(
-                        repository="repo-a",
-                        route="claude-balanced",
-                        objective="Implement one change.",
-                        scope=["pricing"],
-                        acceptance_criteria=["tests pass"],
-                    )
+                result = await server.delegate_repo_task(
+                    repository="repo-a",
+                    route="claude-balanced",
+                    objective="Implement one change.",
+                    scope=["pricing"],
+                    acceptance_criteria=["tests pass"],
+                )
+
+            self.assertEqual(result["state"], "settled")
+            self.assertEqual(result["session_id"], "native-session-1")
+            self.assertEqual(result["agent_response"], "peer final response")
+            self.assertEqual(
+                result["cleanup_state"],
+                "workspace_close_unconfirmed",
+            )
+            self.assertEqual(
+                result["write_claim_repository"],
+                "repo-a",
+            )
+            self.assertTrue(
+                result["write_claim_id"].startswith("repo:repo-a:turn:")
+            )
+            self.assertEqual(result["workspace_id"], "workspace-1")
+            self.assertIn("release_write_scope_claim", result["recovery_action"])
 
             release.assert_awaited_once()
             event_types = [
