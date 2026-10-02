@@ -133,17 +133,19 @@ for index, left in enumerate(plans):
             )
             sys.exit(65)
 
-# Prepare every replacement before any target is changed.
+# Prepare every replacement and rollback backup before any target is changed.
 prepared = []
 temps = set()
+committed = []
 try:
     for client, requested, target, text, new in plans:
         if new == text:
-            prepared.append((client, requested, target, None))
+            prepared.append((client, requested, target, None, text is not None, None))
             continue
 
         parent = os.path.dirname(target)
         os.makedirs(parent, exist_ok=True)
+
         fd, tmp = tempfile.mkstemp(dir=parent, prefix=".akh-rules.")
         temps.add(tmp)
         try:
@@ -156,17 +158,60 @@ try:
                 pass
             raise
 
-        if text is not None:
+        had_original = text is not None
+        backup = None
+        if had_original:
             shutil.copymode(target, tmp)
-        prepared.append((client, requested, target, tmp))
 
-    for client, requested, target, tmp in prepared:
-        if tmp is None:
-            print(f"{client} rules unchanged: {requested}")
-            continue
-        os.replace(tmp, target)
-        temps.discard(tmp)
-        print(f"{client} rules installed: {requested}")
+            backup_fd, backup = tempfile.mkstemp(
+                dir=parent, prefix=".akh-rules.backup."
+            )
+            os.close(backup_fd)
+            temps.add(backup)
+            shutil.copy2(target, backup)
+
+        prepared.append(
+            (client, requested, target, tmp, had_original, backup)
+        )
+
+    try:
+        for item in prepared:
+            client, requested, target, tmp, had_original, backup = item
+            if tmp is None:
+                print(f"{client} rules unchanged: {requested}")
+                continue
+
+            os.replace(tmp, target)
+            temps.discard(tmp)
+            committed.append(item)
+            print(f"{client} rules installed: {requested}")
+    except Exception as commit_error:
+        rollback_errors = []
+        for item in reversed(committed):
+            client, requested, target, tmp, had_original, backup = item
+            try:
+                if had_original:
+                    if backup is None:
+                        raise RuntimeError("missing rollback backup")
+                    os.replace(backup, target)
+                    temps.discard(backup)
+                else:
+                    try:
+                        os.unlink(target)
+                    except FileNotFoundError:
+                        pass
+            except Exception as rollback_error:
+                rollback_errors.append(
+                    f"{client} ({requested}): {rollback_error}"
+                )
+
+        if rollback_errors:
+            sys.stderr.write(
+                "ERROR: rule install failed and rollback was incomplete: "
+                + "; ".join(rollback_errors)
+                + "\n"
+            )
+        raise commit_error
 finally:
     for tmp in list(temps):
         try:
