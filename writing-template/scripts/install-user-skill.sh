@@ -13,7 +13,7 @@ Usage: install-user-skill.sh [--codex-root PATH] [--claude-root PATH]
 
 Installs the managed `ste-vi` Agent Skill for user-scope discovery by
 Codex and Claude Code. Existing unrelated skills with the same name are not
-silently overwritten.
+silently overwritten. A same-name symlink is rejected explicitly.
 USAGE
 }
 
@@ -36,6 +36,14 @@ preflight_skill() {
   local target="$root/$name"
   local marker="$target/.agent-knowledge-harness-managed"
 
+  # Test -L before -e/-d because a dangling symlink is neither -e nor -d.
+  # Reject all same-name symlinks so the installer never replaces a user-managed link.
+  if [[ -L "$target" ]]; then
+    printf 'ERROR: %s skill target is a symlink and will not be replaced: %s\n' "$client" "$target" >&2
+    printf 'Move/remove the symlink explicitly, then rerun installer.\n' >&2
+    return 78
+  fi
+
   if [[ -e "$target" && ! -d "$target" ]]; then
     printf 'ERROR: %s skill target exists and is not a directory: %s\n' "$client" "$target" >&2
     return 78
@@ -52,10 +60,18 @@ preflight_skill() {
 install_skill() {
   local client="$1" root="$2"
   local target="$root/$name"
-  local temp_parent
+  local temp_parent=""
 
   mkdir -p "$root"
   temp_parent="$(mktemp -d "$root/.$name.XXXXXX")"
+
+  cleanup_temp() {
+    if [[ -n "$temp_parent" && -d "$temp_parent" ]]; then
+      rm -rf "$temp_parent"
+    fi
+  }
+  trap cleanup_temp RETURN
+
   cp -R "$source_skill" "$temp_parent/$name"
   : > "$temp_parent/$name/.agent-knowledge-harness-managed"
   if [[ -d "$target" ]]; then
@@ -63,7 +79,9 @@ install_skill() {
   fi
   mv "$temp_parent/$name" "$target"
   rmdir "$temp_parent"
+  temp_parent=""
 
+  trap - RETURN
   printf '%s skill installed: %s/SKILL.md\n' "$client" "$target"
 }
 
