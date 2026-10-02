@@ -578,6 +578,7 @@ class DurableDrainTests(unittest.IsolatedAsyncioTestCase):
                 limit,
                 review=True,
                 deliver=True,
+                before_delivery=None,
             ):
                 self.calls += 1
                 phase = "review" if review else "deliver"
@@ -650,6 +651,7 @@ class DurableDrainTests(unittest.IsolatedAsyncioTestCase):
                 limit,
                 review=True,
                 deliver=True,
+                before_delivery=None,
             ):
                 phase = "review" if review else "deliver"
                 call_order.append(f"runtime-{phase}")
@@ -691,6 +693,7 @@ class DurableDrainTests(unittest.IsolatedAsyncioTestCase):
                 limit,
                 review=True,
                 deliver=True,
+                before_delivery=None,
             ):
                 if review:
                     phases.append("review")
@@ -736,6 +739,7 @@ class DurableDrainTests(unittest.IsolatedAsyncioTestCase):
                 limit,
                 review=True,
                 deliver=True,
+                before_delivery=None,
             ):
                 return {
                     "reviewed": 0,
