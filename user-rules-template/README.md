@@ -48,19 +48,26 @@ Script chỉ đụng vào khối nằm giữa hai marker:
 | File chưa tồn tại | Tạo file chỉ chứa khối |
 | File instruction là symlink hợp lệ | Giữ symlink, cập nhật file đích của symlink |
 | Symlink bị gãy hoặc không trỏ tới regular file | Dừng với exit 65, không ghi target nào |
+| Ancestor của instruction path là dangling symlink hoặc non-directory | Dừng với exit 65 trước khi resolve/prepare target |
 | Marker lỗi: thiếu một đầu, trùng, hoặc sai thứ tự | Dừng với exit 65, không ghi target nào |
 | Nội dung đã giống nguồn | In `unchanged`, không ghi |
 | Hai target trùng hoặc lồng nhau sau khi resolve path | Dừng với exit 65 trước khi tạo parent hoặc ghi file |
 
 Installer preflight cả Claude và Codex trước khi thay file. Vì vậy lỗi marker, symlink hoặc target
-lồng nhau ở một client không làm client còn lại bị cập nhật một phần. Trước commit, installer tạo
-rollback backup cho mọi target hiện hữu cần thay. Nếu một `os.replace` về sau thất bại, các target
-đã thay trước đó được restore theo thứ tự ngược.
+lồng nhau ở một client không làm client còn lại bị cập nhật một phần. Ngay trước mỗi `os.replace`,
+installer revalidate resolved path, file identity và content snapshot; nếu editor hoặc dotfile
+manager đã thay target thì installer abort thay vì ghi đè snapshot cũ.
+
+Trước commit, installer tạo rollback backup cho mọi target hiện hữu cần thay. Nếu một
+`os.replace` về sau thất bại, hoặc process nhận `HUP`/`INT`/`TERM` trong commit phase, các
+target đã thay trước đó được restore theo thứ tự ngược. Signal được block trong khoảng
+`os.replace -> ghi nhận commit` để rollback không bỏ sót target vừa thay.
 
 Ghi nội dung qua file tạm rồi `os.replace`, giữ nguyên quyền của regular file cũ. Với symlink,
 `os.replace` áp dụng lên file đích đã resolve, không thay bản thân symlink. Installer cũng giữ
-nguyên UTF-8 BOM ở đầu file và line ending của phần nằm ngoài managed block; file CRLF không bị
-normalize toàn bộ sang LF. Temporary file được đăng ký cleanup ngay sau khi tạo, kể cả khi bước
+nguyên UTF-8 BOM ở đầu file và line ending của phần nằm ngoài managed block. Với file mixed-EOL,
+terminator thực tế ngay sau end marker cũng được giữ nguyên; file CRLF không bị normalize toàn bộ
+sang LF. Temporary file được đăng ký cleanup ngay sau khi tạo, kể cả khi bước
 ghi hoặc `copymode` thất bại.
 
 Lần cài đầu vào file đã có sẵn nội dung tương tự nhưng chưa có marker sẽ tạo bản trùng. Xóa
