@@ -167,12 +167,13 @@ The runtime now emits/records the semantic inputs consumed by the deterministic 
   `record_dependency_consumption_resolution(consumption_event_seq, reason)` for the exact
   violating consumption event; that separate event closes the case while preserving history;
 - every direct/TaskGraph repository delegation uses the existing repository ownership lock and
-  emits conservative `write_scope.claimed/released` events with scope `["*"]`; durable release
-  is attempted both when pre-dispatch semantic recording fails after the claim and when later Herdr
-  workspace cleanup fails. If a process crash leaves a durable claim without its release, the
-  runtime fails closed on subsequent writers; after an operator/Lead verifies the old writer is
-  terminated or intentionally abandoned, `release_write_scope_claim(claim_id, repository, reason)`
-  records an explicit recovery release instead of auto-expiring ownership;
+  emits conservative `write_scope.claimed/released` events with scope `["*"]`. Pre-dispatch
+  failures release a claim because no Peer workspace was started. After dispatch, the durable claim
+  is released only when Herdr workspace shutdown is confirmed; if shutdown fails or the process
+  crashes, the claim remains active and subsequent writers fail closed. After an operator/Lead
+  verifies the old writer is terminated or intentionally abandoned,
+  `release_write_scope_claim(claim_id, repository, reason)` records an explicit recovery release
+  instead of auto-expiring ownership;
 - explicit Lead `accept` also emits `candidate.accepted`; any explicit Work Item id/revision
   passed with a disposition must exactly match the canonical locator captured in that turn's
   TaskPacket or the write fails closed;
@@ -205,7 +206,11 @@ Supervisor responses are captured through the native Stop hook. The broker does 
 `pane.read` or `agent.read` as semantic input.
 
 Confirmed Supervisor findings are delivered to Lead with Herdr `agent prompt` without treating
-prompt acknowledgement as completion.
+prompt acknowledgement as completion. Immediately before each Lead wakeup, the runtime replays
+durable semantic events again and rechecks the materialized case status, so a disposition or
+resolution committed after Supervisor review suppresses an obsolete notification. R2 wakeups carry
+the exact `consumption_event_seq` in the deterministic runtime locator; Lead does not have to rely
+on the model-authored evidence text to recover the remediation key.
 
 ## Operations
 
