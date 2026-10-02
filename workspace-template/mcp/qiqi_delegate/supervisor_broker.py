@@ -1256,6 +1256,7 @@ async def _drain_durable(
             limit=SUPERVISOR_BATCH_LIMIT,
             review=False,
             deliver=True,
+            before_delivery=replay_to_quiescence,
         )
         accumulate_supervisor(delivery_result)
         if delivery_result["delivery_failures"]:
