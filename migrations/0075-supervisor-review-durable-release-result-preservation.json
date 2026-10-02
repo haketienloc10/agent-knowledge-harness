@@ -1,7 +1,7 @@
 {
   "version": 75,
   "from_ref": "a552a18d3749ddc29d1ce09c456be8c72c14ef4d",
-  "to_ref": "88c3dcb86b9dce3e1db4cd9b6526f66c2b1306cd",
+  "to_ref": "7b7ebf4c5d459dcbaba61b56a333b17ec1a6994e",
   "description": "fix fourteenth Codex review of autonomous Supervisor governance: preserve already-captured Peer semantic results when durable write-scope release persistence fails after confirmed workspace shutdown, return explicit claim recovery locators instead of converting the candidate into an executor failure, and enforce the behavior with regression and workspace contract coverage",
   "workspace": {
     "merge": [],
