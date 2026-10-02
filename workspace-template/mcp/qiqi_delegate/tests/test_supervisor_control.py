@@ -286,6 +286,18 @@ class SupervisorFindingContractTests(unittest.TestCase):
         self.assertIn("work_item: e2e:008@7", message)
         self.assertIn("candidate_id: sha256:exact", message)
 
+        r2_message = render_lead_finding(
+            {
+                "case_id": "case-r2-locator",
+                "status": "issue",
+                "observation": "Dependency was consumed before acceptance.",
+                "evidence": ["temporal R2 evidence"],
+                "open_question_for_lead": "How was the downstream premise remediated?",
+                "_case_context": {"consumption_event_seq": 42},
+            }
+        )
+        self.assertIn("consumption_event_seq: 42", r2_message)
+
     def test_default_supervisor_home_is_outside_workspace_project_tree(self) -> None:
         workspace = Path("/tmp/project/workspace")
         home = default_supervisor_home(
@@ -440,6 +452,14 @@ class AutonomousSupervisorRuntimeTests(unittest.IsolatedAsyncioTestCase):
             packet["disposition_state"]["event_seq"],
             packet["disposition_state"]["consumption_event_seq"],
         )
+        pending = SupervisorControlStore(
+            self.db_path
+        ).issue_findings_needing_delivery()
+        self.assertEqual(len(pending), 1)
+        self.assertEqual(
+            pending[0]["_case_context"]["consumption_event_seq"],
+            packet["disposition_state"]["consumption_event_seq"],
+        )
 
     async def test_r5_runtime_packet_hydrates_prior_lead_disposition(self) -> None:
         packet = build_task_packet(
@@ -541,6 +561,46 @@ class AutonomousSupervisorRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             len(SupervisorControlStore(self.db_path).pending_unreviewed_cases()),
             1,
+        )
+
+    async def test_delivery_replays_closure_committed_after_finding_selection(
+        self,
+    ) -> None:
+        self._record_turn("turn-delivery-race")
+        self.broker.process_pending()
+        fake = _FakeControlPlane("issue")
+        runtime = AutonomousSupervisorRuntime(
+            state_db=self.db_path,
+            control_plane=fake,
+        )
+        await runtime.handle_pending_cases(deliver=False)
+        self.assertEqual(len(fake.lead_findings), 0)
+
+        replay_calls = 0
+
+        async def replay_before_delivery() -> None:
+            nonlocal replay_calls
+            replay_calls += 1
+            if replay_calls == 1:
+                self.store.record_lead_disposition(
+                    turn_id="turn-delivery-race",
+                    action="reject",
+                    reason="Lead resolved the case before Supervisor delivery",
+                )
+            self.broker.process_pending()
+
+        result = await runtime.handle_pending_cases(
+            review=False,
+            deliver=True,
+            before_delivery=replay_before_delivery,
+        )
+
+        self.assertEqual(result["delivery_attempted"], 1)
+        self.assertEqual(result["delivered_to_lead"], 0)
+        self.assertEqual(fake.lead_findings, [])
+        self.assertEqual(
+            self.broker.list_cases()[0]["status"],
+            "CLOSED",
         )
 
     async def test_runtime_is_idempotent_after_finding_delivery(self) -> None:
