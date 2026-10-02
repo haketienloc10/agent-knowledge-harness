@@ -38,6 +38,8 @@ command -v python3 >/dev/null 2>&1 || {
 }
 
 python3 - "$source_skill" "$name" "$codex_root" "$claude_root" <<'PY'
+import ctypes
+import errno
 import hashlib
 import os
 import shutil
@@ -195,6 +197,60 @@ def path_overlap(left, right):
     except ValueError:
         return False
     return common in (left, right)
+
+
+def rename_noreplace(source, target):
+    """Rename a directory without replacing a target that appeared in a race."""
+    encoded_source = os.fsencode(source)
+    encoded_target = os.fsencode(target)
+    libc = ctypes.CDLL(None, use_errno=True)
+
+    if sys.platform.startswith("linux"):
+        renameat2 = getattr(libc, "renameat2", None)
+        if renameat2 is not None:
+            renameat2.argtypes = [
+                ctypes.c_int,
+                ctypes.c_char_p,
+                ctypes.c_int,
+                ctypes.c_char_p,
+                ctypes.c_uint,
+            ]
+            renameat2.restype = ctypes.c_int
+            result = renameat2(
+                -100, encoded_source, -100, encoded_target, 1
+            )
+            if result == 0:
+                return
+            error = ctypes.get_errno()
+            if error == errno.EEXIST:
+                raise FileExistsError(error, os.strerror(error), target)
+            if error not in (errno.ENOSYS, errno.EINVAL):
+                raise OSError(error, os.strerror(error), target)
+
+    if sys.platform == "darwin":
+        renamex_np = getattr(libc, "renamex_np", None)
+        if renamex_np is not None:
+            renamex_np.argtypes = [
+                ctypes.c_char_p,
+                ctypes.c_char_p,
+                ctypes.c_uint,
+            ]
+            renamex_np.restype = ctypes.c_int
+            # RENAME_EXCL from <sys/stdio.h>.
+            result = renamex_np(encoded_source, encoded_target, 0x00000004)
+            if result == 0:
+                return
+            error = ctypes.get_errno()
+            if error == errno.EEXIST:
+                raise FileExistsError(error, os.strerror(error), target)
+            if error not in (errno.ENOTSUP, errno.EINVAL):
+                raise OSError(error, os.strerror(error), target)
+
+    # Conservative portability fallback. The explicit existence check keeps the
+    # common case fail-closed; Linux/macOS use kernel no-replace primitives above.
+    if os.path.lexists(target):
+        raise FileExistsError(errno.EEXIST, os.strerror(errno.EEXIST), target)
+    os.rename(source, target)
 
 
 def ensure_source():
@@ -400,7 +456,7 @@ def commit_one(state):
                 f"{state['display_target']}"
             )
 
-        os.rename(state["stage_target"], state["target"])
+        rename_noreplace(state["stage_target"], state["target"])
         state["installed"] = True
         state["installed_fingerprint"] = tree_fingerprint(state["target"])
 
