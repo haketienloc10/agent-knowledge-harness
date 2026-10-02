@@ -1054,7 +1054,7 @@ class DirectDelegationPhase4IntegrationTests(unittest.IsolatedAsyncioTestCase):
             )
 
 
-    async def test_write_scope_release_survives_herdr_workspace_close_failure(self) -> None:
+    async def test_write_scope_claim_is_retained_when_herdr_workspace_close_fails(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             repo_path = root / "repo-a"
@@ -1159,7 +1159,10 @@ class DirectDelegationPhase4IntegrationTests(unittest.IsolatedAsyncioTestCase):
                         ),
                     )
                 )
-                with self.assertRaisesRegex(ToolError, "transient close failure"):
+                with self.assertRaisesRegex(
+                    ToolError,
+                    "durable write-scope claim.*retained",
+                ):
                     await server.delegate_repo_task(
                         repository="repo-a",
                         route="claude-balanced",
@@ -1169,10 +1172,13 @@ class DirectDelegationPhase4IntegrationTests(unittest.IsolatedAsyncioTestCase):
                     )
 
             release.assert_awaited_once()
-            self.assertIn(
-                "write_scope.released",
-                [event["event_type"] for event in store.list_slp_events()],
-            )
+            event_types = [
+                event["event_type"] for event in store.list_slp_events()
+            ]
+            self.assertNotIn("write_scope.released", event_types)
+            active = store.list_active_write_scope_claims(repository="repo-a")
+            self.assertEqual(len(active), 1)
+            self.assertEqual(active[0]["turn_id"], active[0]["owner"])
 
 
 class TaskGraphPhase4IntegrationTests(unittest.IsolatedAsyncioTestCase):
