@@ -1,5 +1,5 @@
 {
-  "version": 74,
+  "version": 75,
   "from_ref": "c6cf0b0c5638dbee115c13cdb7a38377f98f3584",
   "to_ref": "23e1ceba55e2487261aa1c9687d75c1ee01c39e7",
   "description": "fix thirteenth Codex review of autonomous Supervisor governance: preserve already-captured Peer semantic results and explicit cleanup recovery locators when delegated Herdr workspace shutdown fails, and hydrate deterministic repository plus durable claim identifiers into R3 Lead wakeup locators",
