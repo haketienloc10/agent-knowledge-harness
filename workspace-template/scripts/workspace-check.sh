@@ -217,7 +217,7 @@ grep -Fq 'record_write_scope_recovery_release' "$mcp_project/core.py" || \
   fail 'SessionStore must expose an explicit orphan write-claim recovery path'
 grep -Fq 'was retained for explicit recovery' "$mcp_project/server.py" || \
   fail 'delegation cleanup must retain durable ownership when cleanup persistence is unconfirmed'
-grep -Fq '"cleanup_state": "workspace_close_unconfirmed"' "$mcp_project/server.py" || \
+grep -Fq 'cleanup_state = "workspace_close_unconfirmed"' "$mcp_project/server.py" || \
   fail 'delegation shutdown failure must preserve captured semantic result with recovery metadata'
 grep -Fq '"write_claim_release_unconfirmed"' "$mcp_project/server.py" || \
   fail 'durable claim-release failure must preserve captured semantic result with recovery metadata'
