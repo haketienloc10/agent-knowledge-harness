@@ -402,6 +402,7 @@ def build_state(client, raw_root):
         "rollback_failed": False,
         "rollback_current_parent": None,
         "rollback_current_target": None,
+        "success_backup_retained": False,
     }
 
 
@@ -728,16 +729,31 @@ def cleanup_created_root(state, warnings):
 def cleanup_success_backups(states, warnings):
     for state in states:
         parent = state["backup_parent"]
-        if parent and os.path.lexists(parent):
-            try:
-                shutil.rmtree(parent)
-                state["backup_parent"] = None
-                state["backup_target"] = None
-            except OSError as exc:
+        backup = state["backup_target"]
+        if not parent or not os.path.lexists(parent):
+            continue
+
+        if state["moved_aside"] and backup and os.path.isdir(backup):
+            # Do not delete a moved-aside tree after success. Another process may
+            # still hold an open descriptor inside it and write after publish.
+            # Keeping the backup preserves those late writes for recovery.
+            if not state["success_backup_retained"]:
                 warnings.append(
-                    f"{state['client']}: could not remove completed backup "
-                    f"directory {parent}: {exc}"
+                    f"{state['client']}: retained replaced skill backup for "
+                    f"descriptor-safe recovery: {parent}"
                 )
+                state["success_backup_retained"] = True
+            continue
+
+        try:
+            shutil.rmtree(parent)
+            state["backup_parent"] = None
+            state["backup_target"] = None
+        except OSError as exc:
+            warnings.append(
+                f"{state['client']}: could not remove completed backup "
+                f"directory {parent}: {exc}"
+            )
 
 
 def ensure_roots(states):
