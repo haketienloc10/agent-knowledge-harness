@@ -764,6 +764,30 @@ class SupervisorBroker:
         )
         return int(opened), 0
 
+    def _process_dependency_consumption_resolved(
+        self,
+        conn: sqlite3.Connection,
+        event: dict[str, Any],
+    ) -> tuple[int, int]:
+        payload = event["payload"]
+        consumption_event_seq = payload.get("consumption_event_seq")
+        if (
+            isinstance(consumption_event_seq, bool)
+            or not isinstance(consumption_event_seq, int)
+            or consumption_event_seq <= 0
+        ):
+            return 0, 0
+        closed = self._close_cases(
+            conn,
+            event_seq=int(event["seq"]),
+            predicate=lambda case: (
+                case["rule"] == "R2"
+                and case["details"].get("consumption_event_seq")
+                == consumption_event_seq
+            ),
+        )
+        return 0, closed
+
     def _process_write_scope_claim(
         self,
         conn: sqlite3.Connection,
@@ -1091,6 +1115,8 @@ class SupervisorBroker:
             return self._process_candidate_reconciled(conn, event)
         if event_type == "dependency.consumed":
             return self._process_dependency_consumed(conn, event)
+        if event_type == "dependency.consumption_resolved":
+            return self._process_dependency_consumption_resolved(conn, event)
         if event_type == "write_scope.claimed":
             return self._process_write_scope_claim(conn, event)
         if event_type == "write_scope.released":
