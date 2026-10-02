@@ -547,13 +547,17 @@ def commit_one(state):
                 f"{state['display_target']}"
             )
 
+        # The staged fingerprint is the installer's expected identity.
+        # Capture it before publish so a watcher that edits the target immediately
+        # after rename cannot redefine externally modified content as "ours".
+        expected_installed_fingerprint = state["stage_fingerprint"]
         rename_noreplace(state["stage_target"], state["target"])
         state["installed"] = True
-        state["installed_fingerprint"] = tree_fingerprint(state["target"])
+        state["installed_fingerprint"] = expected_installed_fingerprint
 
         if (
-            state["installed_fingerprint"]
-            != state["stage_fingerprint"]
+            tree_fingerprint(state["target"])
+            != expected_installed_fingerprint
         ):
             raise RuntimeError(
                 f"{state['client']} installed skill differs from staged copy"
