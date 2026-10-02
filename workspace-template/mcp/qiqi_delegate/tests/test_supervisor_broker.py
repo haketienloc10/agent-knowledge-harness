@@ -489,9 +489,16 @@ class DurableDrainTests(unittest.IsolatedAsyncioTestCase):
             def __init__(self):
                 self.calls = 0
 
-            async def handle_pending_cases(self, *, limit):
+            async def handle_pending_cases(
+                self,
+                *,
+                limit,
+                review=True,
+                deliver=True,
+            ):
                 self.calls += 1
-                call_order.append(f"runtime-{self.calls}")
+                phase = "review" if review else "deliver"
+                call_order.append(f"runtime-{phase}-{self.calls}")
                 return {
                     "reviewed": 0,
                     "delivered_to_lead": 0,
@@ -505,12 +512,116 @@ class DurableDrainTests(unittest.IsolatedAsyncioTestCase):
         runtime = Runtime()
         result = await _drain_durable(broker, runtime)
 
-        self.assertEqual(call_order, ["broker-1", "broker-2", "runtime-1", "broker-3"])
+        self.assertEqual(
+            call_order,
+            [
+                "broker-1",
+                "broker-2",
+                "runtime-review-1",
+                "broker-3",
+                "runtime-deliver-2",
+                "broker-4",
+            ],
+        )
         self.assertTrue(broker.healthy)
         self.assertEqual(result["broker"]["processed"], 1003)
         self.assertEqual(result["broker"]["opened"], 1)
         self.assertEqual(result["broker"]["closed"], 1)
         self.assertEqual(result["supervisor"]["reviewed"], 0)
+
+    async def test_drain_replays_concurrent_closure_before_issue_delivery(self) -> None:
+        call_order: list[str] = []
+
+        class Broker:
+            def __init__(self):
+                self.calls = 0
+
+            def process_pending(self, *, limit):
+                self.calls += 1
+                call_order.append(f"broker-{self.calls}")
+                # The second replay represents a Lead closure committed while
+                # Supervisor review was awaiting the model.
+                return {
+                    "from_seq": self.calls - 1,
+                    "last_processed_seq": self.calls,
+                    "processed": 1 if self.calls == 2 else 0,
+                    "opened": 0,
+                    "closed": 1 if self.calls == 2 else 0,
+                }
+
+            def mark_healthy(self):
+                return None
+
+            def health_state(self):
+                return {
+                    "health_status": "healthy",
+                    "last_error": None,
+                    "last_error_at_ns": None,
+                    "updated_at_ns": 1,
+                }
+
+        class Runtime:
+            async def handle_pending_cases(
+                self,
+                *,
+                limit,
+                review=True,
+                deliver=True,
+            ):
+                phase = "review" if review else "deliver"
+                call_order.append(f"runtime-{phase}")
+                return {
+                    "reviewed": 1 if review else 0,
+                    "delivered_to_lead": 0,
+                    "review_attempted": 1 if review else 0,
+                    "delivery_attempted": 0,
+                    "review_failures": 0,
+                    "delivery_failures": 0,
+                }
+
+        await _drain_durable(Broker(), Runtime())
+
+        self.assertEqual(
+            call_order[:4],
+            ["broker-1", "runtime-review", "broker-2", "runtime-deliver"],
+        )
+
+    async def test_drain_surfaces_underlying_supervisor_failure(self) -> None:
+        class Broker:
+            def process_pending(self, *, limit):
+                return {
+                    "from_seq": 0,
+                    "last_processed_seq": 0,
+                    "processed": 0,
+                    "opened": 0,
+                    "closed": 0,
+                }
+
+        class Runtime:
+            async def handle_pending_cases(
+                self,
+                *,
+                limit,
+                review=True,
+                deliver=True,
+            ):
+                return {
+                    "reviewed": 0,
+                    "delivered_to_lead": 0,
+                    "review_attempted": 1 if review else 0,
+                    "delivery_attempted": 0,
+                    "review_failures": 1 if review else 0,
+                    "delivery_failures": 0,
+                    "last_error": (
+                        "review case 'case-7': RuntimeError: native capture schema failed"
+                    ),
+                }
+
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "case-7.*native capture schema failed",
+        ):
+            await _drain_durable(Broker(), Runtime())
 
     async def test_serve_retries_transient_sqlite_failure_even_if_health_write_fails(
         self,
