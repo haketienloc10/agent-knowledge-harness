@@ -432,6 +432,15 @@ late_descriptor_fd = None
             )
             self.assertEqual(baseline.returncode, 0, baseline.stderr)
 
+            # Force a material replacement on the second run; exact-current
+            # reinstalls are now intentionally no-ops and create no backup.
+            source_skill = template / "skills" / "ste-vi" / "SKILL.md"
+            source_skill.write_text(
+                source_skill.read_text(encoding="utf-8")
+                + "\nReplacement test revision.\n",
+                encoding="utf-8",
+            )
+
             text = script.read_text(encoding="utf-8")
             text = replace_once(
                 text,
