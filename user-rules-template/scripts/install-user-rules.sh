@@ -257,8 +257,15 @@ try:
             parent = os.path.dirname(target)
             os.makedirs(parent, exist_ok=True)
 
-            fd, tmp = tempfile.mkstemp(dir=parent, prefix=".akh-rules.")
-            temps.add(tmp)
+            previous_temp_mask = block_commit_signals()
+            try:
+                fd, tmp = tempfile.mkstemp(dir=parent, prefix=".akh-rules.")
+                # Publish the path before signals are unblocked so cleanup can
+                # always find a newly created replacement file.
+                temps.add(tmp)
+            finally:
+                restore_commit_signals(previous_temp_mask)
+
             try:
                 with os.fdopen(fd, "w", encoding="utf-8", newline="") as f:
                     f.write(new)
