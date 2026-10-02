@@ -5,7 +5,7 @@ home="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 name="ste-vi"
 source_skill="$home/skills/$name"
 codex_root="${CODEX_HOME:-${HOME}/.codex}/skills"
-claude_root="${HOME}/.claude/skills"
+claude_root="${CLAUDE_CONFIG_DIR:-${HOME}/.claude}/skills"
 
 usage() {
   cat <<'USAGE'
@@ -186,6 +186,44 @@ def tree_fingerprint(root):
     return digest.hexdigest()
 
 
+def tree_content_fingerprint(root):
+    if os.path.islink(root) or not os.path.isdir(root):
+        raise RuntimeError(f"not a regular directory: {root}")
+
+    digest = hashlib.sha256()
+
+    def add_entry(relative, path):
+        st = os.lstat(path)
+        kind = stat.S_IFMT(st.st_mode)
+        digest.update(
+            (
+                f"{relative}\0{kind}\0{stat.S_IMODE(st.st_mode)}\0"
+                f"{st.st_size}\0"
+            ).encode("utf-8", "surrogateescape")
+        )
+        if stat.S_ISLNK(st.st_mode):
+            digest.update(os.readlink(path).encode("utf-8", "surrogateescape"))
+        elif stat.S_ISREG(st.st_mode):
+            digest.update(file_digest(path).encode("ascii"))
+
+    add_entry(".", root)
+    for current, dirs, files in os.walk(root, topdown=True, followlinks=False):
+        dirs.sort()
+        files.sort()
+        for entry in list(dirs):
+            path = os.path.join(current, entry)
+            relative = os.path.relpath(path, root)
+            add_entry(relative, path)
+            if os.path.islink(path):
+                dirs.remove(entry)
+        for entry in files:
+            path = os.path.join(current, entry)
+            relative = os.path.relpath(path, root)
+            add_entry(relative, path)
+
+    return digest.hexdigest()
+
+
 def root_signature(path):
     st = os.stat(path, follow_symlinks=True)
     return (st.st_dev, st.st_ino)
@@ -246,11 +284,11 @@ def rename_noreplace(source, target):
             if error not in (errno.ENOTSUP, errno.EINVAL):
                 raise OSError(error, os.strerror(error), target)
 
-    # Conservative portability fallback. The explicit existence check keeps the
-    # common case fail-closed; Linux/macOS use kernel no-replace primitives above.
-    if os.path.lexists(target):
-        raise FileExistsError(errno.EEXIST, os.strerror(errno.EEXIST), target)
-    os.rename(source, target)
+    raise InstallError(
+        78,
+        "atomic no-replace directory rename is unavailable on this platform; "
+        f"refusing to publish {target}",
+    )
 
 
 def ensure_source():
@@ -263,6 +301,46 @@ def ensure_source():
             66,
             f"source skill must not contain installer marker: {source_marker}",
         )
+
+
+def create_source_snapshot(aux_dirs):
+    ensure_source()
+    before = tree_content_fingerprint(source_skill)
+
+    previous = block_signals()
+    try:
+        parent = tempfile.mkdtemp(prefix=".akh-ste-vi-source.")
+        aux_dirs.add(parent)
+    finally:
+        restore_signals(previous)
+
+    snapshot = os.path.join(parent, name)
+    shutil.copytree(source_skill, snapshot, symlinks=True)
+
+    after = tree_content_fingerprint(source_skill)
+    copied = tree_content_fingerprint(snapshot)
+    if before != after or copied != before:
+        raise RuntimeError(
+            "source skill changed while creating the installation snapshot"
+        )
+    return snapshot
+
+
+def cleanup_aux_dirs(aux_dirs, warnings):
+    previous = block_signals()
+    try:
+        for path in list(aux_dirs):
+            try:
+                shutil.rmtree(path)
+                aux_dirs.discard(path)
+            except FileNotFoundError:
+                aux_dirs.discard(path)
+            except OSError as exc:
+                warnings.append(
+                    f"could not remove source snapshot {path}: {exc}"
+                )
+    finally:
+        restore_signals(previous)
 
 
 def build_state(client, raw_root):
@@ -382,7 +460,7 @@ def create_tracked_dir(state, key, prefix):
     return path
 
 
-def stage_skill(state):
+def stage_skill(state, source_snapshot):
     assert_root_unchanged(state)
     stage_parent = create_tracked_dir(
         state, "stage_parent", f".{name}.stage."
@@ -390,7 +468,7 @@ def stage_skill(state):
     stage_target = os.path.join(stage_parent, name)
     state["stage_target"] = stage_target
 
-    shutil.copytree(source_skill, stage_target, symlinks=True)
+    shutil.copytree(source_snapshot, stage_target, symlinks=True)
     marker = os.path.join(stage_target, marker_name)
     with open(marker, "xb"):
         pass
@@ -621,23 +699,26 @@ def reject_overlaps(states):
 
 
 def run():
-    ensure_source()
-    states = [
-        build_state("Codex", raw_codex_root),
-        build_state("Claude", raw_claude_root),
-    ]
-    reject_overlaps(states)
-
     warnings = []
     retained_backups = set()
+    aux_dirs = set()
     transaction_complete = False
+    states = []
 
     try:
+        source_snapshot = create_source_snapshot(aux_dirs)
+
+        states = [
+            build_state("Codex", raw_codex_root),
+            build_state("Claude", raw_claude_root),
+        ]
+        reject_overlaps(states)
         ensure_roots(states)
 
-        # Stage both full copies before any target is moved.
+        # Both clients stage from the same immutable snapshot, so an editor or
+        # checkout changing the repository source cannot split installed content.
         for state in states:
-            stage_skill(state)
+            stage_skill(state, source_snapshot)
 
         # Reserve backup parents before commit so cleanup state is complete.
         for state in states:
@@ -659,6 +740,7 @@ def run():
             cleanup_success_backups(states, warnings)
             for state in states:
                 cleanup_stage(state, warnings)
+            cleanup_aux_dirs(aux_dirs, warnings)
         finally:
             restore_signals(previous)
 
@@ -673,6 +755,7 @@ def run():
             cleanup_success_backups(states, warnings)
             for state in states:
                 cleanup_stage(state, warnings)
+            cleanup_aux_dirs(aux_dirs, warnings)
 
             for warning in warnings:
                 sys.stderr.write(f"WARNING: {warning}\n")
@@ -701,6 +784,7 @@ def run():
         for state in states:
             cleanup_stage(state, warnings)
             cleanup_created_root(state, warnings)
+        cleanup_aux_dirs(aux_dirs, warnings)
 
         if rollback_errors:
             sys.stderr.write(
