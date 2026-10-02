@@ -218,7 +218,9 @@ grep -Fq 'record_write_scope_recovery_release' "$mcp_project/core.py" || \
 grep -Fq 'write-scope claim {write_claim_id!r} was retained for explicit' "$mcp_project/server.py" || \
   fail 'delegation cleanup must retain durable ownership when Peer shutdown is unconfirmed'
 grep -Fq '"cleanup_state": "workspace_close_unconfirmed"' "$mcp_project/server.py" || \
-  fail 'delegation cleanup failure must preserve captured semantic result with recovery metadata'
+  fail 'delegation shutdown failure must preserve captured semantic result with recovery metadata'
+grep -Fq '"write_claim_release_unconfirmed"' "$mcp_project/server.py" || \
+  fail 'durable claim-release failure must preserve captured semantic result with recovery metadata'
 grep -Fq 'consumption_event_seq:' "$supervisor_control" || \
   fail 'R2 Lead wakeups must expose the exact dependency consumption sequence'
 grep -Fq 'write_claim_id:' "$supervisor_control" || \
