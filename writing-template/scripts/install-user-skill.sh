@@ -44,6 +44,9 @@ print(os.path.realpath(os.path.abspath(os.path.expanduser(sys.argv[1]))))
 PY
 }
 
+codex_root="$(resolve_path "$codex_root")"
+claude_root="$(resolve_path "$claude_root")"
+
 preflight_root() {
   local client="$1" root="$2"
   local probe="$root"
@@ -85,10 +88,14 @@ preflight_skill() {
     return 78
   fi
 
-  if [[ -d "$target" && ! -f "$marker" ]]; then
+  if [[ -d "$target" && ( -L "$marker" || ! -f "$marker" ) ]]; then
     printf 'ERROR: %s skill `%s` already exists and is not managed by this harness: %s\n' \
       "$client" "$name" "$target" >&2
-    printf 'Move/remove that skill explicitly, then rerun installer.\n' >&2
+    if [[ -L "$marker" ]]; then
+      printf 'Management marker must be a regular non-symlink file: %s\n' "$marker" >&2
+    else
+      printf 'Move/remove that skill explicitly, then rerun installer.\n' >&2
+    fi
     return 78
   fi
 }
@@ -161,8 +168,8 @@ preflight_root 'Claude' "$claude_root"
 preflight_skill 'Codex' "$codex_root"
 preflight_skill 'Claude' "$claude_root"
 
-codex_resolved_root="$(resolve_path "$codex_root")"
-claude_resolved_root="$(resolve_path "$claude_root")"
+codex_resolved_root="$codex_root"
+claude_resolved_root="$claude_root"
 codex_resolved_target="$(resolve_path "$codex_root/$name")"
 claude_resolved_target="$(resolve_path "$claude_root/$name")"
 
