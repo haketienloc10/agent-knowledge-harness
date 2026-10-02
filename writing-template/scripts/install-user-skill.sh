@@ -761,6 +761,18 @@ def ensure_roots(states):
             state["root_signature"] = root_signature(state["physical_root"])
 
 
+def reject_source_overlaps(states):
+    source_real = os.path.realpath(source_skill)
+    for state in states:
+        for candidate in (state["physical_root"], state["target"]):
+            if path_overlap(candidate, source_real):
+                raise InstallError(
+                    78,
+                    f"{state['client']} skill destination overlaps packaged "
+                    f"source skill: {candidate} <-> {source_real}",
+                )
+
+
 def reject_overlaps(states):
     left, right = states
     left_paths = (left["physical_root"], left["target"])
@@ -792,6 +804,7 @@ def run():
             build_state("Claude", raw_claude_root),
         ]
         reject_overlaps(states)
+        reject_source_overlaps(states)
         ensure_roots(states)
 
         # Both clients stage from the same verified snapshot. Each staged copy
@@ -813,6 +826,7 @@ def run():
         # A concurrent edit after one client commits therefore turns the whole
         # operation into a rollback attempt instead of a false success.
         for state in states:
+            assert_root_unchanged(state)
             if not target_matches_installed(state):
                 raise RuntimeError(
                     f"{state['client']} installed skill changed before "
