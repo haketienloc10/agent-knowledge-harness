@@ -1148,38 +1148,66 @@ async def _drain_durable(
         for key in broker_totals:
             broker_totals[key] += int(result[key])
 
-    while True:
-        # Replay the complete durable semantic log before asking the Supervisor to
-        # review any resulting case. Otherwise an OPEN near one batch boundary can
-        # be reviewed before its immediately-following CLOSE event is replayed.
-        while True:
-            broker_result = broker.process_pending(limit=BROKER_BATCH_LIMIT)
-            accumulate_broker(broker_result)
-            if broker_result["processed"] < BROKER_BATCH_LIMIT:
-                break
+    def accumulate_supervisor(result: dict[str, Any]) -> None:
+        for key in supervisor_totals:
+            supervisor_totals[key] += int(result[key])
 
-        while True:
-            runtime_result = await runtime.handle_pending_cases(
-                limit=SUPERVISOR_BATCH_LIMIT
+    def raise_supervisor_failure(result: dict[str, Any]) -> None:
+        if not (result["review_failures"] or result["delivery_failures"]):
+            return
+        detail = result.get("last_error")
+        if isinstance(detail, str) and detail:
+            raise RuntimeError(
+                "Supervisor processing left retryable case/delivery failures: "
+                + detail
             )
-            for key in supervisor_totals:
-                supervisor_totals[key] += int(runtime_result[key])
-            if runtime_result["review_failures"] or runtime_result["delivery_failures"]:
-                raise RuntimeError(
-                    "Supervisor processing left retryable case/delivery failures"
-                )
-            if (
-                runtime_result["review_attempted"] < SUPERVISOR_BATCH_LIMIT
-                and runtime_result["delivery_attempted"] < SUPERVISOR_BATCH_LIMIT
-            ):
-                break
+        raise RuntimeError(
+            "Supervisor processing left retryable case/delivery failures"
+        )
 
-        # Supervision/delivery may itself persist semantic evidence. Probe once after
-        # the review phase; if anything new appeared, loop back and fully replay it
-        # before another review phase.
+    async def replay_to_quiescence() -> None:
+        while True:
+            result = broker.process_pending(limit=BROKER_BATCH_LIMIT)
+            accumulate_broker(result)
+            if result["processed"] < BROKER_BATCH_LIMIT:
+                return
+
+    while True:
+        # Always materialize every durable closure before review.
+        await replay_to_quiescence()
+
+        # Review and delivery are separate phases. A Lead disposition can arrive while
+        # prompt_supervisor is awaiting the model, so replay again after review before
+        # selecting any issue finding for delivery.
+        review_result = await runtime.handle_pending_cases(
+            limit=SUPERVISOR_BATCH_LIMIT,
+            review=True,
+            deliver=False,
+        )
+        accumulate_supervisor(review_result)
+        raise_supervisor_failure(review_result)
+
+        await replay_to_quiescence()
+
+        delivery_result = await runtime.handle_pending_cases(
+            limit=SUPERVISOR_BATCH_LIMIT,
+            review=False,
+            deliver=True,
+        )
+        accumulate_supervisor(delivery_result)
+        raise_supervisor_failure(delivery_result)
+
+        # Delivery may itself race with newly persisted semantic evidence. Probe and
+        # loop through a full replay before doing more review work.
         probe = broker.process_pending(limit=BROKER_BATCH_LIMIT)
         accumulate_broker(probe)
         if probe["processed"] != 0:
+            continue
+
+        if (
+            review_result["review_attempted"] >= SUPERVISOR_BATCH_LIMIT
+            or delivery_result["delivery_attempted"] >= SUPERVISOR_BATCH_LIMIT
+        ):
             continue
 
         broker.mark_healthy()
