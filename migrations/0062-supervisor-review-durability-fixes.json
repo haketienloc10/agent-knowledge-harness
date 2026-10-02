@@ -1,5 +1,5 @@
 {
-  "version": 61,
+  "version": 62,
   "from_ref": "267738c3b6c89eff0f36b580b0c6a9c6c206b6ab",
   "to_ref": "6bc6d2c3bbf2db3053cfb9fbfe3de717a5f892ca",
   "description": "fix Codex review findings in the autonomous Supervisor runtime: make runtime-blocked R4 cases closable from same-session response evidence, preserve bounded Peer signal details, release durable write claims despite Herdr cleanup failure, record TaskGraph dependency consumption at dispatch, fully drain durable broker/Supervisor batches before waiting for wakeups, isolate and retry transient supervision failures without terminating the daemon, validate named-agent pane topology before reuse, and require explicit candidate.reconciled evidence for exact R5 stale-candidate closure",

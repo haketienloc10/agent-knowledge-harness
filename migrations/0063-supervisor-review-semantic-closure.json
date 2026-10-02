@@ -1,5 +1,5 @@
 {
-  "version": 62,
+  "version": 63,
   "from_ref": "6bc6d2c3bbf2db3053cfb9fbfe3de717a5f892ca",
   "to_ref": "81b6c04f822dfd5bb2e0ce489cf9b0b0216b33c0",
   "description": "fix second Codex review of autonomous Supervisor governance semantics: add explicit peer.signal_resolved evidence so deferred R4 signals can close without rewriting historical dispositions, attach R2 cases and AuditPacket locators to the upstream source turn while retaining consumer context, persist bounded exact overlap pairs for R3, open R5 cases for every unreconciled stale Peer response instead of only the latest one, and document the non-executable Supervisor launcher through bash invocations",
