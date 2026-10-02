@@ -597,8 +597,19 @@ def remove_installed_for_rollback(state, errors, retained_backups):
     state["rollback_current_target"] = quarantine
 
     # Move the exact current object away atomically before deciding whether it
-    # is still our installed copy. This avoids check-then-rmtree races.
-    rename_noreplace(target, quarantine)
+    # is still our installed copy. If another process removes the target in the
+    # race window, clean the empty rollback parent immediately.
+    try:
+        rename_noreplace(target, quarantine)
+    except FileNotFoundError:
+        try:
+            os.rmdir(parent)
+        except FileNotFoundError:
+            pass
+        state["rollback_current_parent"] = None
+        state["rollback_current_target"] = None
+        state["installed"] = False
+        return True
 
     matches_installed = (
         os.path.isdir(quarantine)
@@ -607,10 +618,10 @@ def remove_installed_for_rollback(state, errors, retained_backups):
         and tree_fingerprint(quarantine) == state["installed_fingerprint"]
     )
     if matches_installed:
-        shutil.rmtree(quarantine)
-        os.rmdir(parent)
-        state["rollback_current_parent"] = None
-        state["rollback_current_target"] = None
+        # A point-in-time fingerprint cannot prove no external writer still has
+        # an open descriptor inside this tree. Keep the quarantine instead of
+        # deleting it so any late descriptor write remains recoverable.
+        retained_backups.add(parent)
         state["installed"] = False
         return True
 
