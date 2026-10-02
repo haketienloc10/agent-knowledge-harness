@@ -1194,6 +1194,144 @@ class DirectDelegationPhase4IntegrationTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(active[0]["turn_id"], active[0]["owner"])
 
 
+    async def test_captured_result_survives_durable_claim_release_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            repo_path = root / "repo-a"
+            repo_path.mkdir()
+            store = SessionStore(root / "qiqi_delegate.sqlite3")
+            capture_path = root / "capture.json"
+            local_release = AsyncMock()
+
+            with ExitStack() as stack:
+                stack.enter_context(patch.object(server, "_store", store))
+                stack.enter_context(
+                    patch.object(server, "_resolve_repo", return_value=repo_path)
+                )
+                stack.enter_context(
+                    patch.object(
+                        server,
+                        "_resolve_route",
+                        return_value=(
+                            "claude",
+                            {"adapter": "claude", "command": "claude"},
+                            {"model": "sonnet", "args": []},
+                        ),
+                    )
+                )
+                stack.enter_context(
+                    patch.object(server.shutil, "which", return_value="/bin/true")
+                )
+                stack.enter_context(
+                    patch.object(server, "_ensure_herdr_server", new=AsyncMock())
+                )
+                stack.enter_context(
+                    patch.object(server, "_require_current_integration", new=AsyncMock())
+                )
+                stack.enter_context(
+                    patch.object(server, "_claim_resources", new=AsyncMock())
+                )
+                stack.enter_context(
+                    patch.object(server, "_release_resources", new=local_release)
+                )
+                stack.enter_context(
+                    patch.object(
+                        server, "_register_active_capture", return_value=capture_path
+                    )
+                )
+                stack.enter_context(patch.object(server, "_remove_active_capture"))
+                stack.enter_context(
+                    patch.object(server, "_build_handoff_args", return_value=[])
+                )
+                stack.enter_context(
+                    patch.object(server, "_build_interactive_args", return_value=[])
+                )
+                stack.enter_context(
+                    patch.object(
+                        server,
+                        "_create_herdr_workspace",
+                        new=AsyncMock(return_value=("workspace-1", "pane-1")),
+                    )
+                )
+                stack.enter_context(
+                    patch.object(
+                        server,
+                        "_start_interactive_agent",
+                        new=AsyncMock(return_value=("agent-1", {})),
+                    )
+                )
+                stack.enter_context(
+                    patch.object(server, "_validate_reported_session_if_present")
+                )
+                stack.enter_context(
+                    patch.object(
+                        server,
+                        "_prompt_and_wait",
+                        new=AsyncMock(return_value=("settled", {})),
+                    )
+                )
+                stack.enter_context(
+                    patch.object(
+                        server,
+                        "_wait_for_native_session",
+                        new=AsyncMock(return_value="native-session-release"),
+                    )
+                )
+                stack.enter_context(
+                    patch.object(
+                        server,
+                        "_wait_for_result_capture",
+                        new=AsyncMock(
+                            return_value={
+                                "state": "settled",
+                                "native_turn_id": "native-turn-release",
+                                "agent_response": "captured peer result",
+                            }
+                        ),
+                    )
+                )
+                stack.enter_context(
+                    patch.object(server, "_close_herdr_workspace", new=AsyncMock())
+                )
+                stack.enter_context(
+                    patch.object(
+                        store,
+                        "record_write_scope_release",
+                        side_effect=RuntimeError("sqlite release persistence failed"),
+                    )
+                )
+
+                result = await server.delegate_repo_task(
+                    repository="repo-a",
+                    route="claude-balanced",
+                    objective="Implement one change.",
+                    scope=["pricing"],
+                    acceptance_criteria=["tests pass"],
+                )
+
+            self.assertEqual(result["state"], "settled")
+            self.assertEqual(result["session_id"], "native-session-release")
+            self.assertEqual(result["agent_response"], "captured peer result")
+            self.assertEqual(
+                result["cleanup_state"],
+                "write_claim_release_unconfirmed",
+            )
+            self.assertEqual(result["write_claim_repository"], "repo-a")
+            self.assertTrue(
+                result["write_claim_id"].startswith("repo:repo-a:turn:")
+            )
+            self.assertEqual(result["workspace_id"], "workspace-1")
+            self.assertIn("release_write_scope_claim", result["recovery_action"])
+
+            local_release.assert_awaited_once()
+            active = store.list_active_write_scope_claims(repository="repo-a")
+            self.assertEqual(len(active), 1)
+            self.assertEqual(active[0]["turn_id"], active[0]["owner"])
+            turn = store.get_turn(result["turn_id"])
+            self.assertIsNotNone(turn)
+            self.assertEqual(turn["agent_response"], "captured peer result")
+
+
 class TaskGraphPhase4IntegrationTests(unittest.IsolatedAsyncioTestCase):
     @staticmethod
     def dispatching_delegate(
