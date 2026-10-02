@@ -158,6 +158,11 @@ def _json_object(raw: str, label: str) -> dict[str, Any]:
     return value
 
 
+def default_herdr_session(workspace_root: Path) -> str:
+    digest = hashlib.sha256(str(workspace_root.resolve()).encode("utf-8")).hexdigest()[:12]
+    return f"qiqi-delegate-{digest}"
+
+
 def default_supervisor_home(
     workspace_root: Path,
     *,
@@ -602,7 +607,7 @@ class HerdrControlPlane:
         *,
         workspace_root: Path,
         state_db: Path,
-        session: str = "qiqi-delegate",
+        session: str | None = None,
         herdr_bin: str = "herdr",
         supervisor_home: Path | None = None,
         lead_model: str = DEFAULT_MODEL,
@@ -611,7 +616,11 @@ class HerdrControlPlane:
     ):
         self.workspace_root = workspace_root.resolve()
         self.state_db = state_db.resolve()
-        self.session = _required_text(session, "Herdr session")
+        self.session = (
+            default_herdr_session(self.workspace_root)
+            if session is None
+            else _required_text(session, "Herdr session")
+        )
         self.herdr_bin = _required_text(herdr_bin, "Herdr binary")
         self.store = SupervisorControlStore(self.state_db)
         self.supervisor_home = (
