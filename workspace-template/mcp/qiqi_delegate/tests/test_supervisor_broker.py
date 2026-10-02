@@ -268,16 +268,7 @@ class SupervisorBrokerTests(unittest.TestCase):
         self.broker.process_pending()
 
         self.assertEqual(self.cases("R4")[0]["status"], "CLOSED")
-        self.assertIsNone(
-            next(
-                (
-                    turn
-                    for turn in self.store.list_turns()
-                    if turn["turn_id"] == "blocked-abandoned-turn"
-                ),
-                None,
-            )
-        )
+        self.assertIsNone(self.store.get_turn("blocked-abandoned-turn"))
 
     def test_r4_defer_then_explicit_signal_resolution_closes_case(self) -> None:
         self.record_turn("turn-deferred-signal")
