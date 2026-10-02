@@ -36,16 +36,26 @@ command -v python3 >/dev/null 2>&1 || {
   exit 69
 }
 
+normalize_path() {
+  python3 - "$1" <<'PY'
+import os
+import sys
+print(os.path.abspath(os.path.expanduser(sys.argv[1])))
+PY
+}
+
 resolve_path() {
   python3 - "$1" <<'PY'
 import os
 import sys
-print(os.path.realpath(os.path.abspath(os.path.expanduser(sys.argv[1]))))
+print(os.path.realpath(sys.argv[1]))
 PY
 }
 
-codex_root="$(resolve_path "$codex_root")"
-claude_root="$(resolve_path "$claude_root")"
+# Expand and absolutize CLI/default roots once. Every filesystem mutation uses
+# these normalized values; realpath is used only for overlap/alias detection.
+codex_root="$(normalize_path "$codex_root")"
+claude_root="$(normalize_path "$claude_root")"
 
 preflight_root() {
   local client="$1" root="$2"
@@ -168,8 +178,8 @@ preflight_root 'Claude' "$claude_root"
 preflight_skill 'Codex' "$codex_root"
 preflight_skill 'Claude' "$claude_root"
 
-codex_resolved_root="$codex_root"
-claude_resolved_root="$claude_root"
+codex_resolved_root="$(resolve_path "$codex_root")"
+claude_resolved_root="$(resolve_path "$claude_root")"
 codex_resolved_target="$(resolve_path "$codex_root/$name")"
 claude_resolved_target="$(resolve_path "$claude_root/$name")"
 
