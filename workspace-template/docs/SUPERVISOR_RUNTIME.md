@@ -5,7 +5,7 @@ This document describes the runtime implemented by issue #97 phases 1–3.
 ## Runtime topology
 
 ```text
-Herdr named session: qiqi-delegate
+Herdr named session: qiqi-delegate-<workspace-hash> by default
 
 workspace: slp-control
 ├── lead        # persistent technical Lead at workspace root
@@ -26,10 +26,11 @@ persisted pane must not require operator cleanup. Prompt-ready named agents are 
 their reported Herdr pane matches the persisted control-plane pane; a same-name agent on another
 pane fails closed instead of receiving Lead/Supervisor traffic.
 
-Initial control-plane creation is provisional until both named agents are prompt-ready and the
-topology row is durably saved. Any failure after creating the workspace closes that provisional
-workspace and clears control-plane state before retry, preventing orphaned fixed-name agents from
-poisoning the next startup.
+Initial control-plane creation persists the provisional workspace/pane topology before fixed-name
+agents start. If startup later fails, the runtime closes that provisional workspace and clears the
+row only after Herdr confirms cleanup. If cleanup itself fails, the provisional row remains durable
+so the next retry can recover or close the exact workspace instead of losing the only locator for
+orphaned fixed-name agents.
 
 
 ## Sources of truth
@@ -161,10 +162,17 @@ The runtime now emits/records the semantic inputs consumed by the deterministic 
 - direct downstream consumption uses `record_dependency_consumed`;
 - TaskGraph downstream execution records dependency consumption at dispatch, before final-response
   transport can fail;
+- an R2 consume-before-ACCEPT case is historical and is not erased by a later ACCEPT. After Lead
+  has explicitly remediated the affected downstream premise, it records
+  `record_dependency_consumption_resolution(consumption_event_seq, reason)` for the exact
+  violating consumption event; that separate event closes the case while preserving history;
 - every direct/TaskGraph repository delegation uses the existing repository ownership lock and
   emits conservative `write_scope.claimed/released` events with scope `["*"]`; durable release
   is attempted both when pre-dispatch semantic recording fails after the claim and when later Herdr
-  workspace cleanup fails;
+  workspace cleanup fails. If a process crash leaves a durable claim without its release, the
+  runtime fails closed on subsequent writers; after an operator/Lead verifies the old writer is
+  terminated or intentionally abandoned, `release_write_scope_claim(claim_id, repository, reason)`
+  records an explicit recovery release instead of auto-expiring ownership;
 - explicit Lead `accept` also emits `candidate.accepted`; any explicit Work Item id/revision
   passed with a disposition must exactly match the canonical locator captured in that turn's
   TaskPacket or the write fails closed;
@@ -239,7 +247,10 @@ bash scripts/e2e-autonomous-supervisor.sh <repository-name>
 ```
 
 The live script prompts Lead once with a read-only Peer fixture and never prompts Supervisor.
-The fixture has no requirement change, so its initial Work Item revision remains stable while
+Unless `QIQI_HERDR_SESSION` is explicitly supplied, it derives the same
+`qiqi-delegate-<workspace-hash>` session as the production broker so the installed-workspace gate
+exercises workspace isolation rather than a legacy global session. The fixture has no requirement
+change, so its initial Work Item revision remains stable while
 status/evidence move through waiting, Lead disposition, and done. It passes only when persisted
 evidence shows an `issue` finding was delivered to Lead and the case later reached `CLOSED`
 through an explicit `lead_disposition`. The chosen repository
