@@ -493,16 +493,20 @@ async def submit_decisions(
                 f"; owner={decision.owner}; "
                 f"return_checkpoint={decision.return_checkpoint}"
             )
-        lead_dispositions.append(
-            {
-                "turn_id": turn_id,
-                "action": _GRAPH_DISPOSITION_ACTIONS[decision.action],
-                "reason": reason,
-                "graph_run_id": graph_run_id,
-                "node_id": decision.node_id,
-                "attempt_id": attempt_id,
-            }
-        )
+        disposition_record = {
+            "turn_id": turn_id,
+            "action": _GRAPH_DISPOSITION_ACTIONS[decision.action],
+            "reason": reason,
+            "graph_run_id": graph_run_id,
+            "node_id": decision.node_id,
+            "attempt_id": attempt_id,
+        }
+        if decision.action in {"replan", "block"}:
+            assert decision.owner is not None
+            assert decision.return_checkpoint is not None
+            disposition_record["owner"] = decision.owner
+            disposition_record["return_checkpoint"] = decision.return_checkpoint
+        lead_dispositions.append(disposition_record)
 
     return _graph_runtime.submit_decisions(
         graph_run_id,
