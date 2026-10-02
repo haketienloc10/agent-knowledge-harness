@@ -1429,6 +1429,7 @@ async def delegate_repo_task(
             turn_id=qiqi_turn_id,
             work_item_id=work_item_id,
             work_item_revision=work_item_revision,
+            require_repository_clear=True,
         )
         write_claim_recorded = True
         # Commit the durable dispatch marker and any TaskGraph dependency-consumption
