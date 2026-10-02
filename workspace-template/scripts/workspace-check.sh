@@ -60,12 +60,17 @@ for pattern in \
   'supervisor_broker.py'; do
   grep -Fq -- "$pattern" "$supervisor_launcher" || fail "Supervisor launcher missing runtime contract: $pattern"
 done
+if grep -Fq 'QIQI_HERDR_SESSION:-qiqi-delegate' "$supervisor_launcher"; then
+  fail 'Supervisor launcher must not restore the legacy global Herdr session default'
+fi
 
 for pattern in \
   'interactive_ready' \
   'launch_pending' \
   'agent_status' \
   '"code":"agent_not_ready"' \
+  'hashlib.sha256' \
+  'qiqi-delegate-' \
   'Keep the initial Work Item revision unchanged' \
   'MUST NOT increment revision'; do
   grep -Fq -- "$pattern" "$supervisor_e2e" || \
@@ -143,6 +148,8 @@ for pattern in \
   'record_dependency_consumed' \
   'record_candidate_reconciliation' \
   'record_peer_signal_resolution' \
+  'record_dependency_consumption_resolution' \
+  'release_write_scope_claim' \
   'write_scope.claimed/released' \
   'autonomous E2E-08 state-machine integration test' \
   'normative `rule_contract`' \
@@ -158,7 +165,9 @@ for tool_name in \
   'record_peer_signal' \
   'record_peer_signal_resolution' \
   'record_candidate_reconciliation' \
-  'record_dependency_consumed'; do
+  'record_dependency_consumed' \
+  'record_dependency_consumption_resolution' \
+  'release_write_scope_claim'; do
   grep -Fq -- "$tool_name" "$config" || \
     fail "QiQi config missing SLP semantic runtime tool: $tool_name"
 done
@@ -198,6 +207,12 @@ grep -Fq 'requires owner and return_checkpoint' "$mcp_project/task_graph_runtime
   fail 'TaskGraph replan/block decisions must require owner + return checkpoint'
 grep -Fq 'partially created slp-control workspace' "$supervisor_control" || \
   fail 'Supervisor control-plane creation must clean up provisional topology on failure'
+grep -Fq 'record_write_scope_recovery_release' "$mcp_project/core.py" || \
+  fail 'SessionStore must expose an explicit orphan write-claim recovery path'
+grep -Fq 'record_dependency_consumption_resolution' "$mcp_project/core.py" || \
+  fail 'SessionStore must expose explicit R2 remediation evidence'
+grep -Fq 'candidate already has a terminal reconciliation' "$mcp_project/core.py" || \
+  fail 'terminal candidate reconciliation must remain terminal across later revisions'
 grep -Fq 'write_claim_recorded = False' "$mcp_project/server.py" || \
   fail 'direct delegation must track whether the durable write claim was persisted'
 grep -Fq 'if write_claim_recorded:' "$mcp_project/server.py" || \
