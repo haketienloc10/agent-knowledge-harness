@@ -1,0 +1,30 @@
+{
+  "version": 73,
+  "from_ref": "bed28a4a56e988b22564cad70763beb1cf036be1",
+  "to_ref": "6102ff0aeba0902eb147bc2b5476aedda8337d49",
+  "description": "fix deep autonomous Supervisor review findings: serialize Work Item revision and candidate reconciliation state transitions, keep terminal stale-candidate retirement permanent across later revisions, add explicit verified-abandonment recovery for orphan durable write claims, add explicit remediation evidence and closure for historical R2 consume-before-ACCEPT violations, and align the live installed-workspace E2E plus runtime documentation with workspace-scoped Herdr sessions",
+  "workspace": {
+    "merge": [],
+    "replace": [
+      "workspace-template/.codex/config.toml",
+      "workspace-template/AGENTS.md",
+      "workspace-template/docs/SUPERVISOR_RUNTIME.md",
+      "workspace-template/mcp/qiqi_delegate/core.py",
+      "workspace-template/mcp/qiqi_delegate/server.py",
+      "workspace-template/mcp/qiqi_delegate/supervisor_broker.py",
+      "workspace-template/mcp/qiqi_delegate/tests/test_phase4_integration.py",
+      "workspace-template/mcp/qiqi_delegate/tests/test_supervisor_broker.py",
+      "workspace-template/mcp/qiqi_delegate/tests/test_supervisor_control.py",
+      "workspace-template/scripts/e2e-autonomous-supervisor.sh",
+      "workspace-template/scripts/workspace-check.sh"
+    ],
+    "delete": [],
+    "manual_review": []
+  },
+  "repo": {
+    "merge": [],
+    "replace": [],
+    "delete": [],
+    "manual_review": []
+  }
+}

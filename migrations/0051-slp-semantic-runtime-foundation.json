@@ -1,0 +1,25 @@
+{
+  "version": 51,
+  "from_ref": "336fc3b9f96051785047d8a63f531fbd333fc9e4",
+  "to_ref": "b47bef85b89225dee88922305e46ba658f8ebe4c",
+  "description": "add the Phase 1 SLP semantic runtime foundation for autonomous supervision: reuse qiqi_delegate.sqlite3 for append-only semantic transition events, add machine-readable Lead dispositions linked to captured Peer turns without duplicating raw responses or capture evidence, emit direct delegation lifecycle semantics, bridge real TaskGraph review decisions into the same Lead disposition stream, expose the disposition tool to QiQi, and add replay/integrity regression coverage while leaving the Supervisor broker and wakeup runtime for later phases",
+  "workspace": {
+    "merge": [],
+    "replace": [
+      "workspace-template/.codex/config.toml",
+      "workspace-template/mcp/qiqi_delegate/core.py",
+      "workspace-template/mcp/qiqi_delegate/server.py",
+      "workspace-template/mcp/qiqi_delegate/task_graph_mcp.py",
+      "workspace-template/mcp/qiqi_delegate/tests/test_slp_runtime.py",
+      "workspace-template/mcp/qiqi_delegate/tests/test_task_graph_mcp.py"
+    ],
+    "delete": [],
+    "manual_review": []
+  },
+  "repo": {
+    "merge": [],
+    "replace": [],
+    "delete": [],
+    "manual_review": []
+  }
+}

@@ -13,8 +13,16 @@ PHASE0_REGRESSION = (
     "workspace-template/mcp/qiqi_delegate/tests/"
     "test_delegate_repo_task_regression.py"
 )
+DIRECT_RESULT_CAPTURE_REPAIR = {
+    "workspace-template/mcp/qiqi_delegate/server.py",
+    "workspace-template/mcp/qiqi_delegate/result_hook.py",
+    "workspace-template/mcp/qiqi_delegate/tests/test_result_capture_wait.py",
+    "workspace-template/mcp/qiqi_delegate/tests/test_result_hook.py",
+    "workspace-template/mcp/qiqi_delegate/tests/test_mcp_error_transport.py",
+}
 KNOWN_REPAIRED_GAPS = {
-    (28, 29): {PHASE0_REGRESSION},
+    (28, 29): (41, {PHASE0_REGRESSION}),
+    (49, 50): (77, DIRECT_RESULT_CAPTURE_REPAIR),
 }
 
 
@@ -74,7 +82,7 @@ class TaskGraphMigrationChainTests(unittest.TestCase):
             pair = (previous["version"], current["version"])
             with self.subTest(previous=pair[0], current=pair[1]):
                 leaked = _template_diff(previous["to_ref"], current["from_ref"])
-                expected = KNOWN_REPAIRED_GAPS.get(pair, set())
+                _, expected = KNOWN_REPAIRED_GAPS.get(pair, (None, set()))
                 self.assertEqual(
                     leaked,
                     expected,
@@ -84,13 +92,16 @@ class TaskGraphMigrationChainTests(unittest.TestCase):
                     ),
                 )
 
-        repair = by_version[41]
-        repaired_paths = _managed_template_paths(repair)
-        for pair, paths in KNOWN_REPAIRED_GAPS.items():
-            with self.subTest(repair_for=pair):
+        for pair, (repair_version, paths) in KNOWN_REPAIRED_GAPS.items():
+            repair = by_version[repair_version]
+            repaired_paths = _managed_template_paths(repair)
+            with self.subTest(repair_for=pair, migration=repair_version):
                 self.assertTrue(
                     paths <= repaired_paths,
-                    f"migration 0041 does not repair historical gap {pair}: {sorted(paths)}",
+                    (
+                        f"migration {repair_version:04d} does not repair "
+                        f"historical gap {pair}: {sorted(paths)}"
+                    ),
                 )
 
     def test_historical_migration_0029_remains_immutable(self) -> None:

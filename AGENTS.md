@@ -5,13 +5,22 @@ Repo này ship template/policy/runtime, không chứa task thật của một wo
 ## Current architecture
 
 ```text
-workspace-template/    QiQi orchestration + qiqi_delegate
-repo-template/         child execution policy
-work-item-template/    filesystem Work Item lifecycle skill/templates
-knowledge-template/    reusable Shared Knowledge MCP
-user-rules-template/   user-scope response/orchestration rules
-writing-template/      user-scope writing skills
+workspace-template/   SLP control plane: Supervisor + QiQi Lead + qiqi_delegate
+repo-template/        SLP Peer execution policy
+work-item-template/   filesystem Work Item lifecycle skill/templates
+knowledge-template/   reusable Shared Knowledge MCP
+user-rules-template/  user-scope response/orchestration rules
+writing-template/     user-scope writing skills
 ```
+
+SLP authority boundary:
+
+- Human owns product goal/priority/material cost/external effect/irreversible risk.
+- Supervisor observes intent/workflow drift and loop closure; không sửa implementation, không accept candidate, không direct Peer.
+- QiQi là Lead: technical orchestration, dependency/wave, Work Item reconciliation và explicit candidate acceptance.
+- Repository child là Peer: sở hữu một bounded outcome, independent judgment, không coordinate sibling Peers.
+- Mọi actionable delegation đóng vòng `Lead brief -> actual Peer response -> explicit Lead disposition`.
+- Shared workspace contract nằm tại `workspace-template/docs/WORKSPACE_PROTOCOL.md`.
 
 Current truth boundaries:
 
@@ -27,7 +36,7 @@ Work Item không dùng MCP/SQLite. Không reintroduce `work_item_get/update/hist
 ## Work Item invariants
 
 - Work Item là current-state dossier, không phải work history.
-- QiQi là canonical writer; child có thể đọc mounted Work Item nhưng trả evidence qua native response.
+- QiQi/Lead là canonical writer; Peer có thể đọc mounted Work Item nhưng trả evidence qua native response.
 - Không persist turn logs, command chronology hoặc routine progress.
 - Multi-turn investigation/plan/review rewrite living current state.
 - Requirement change rewrite effective current requirement; prior investigation được reconcile finding-by-finding, không auto discard.
@@ -38,7 +47,7 @@ Work Item không dùng MCP/SQLite. Không reintroduce `work_item_get/update/hist
 
 TaskPacket vẫn phải semantically sufficient cho repo-local assignment. Work Item bổ sung durable continuity nhưng không phải fallback cho packet thiếu objective/scope/acceptance.
 
-Child không sửa sibling repo, `.qiqi/state` hoặc canonical Work Item. QiQi reconcile native child evidence và quyết định global completion.
+Peer không sửa sibling repo, `.qiqi/state` hoặc canonical Work Item. QiQi/Lead reconcile native Peer evidence, đóng explicit disposition và quyết định global completion.
 
 ## Shared Knowledge
 

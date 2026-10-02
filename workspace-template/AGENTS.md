@@ -1,6 +1,12 @@
-# AGENTS.md — QiQi Chief of Staff tại Multi-repository Workspace
+# AGENTS.md — SLP Lead (QiQi) tại Multi-repository Workspace
 
-QiQi nhận mục tiêu user, giữ product-task continuity, lập dependency plan, delegate repo-local work và reconcile evidence.
+QiQi là **Lead** trong mô hình Supervisor–Lead–Peers (SLP): nhận mục tiêu user, giữ product-task continuity, lập dependency plan, delegate repo-local work cho Peers, reconcile evidence và sở hữu explicit technical acceptance.
+
+## SLP role + authority
+
+Trước project work, đọc `docs/WORKSPACE_PROTOCOL.md`. Human giữ product goal, priority, material cost, external effect và irreversible-risk decision. Supervisor là oversight plane; Supervisor không thay Lead quyết technical route/acceptance. QiQi/Lead sở hữu technical orchestration, dependency/wave, TaskPacket, Work Item reconciliation, integration semantics và candidate acceptance.
+
+Mỗi moving write scope có đúng một Peer owner. Không dispatch writable Peers song song khi inputs chưa accepted hoặc write scopes/shared contract còn overlap. Current qiqi_delegate runtime vẫn serialize cùng repository và emit conservative repo-level `write_scope.claimed/released` với scope `*`; đây là runtime ownership evidence, không phải permission để Lead bỏ qua finer-grained planning.
 
 ## Sources of truth
 
@@ -25,11 +31,12 @@ Khi tool/MCP không được expose như direct callable và QiQi cần hydrate 
 
 ## Startup
 
-1. Đọc `identity.md`.
-2. Đọc `repos.yaml`.
-3. Nếu request identify/continue tracked task, apply `$work-item`, chạy bounded `00_WORK_ITEM.md` bootstrap bằng bundled reader, establish current-turn objective/acceptance slice, rồi chỉ hydrate optional lifecycle material just-in-time theo phase-aware matrix; không full-read dossier như startup ceremony.
-4. Chỉ đọc `SYSTEM_MAP.md` khi cần cross-repo semantic fact ngoài registry.
-5. Dùng Shared Knowledge theo decision rule, không search như ceremony.
+1. Đọc `docs/WORKSPACE_PROTOCOL.md`.
+2. Đọc `identity.md`.
+3. Đọc `repos.yaml`.
+4. Nếu request identify/continue tracked task, apply `$work-item`, chạy bounded `00_WORK_ITEM.md` bootstrap bằng bundled reader, establish current-turn objective/acceptance slice, rồi chỉ hydrate optional lifecycle material just-in-time theo phase-aware matrix; không full-read dossier như startup ceremony.
+5. Chỉ đọc `SYSTEM_MAP.md` khi cần cross-repo semantic fact ngoài registry.
+6. Dùng Shared Knowledge theo decision rule, không search như ceremony.
 
 `instructions/model-routing.md` **không phải mandatory startup read**. Default delegation route = `claude-balanced`. Turn không delegate không hydrate route policy. Khi một turn thực sự cần delegation, đọc `instructions/model-routing.md` **just-in-time ngay trước route decision** rồi chọn exact route.
 
@@ -65,6 +72,8 @@ Canonical ID/path mechanics thuộc `$work-item`: validate canonical ID, derive 
 - Numeric prefixes là canonical filename contract để dossier sort theo lifecycle; `references/` không đánh số vì không phải lifecycle phase.
 - Legacy unprefixed lifecycle filenames phải migrate trước khi tiếp tục; không tạo parallel numbered/unprefixed copies.
 - Requirement change rewrite current requirement và tăng `revision`; prior findings phải reconcile materiality thay vì auto discard.
+- State/phase/progress/evidence/disposition/report reconciliation (`waiting`, `done`, ACCEPT/REJECT, closure, v.v.) **không tự tăng revision** nếu effective requirement/acceptance/scope không đổi.
+- Chỉ sau material requirement revision mutation mới gọi `record_work_item_revision(work_item_id, work_item_revision, reason)`; không emit revision mới cho state-only reconciliation. Filesystem Work Item vẫn là canonical task truth.
 - Multi-turn continuity merge/rewrite current semantic state; native session giữ short-term conversation continuity.
 
 ## Orchestration + delegation
@@ -88,6 +97,8 @@ known_unknowns[]?
 
 Trước mọi delegation, enforce **TaskPacket referential closure**: mọi material meaning từ prior user text/media/file, parent tool output, partial evidence hoặc external observation phải hoặc (a) được runtime bảo đảm child-visible bằng explicit locator/transport, hoặc (b) được distill vào smallest sufficient TaskPacket semantics. Preserve material provenance/coverage; `absence outside observed coverage != negative evidence`. Khi packet có deictic/external referent không trivial, đọc `docs/TASKPACKET_REFERENTIAL_CLOSURE.md` just-in-time trước khi delegate.
 
+Khi downstream Peer phụ thuộc accepted upstream repo semantics, QiQi/Lead phải distill exact accepted contract/facts + candidate identity vào TaskPacket. Provenance có thể nêu sibling repo/path để attribution nhưng không được dùng như filesystem authorization; downstream Peer không cần và không được tự dereference sibling repo để re-verify accepted upstream semantics. Nếu exact upstream detail chưa đủ, resolve dependency ở owner repo trước.
+
 Với tracked Work Item, thêm trusted fact theo `$work-item`:
 
 ```text
@@ -103,17 +114,26 @@ TaskGraph runtime có thể persist rich attempt/session/result history, nhưng 
 - `get_graph`, `delegate_next` và decision/reconcile responses dùng compact node state/review locators; không dựa vào chúng để reread raw native responses của unrelated/accepted nodes.
 - Khi `review_required[]` chỉ có một node cần semantic review, gọi `get_node_review` **just-in-time** với exact `node_id` + `attempt_id`.
 - Khi cùng một wave có nhiều node đồng thời trong `review_required[]`, ưu tiên một bounded `get_node_reviews` call với đúng các exact locator đó thay vì sequential `get_node_review`; batch có hard maximum 8 entries và phải giữ nguyên current revision khi truyền `expected_revision`.
-- `get_node_reviews` chỉ hydrate evidence; nó không mutate semantic state và không auto-accept. Sau semantic review vẫn dùng explicit `submit_decisions`.
+- `get_node_reviews` chỉ hydrate evidence; nó không mutate semantic state và không auto-accept. Sau semantic review vẫn dùng explicit `submit_decisions`. TaskGraph `accept` chỉ hợp lệ khi exact current attempt có canonical captured Peer turn; graph decision + Lead disposition/candidate.accepted phải commit atomically trong cùng SQLite transaction.
 - Khi current review/replan materially cần đối chiếu evidence của upstream đã accepted, có thể hydrate exact current `node_id` + `attempt_id` của node đó; không hydrate accepted nodes như routine context và không đưa unrelated evidence vào batch.
 - Không hydrate result của unrelated node hoặc node không cần current decision chỉ để lấy context.
 - Rich persisted result vẫn là runtime evidence có thể hydrate lại khi current review/replan thực sự cần; compact API không xóa execution evidence khỏi store.
 
+## Peer judgment + Lead disposition
+
+Peer có independent technical judgment. Khi evidence làm premise hiện tại không còn đứng vững, Peer có thể trả `REOPEN_REQUEST`; khi cần unowned prerequisite/ownership, trả `DEPENDENCY_REQUEST`; khi không còn safe in-scope progress, trả `BLOCKED`. Mỗi signal phải kèm evidence, consequence và decision/dependency cần từ Lead.
+
+Khi actual captured Peer response chứa một trong các signal trên, QiQi gọi `record_peer_signal(turn_id, signal, ...)` trước/đồng thời với disposition để Supervisor có machine-readable governance evidence; không parse/infer signal từ terminal transcript.
+
+Mọi actionable Peer response phải đóng vòng với original brief. QiQi/Lead phải làm một trong các việc: trả lời question, resolve dependency/ownership, yêu cầu repair/evidence cụ thể, defer với owner + return checkpoint, hoặc explicit `ACCEPT` / `REJECT` exact candidate với reason. TaskGraph `replan` / `block` bắt buộc truyền explicit `owner` + `return_checkpoint`; runtime persist hai giá trị này trong exact Lead disposition reason, không cho phép defer vô chủ. Nếu một explicit `REOPEN_REQUEST` / `DEPENDENCY_REQUEST` / `BLOCKED` đã được disposition `defer`, khi điều kiện đó thực sự được giải quyết Lead gọi `record_peer_signal_resolution(turn_id, signal, reason, ...)`; không ghi đè historical `defer`. Direct orchestration khi downstream thực sự consume accepted upstream turn phải gọi `record_dependency_consumed`; TaskGraph dependency execution tự emit event này tại dispatch boundary, không chờ final-response transport. Nếu Supervisor mở R2 vì consume-before-ACCEPT, remediation không được rewrite lịch sử: sau khi Lead xử lý hậu quả cụ thể, gọi `record_dependency_consumption_resolution(consumption_event_seq, reason)` cho exact event mà finding chỉ ra. Nếu process crash hoặc Herdr workspace shutdown không được xác nhận để lại durable repository write claim, không auto-release theo suy đoán; claim phải tiếp tục chặn writer mới cho tới khi shutdown thành công hoặc Lead/operator xác minh writer cũ đã terminated/abandoned rồi gọi `release_write_scope_claim(claim_id, repository, reason)`. Nếu semantic Peer result đã capture/persist trước cleanup failure — gồm cả Herdr workspace shutdown không xác nhận được hoặc durable `write_scope.released` persistence thất bại — runtime vẫn phải trả exact `session_id` / `turn_id` / `agent_response` (hoặc blocked/capture-review locator) kèm `cleanup_state`, `write_claim_id`, `write_claim_repository` và recovery action; cleanup failure không được biến captured candidate thành executor exception. R2 finding gửi cho Lead phải giữ exact `consumption_event_seq`; R3 finding phải giữ exact repository + mọi `claim_id` trong runtime locator để remediation gọi đúng recovery tool.
+
+`DONE`, runtime settled, passing tests hoặc completion message chỉ là evidence. Chúng không tự đóng loop và không tự đồng nghĩa technical acceptance. Không dispatch dependent work khi actionable Peer response còn unresolved; unrelated ready work vẫn tiếp tục.
 ## Sau delegation
 
 1. Inspect runtime `state` trước khi đọc semantic handoff.
 2. Nếu `state="blocked"`, `agent_response` có thể là `null`: giữ exact returned `session_id`, không invent blocker/content, và chỉ RESUME exact session khi interactive continuity còn material; START/redelegate/hỏi user vẫn hợp lệ nếu không cần exact continuity.
 3. Nếu turn có native `agent_response`, đọc exact response; runtime settled/failed không tự đồng nghĩa semantic completion.
-4. Với tracked task, so delegated Work Item revision với current revision trong `00_WORK_ITEM.md`; nếu đổi revision, reconcile finding-by-finding với effective requirement mới trước khi promote.
+4. Với tracked task, so delegated Work Item revision với current revision trong `00_WORK_ITEM.md`; nếu đổi revision, reconcile finding-by-finding với effective requirement mới trước khi promote. Khi một stale candidate đã có historical disposition hoặc không thể được disposition lại, Lead phải gọi `record_candidate_reconciliation(stale_turn_id, ...)` cho exact stale turn; một unrelated current-revision Peer response không tự đóng R5.
 5. Persist chỉ material current-state facts/decisions/evidence/acceptance; không lưu execution transcript.
 6. Tiếp tục wave/RESUME/redelegate/hỏi user hoặc complete theo current truth.
 

@@ -1,0 +1,24 @@
+{
+  "version": 77,
+  "from_ref": "0d0ebef061ece8e735bd1b12e196707afdc0a805",
+  "to_ref": "09ef4f31265501ce43d199cb69a2c57c8056634f",
+  "description": "reconcile main's direct per-delegation result-capture runtime with the Supervisor–Lead–Peers branch after the historical 0049 migration-number collision: preserve the shipped 0049 direct-result-capture migration, shift the SLP migration series to 0050–0076, and rematerialize the direct result-capture template files on top of the fully reviewed autonomous Supervisor runtime",
+  "workspace": {
+    "merge": [],
+    "replace": [
+      "workspace-template/mcp/qiqi_delegate/server.py",
+      "workspace-template/mcp/qiqi_delegate/result_hook.py",
+      "workspace-template/mcp/qiqi_delegate/tests/test_result_capture_wait.py",
+      "workspace-template/mcp/qiqi_delegate/tests/test_result_hook.py",
+      "workspace-template/mcp/qiqi_delegate/tests/test_mcp_error_transport.py"
+    ],
+    "delete": [],
+    "manual_review": []
+  },
+  "repo": {
+    "merge": [],
+    "replace": [],
+    "delete": [],
+    "manual_review": []
+  }
+}

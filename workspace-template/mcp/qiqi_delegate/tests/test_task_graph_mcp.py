@@ -8,6 +8,8 @@ from unittest.mock import AsyncMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import server  # noqa: E402
+from core import SessionStore, build_task_packet, task_packet_work_item_ref  # noqa: E402
 from mcp import Client  # noqa: E402
 from task_graph_mcp import mcp  # noqa: E402
 from task_graph_runtime import GraphRuntime  # noqa: E402
@@ -105,7 +107,10 @@ class TaskGraphMcpTests(unittest.IsolatedAsyncioTestCase):
         self.temp = tempfile.TemporaryDirectory()
         db_path = Path(self.temp.name) / ".qiqi" / "state" / "qiqi_delegate.sqlite3"
         self.runtime = GraphRuntime(GraphRuntimeStore(db_path))
+        self.slp_store = SessionStore(db_path)
         self.runtime_patch = patch("task_graph_mcp._graph_runtime", self.runtime)
+        self.store_patch = patch("task_graph_mcp._store", self.slp_store)
+        self.server_store_patch = patch("server._store", self.slp_store)
         self.registry_patch = patch(
             "task_graph_mcp._load_repo_registry",
             return_value={
@@ -114,12 +119,64 @@ class TaskGraphMcpTests(unittest.IsolatedAsyncioTestCase):
             },
         )
         self.runtime_patch.start()
+        self.store_patch.start()
+        self.server_store_patch.start()
         self.registry_patch.start()
 
     def tearDown(self) -> None:
         self.registry_patch.stop()
+        self.server_store_patch.stop()
+        self.store_patch.stop()
         self.runtime_patch.stop()
         self.temp.cleanup()
+
+    def recording_delegate(self, *results: dict) -> AsyncMock:
+        queue = list(results)
+
+        async def execute(**kwargs):
+            if not queue:
+                raise AssertionError("recording delegate received an unexpected extra call")
+            result = queue.pop(0)
+            route = kwargs["route"]
+            agent = "claude" if route.startswith("claude") else "codex"
+            context = kwargs.get("context")
+            packet = build_task_packet(
+                objective=kwargs["objective"],
+                scope=kwargs["scope"],
+                acceptance_criteria=kwargs["acceptance_criteria"],
+                out_of_scope=kwargs.get("out_of_scope"),
+                context=context.to_core_dict() if context is not None else None,
+                constraints=kwargs.get("constraints"),
+                known_unknowns=kwargs.get("known_unknowns"),
+            )
+            turn_id = result["turn_id"]
+            work_item_id, work_item_revision = task_packet_work_item_ref(packet)
+            server._record_peer_dispatch(
+                turn_id=turn_id,
+                repository=kwargs["repository"],
+                route=route,
+                work_item_id=work_item_id,
+                work_item_revision=work_item_revision,
+            )
+            if result["state"] in {"settled", "failed"}:
+                self.slp_store.record_turn(
+                    turn_id=turn_id,
+                    session_id=result["session_id"],
+                    repository=kwargs["repository"],
+                    agent=agent,
+                    route=route,
+                    state=result["state"],
+                    native_turn_id=None,
+                    packet=packet,
+                    agent_response=result["agent_response"],
+                )
+            elif result["state"] == "blocked":
+                self.slp_store.register_session(
+                    result["session_id"], kwargs["repository"], agent
+                )
+            return result
+
+        return AsyncMock(side_effect=execute)
 
     async def test_public_graph_tools_are_registered(self) -> None:
         tools = await mcp.list_tools()
@@ -127,6 +184,10 @@ class TaskGraphMcpTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(
             {
                 "delegate_repo_task",
+                "record_lead_disposition",
+                "record_work_item_revision",
+                "record_peer_signal",
+                "record_dependency_consumed",
                 "start_graph",
                 "get_graph",
                 "get_node_review",
@@ -196,8 +257,20 @@ class TaskGraphMcpTests(unittest.IsolatedAsyncioTestCase):
             for variant in variants
         }
         self.assertEqual(set(by_action), {"accept", "retry", "replan", "block"})
-        for action in ("accept", "replan", "block"):
-            self.assertEqual(set(by_action[action]["properties"]), {"node_id", "action"})
+        self.assertEqual(
+            set(by_action["accept"]["properties"]),
+            {"node_id", "action"},
+        )
+        self.assertFalse(by_action["accept"].get("additionalProperties", True))
+        for action in ("replan", "block"):
+            self.assertEqual(
+                set(by_action[action]["properties"]),
+                {"node_id", "action", "owner", "return_checkpoint"},
+            )
+            self.assertEqual(
+                set(by_action[action]["required"]),
+                {"node_id", "action", "owner", "return_checkpoint"},
+            )
             self.assertFalse(by_action[action].get("additionalProperties", True))
         retry = by_action["retry"]
         self.assertEqual(
@@ -286,8 +359,8 @@ class TaskGraphMcpTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("repo_task", error_text(result))
 
     async def test_outer_loop_executes_reviews_and_accepts_one_node(self) -> None:
-        delegate = AsyncMock(
-            return_value={
+        delegate = self.recording_delegate(
+            {
                 "session_id": "native-session-contracts",
                 "turn_id": "qiqi-turn-contracts",
                 "state": "settled",
@@ -372,6 +445,23 @@ class TaskGraphMcpTests(unittest.IsolatedAsyncioTestCase):
                         }
                     ],
                 )
+                disposition = self.slp_store.get_lead_disposition(
+                    "qiqi-turn-contracts"
+                )
+                self.assertIsNotNone(disposition)
+                self.assertEqual(disposition["action"], "accept")
+                self.assertEqual(disposition["graph_run_id"], run_id)
+                self.assertEqual(disposition["node_id"], "contracts")
+                self.assertEqual(disposition["attempt_id"], attempt_id)
+                self.assertEqual(
+                    [event["event_type"] for event in self.slp_store.list_slp_events()],
+                    [
+                        "peer.dispatched",
+                        "peer.response",
+                        "lead.disposition",
+                        "candidate.accepted",
+                    ],
+                )
 
         delegate.assert_awaited_once_with(
             repository="contracts",
@@ -385,6 +475,153 @@ class TaskGraphMcpTests(unittest.IsolatedAsyncioTestCase):
             known_unknowns=[],
             session_id=None,
         )
+
+    async def test_accept_rejects_captured_turn_stale_at_review_time(self) -> None:
+        payload = graph_payload()
+        payload["nodes"][0]["task_packet"]["context"] = {
+            "trusted_facts": [
+                {
+                    "fact": (
+                        "work_item_path=/tmp/work-items/e2e-review-stale; "
+                        "id=e2e:review-stale; revision=1"
+                    ),
+                    "source": "canonical Work Item locator",
+                }
+            ]
+        }
+        delegate = self.recording_delegate(
+            {
+                "session_id": "native-session-contracts",
+                "turn_id": "qiqi-turn-contracts",
+                "state": "settled",
+                "agent_response": "revision 1 candidate awaiting Lead review",
+            }
+        )
+
+        with patch("task_graph_mcp.delegate_repo_task", delegate):
+            async with Client(mcp) as client:
+                started = (
+                    await client.call_tool("start_graph", {"graph": payload})
+                ).structured_content
+                reviewable = (
+                    await client.call_tool(
+                        "delegate_next",
+                        {"graph_run_id": started["graph_run_id"]},
+                    )
+                ).structured_content
+
+                self.slp_store.record_work_item_revision(
+                    work_item_id="e2e:review-stale",
+                    work_item_revision=2,
+                    reason="requirements changed while candidate awaited review",
+                )
+
+                rejected = await client.call_tool(
+                    "submit_decisions",
+                    {
+                        "graph_run_id": started["graph_run_id"],
+                        "decisions": [{"node_id": "contracts", "action": "accept"}],
+                        "expected_revision": reviewable["revision"],
+                    },
+                )
+                current = (
+                    await client.call_tool(
+                        "get_graph",
+                        {"graph_run_id": started["graph_run_id"]},
+                    )
+                ).structured_content
+
+        self.assertTrue(rejected.is_error)
+        self.assertIn(
+            "candidate acceptance requires current-revision evidence",
+            error_text(rejected),
+        )
+        self.assertEqual(current["graph_state"], "awaiting_review")
+        self.assertIsNone(
+            self.slp_store.get_lead_disposition("qiqi-turn-contracts")
+        )
+        event_types = [
+            event["event_type"] for event in self.slp_store.list_slp_events()
+        ]
+        self.assertNotIn("candidate.accepted", event_types)
+
+    async def test_dependency_dispatch_rejects_stale_accepted_source(self) -> None:
+        payload = graph_payload()
+        payload["nodes"][0]["task_packet"]["context"] = {
+            "trusted_facts": [
+                {
+                    "fact": (
+                        "work_item_path=/tmp/work-items/e2e-dependency; "
+                        "id=e2e:dependency; revision=1"
+                    ),
+                    "source": "canonical Work Item locator",
+                }
+            ]
+        }
+        delegate = self.recording_delegate(
+            {
+                "session_id": "native-session-contracts",
+                "turn_id": "qiqi-turn-contracts",
+                "state": "settled",
+                "agent_response": "accepted revision 1 contract",
+            },
+            {
+                "session_id": "native-session-backend",
+                "turn_id": "qiqi-turn-backend",
+                "state": "settled",
+                "agent_response": "must not dispatch while upstream is stale",
+            },
+        )
+
+        with patch("task_graph_mcp.delegate_repo_task", delegate):
+            async with Client(mcp) as client:
+                started = (
+                    await client.call_tool("start_graph", {"graph": payload})
+                ).structured_content
+                reviewable = (
+                    await client.call_tool(
+                        "delegate_next", {"graph_run_id": started["graph_run_id"]}
+                    )
+                ).structured_content
+                accepted = (
+                    await client.call_tool(
+                        "submit_decisions",
+                        {
+                            "graph_run_id": started["graph_run_id"],
+                            "decisions": [
+                                {"node_id": "contracts", "action": "accept"}
+                            ],
+                            "expected_revision": reviewable["revision"],
+                        },
+                    )
+                ).structured_content
+                self.assertEqual(accepted["runnable_nodes"], ["backend"])
+
+                self.slp_store.record_work_item_revision(
+                    work_item_id="e2e:dependency",
+                    work_item_revision=2,
+                    reason="material requirement changed after acceptance",
+                )
+
+                blocked = await client.call_tool(
+                    "delegate_next", {"graph_run_id": started["graph_run_id"]}
+                )
+
+        self.assertTrue(blocked.is_error)
+        self.assertIn(
+            "TaskGraph dependency source is stale for the current Work Item revision",
+            error_text(blocked),
+        )
+        self.assertEqual(delegate.await_count, 2)
+        event_types = [
+            event["event_type"] for event in self.slp_store.list_slp_events()
+        ]
+        self.assertNotIn("dependency.consumed", event_types)
+        self.assertNotIn("qiqi-turn-backend", [
+            event["turn_id"]
+            for event in self.slp_store.list_slp_events()
+            if event["event_type"] == "peer.dispatched"
+        ])
 
     async def test_get_node_review_rejects_stale_review_locator(self) -> None:
         delegate = AsyncMock(
@@ -420,21 +657,19 @@ class TaskGraphMcpTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(reviewable["review_required"][0]["attempt_id"])
 
     async def test_get_node_review_hydrates_accepted_upstream_evidence_for_replan(self) -> None:
-        delegate = AsyncMock(
-            side_effect=[
-                {
-                    "session_id": "native-session-contracts",
-                    "turn_id": "qiqi-turn-contracts",
-                    "state": "settled",
-                    "agent_response": "accepted contract evidence",
-                },
-                {
-                    "session_id": "native-session-backend",
-                    "turn_id": "qiqi-turn-backend",
-                    "state": "settled",
-                    "agent_response": "backend found a replan dependency",
-                },
-            ]
+        delegate = self.recording_delegate(
+            {
+                "session_id": "native-session-contracts",
+                "turn_id": "qiqi-turn-contracts",
+                "state": "settled",
+                "agent_response": "accepted contract evidence",
+            },
+            {
+                "session_id": "native-session-backend",
+                "turn_id": "qiqi-turn-backend",
+                "state": "settled",
+                "agent_response": "backend found a replan dependency",
+            },
         )
         with patch("task_graph_mcp.delegate_repo_task", delegate):
             async with Client(mcp) as client:
@@ -485,8 +720,8 @@ class TaskGraphMcpTests(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_replan_decision_blocks_current_graph_and_returns_handoff_signal(self) -> None:
-        delegate = AsyncMock(
-            return_value={
+        delegate = self.recording_delegate(
+            {
                 "session_id": "native-session-contracts",
                 "turn_id": "qiqi-turn-contracts",
                 "state": "settled",
@@ -507,7 +742,12 @@ class TaskGraphMcpTests(unittest.IsolatedAsyncioTestCase):
                     "submit_decisions",
                     {
                         "graph_run_id": started["graph_run_id"],
-                        "decisions": [{"node_id": "contracts", "action": "replan"}],
+                        "decisions": [{
+                            "node_id": "contracts",
+                            "action": "replan",
+                            "owner": "lead",
+                            "return_checkpoint": "after replacement graph is authored",
+                        }],
                         "expected_revision": reviewable["revision"],
                     },
                 )
@@ -518,6 +758,25 @@ class TaskGraphMcpTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload["replan_required_nodes"], ["contracts"])
         self.assertEqual(payload["nodes"][0]["semantic_state"], "blocked")
         self.assertEqual(payload["review_required"], [])
+        disposition = self.slp_store.get_lead_disposition("qiqi-turn-contracts")
+        self.assertIsNotNone(disposition)
+        self.assertEqual(disposition["owner"], "lead")
+        self.assertEqual(
+            disposition["return_checkpoint"],
+            "after replacement graph is authored",
+        )
+        self.assertIn("owner=lead", disposition["reason"])
+        self.assertIn(
+            "return_checkpoint=after replacement graph is authored",
+            disposition["reason"],
+        )
+        self.assertEqual(
+            payload["decision_outcomes"][0]["defer"],
+            {
+                "owner": "lead",
+                "return_checkpoint": "after replacement graph is authored",
+            },
+        )
 
     async def test_blocked_direct_result_is_persisted_for_qiqi_review(self) -> None:
         delegate = AsyncMock(
@@ -544,6 +803,97 @@ class TaskGraphMcpTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload["results"][0]["runtime_state"], "blocked")
         self.assertEqual(payload["results"][0]["blocker_type"], "agent_blocked")
         self.assertEqual(payload["review_required"][0]["runtime_state"], "blocked")
+
+    async def test_accept_rejects_blocked_attempt_without_captured_peer_turn(self) -> None:
+        delegate = AsyncMock(
+            return_value={
+                "session_id": "native-session-contracts",
+                "turn_id": "qiqi-turn-blocked",
+                "state": "blocked",
+                "agent_response": None,
+                "blocker_type": "agent_blocked",
+            }
+        )
+        with patch("task_graph_mcp.delegate_repo_task", delegate):
+            async with Client(mcp) as client:
+                started = (
+                    await client.call_tool("start_graph", {"graph": graph_payload()})
+                ).structured_content
+                reviewable = (
+                    await client.call_tool(
+                        "delegate_next", {"graph_run_id": started["graph_run_id"]}
+                    )
+                ).structured_content
+                result = await client.call_tool(
+                    "submit_decisions",
+                    {
+                        "graph_run_id": started["graph_run_id"],
+                        "decisions": [{"node_id": "contracts", "action": "accept"}],
+                        "expected_revision": reviewable["revision"],
+                    },
+                )
+                current = (
+                    await client.call_tool(
+                        "get_graph", {"graph_run_id": started["graph_run_id"]}
+                    )
+                ).structured_content
+
+        self.assertTrue(result.is_error)
+        self.assertIn("cannot be accepted without an exact captured Peer turn", error_text(result))
+        self.assertEqual(current["revision"], reviewable["revision"])
+        self.assertEqual(current["graph_state"], "awaiting_review")
+        self.assertEqual(current["nodes"][0]["semantic_state"], "pending")
+        self.assertIsNone(self.slp_store.get_lead_disposition("qiqi-turn-blocked"))
+
+    async def test_disposition_failure_rolls_back_graph_decision_atomically(self) -> None:
+        delegate = self.recording_delegate(
+            {
+                "session_id": "native-session-contracts",
+                "turn_id": "qiqi-turn-atomic",
+                "state": "settled",
+                "agent_response": "candidate evidence",
+            }
+        )
+        with patch("task_graph_mcp.delegate_repo_task", delegate):
+            async with Client(mcp) as client:
+                started = (
+                    await client.call_tool("start_graph", {"graph": graph_payload()})
+                ).structured_content
+                reviewable = (
+                    await client.call_tool(
+                        "delegate_next", {"graph_run_id": started["graph_run_id"]}
+                    )
+                ).structured_content
+                with patch(
+                    "task_graph_store.SessionStore.record_lead_disposition_in_transaction",
+                    side_effect=RuntimeError("simulated disposition write failure"),
+                ):
+                    result = await client.call_tool(
+                        "submit_decisions",
+                        {
+                            "graph_run_id": started["graph_run_id"],
+                            "decisions": [
+                                {"node_id": "contracts", "action": "accept"}
+                            ],
+                            "expected_revision": reviewable["revision"],
+                        },
+                    )
+                current = (
+                    await client.call_tool(
+                        "get_graph", {"graph_run_id": started["graph_run_id"]}
+                    )
+                ).structured_content
+
+        self.assertTrue(result.is_error)
+        self.assertIn("simulated disposition write failure", error_text(result))
+        self.assertEqual(current["revision"], reviewable["revision"])
+        self.assertEqual(current["graph_state"], "awaiting_review")
+        self.assertEqual(current["nodes"][0]["semantic_state"], "pending")
+        self.assertIsNone(self.slp_store.get_lead_disposition("qiqi-turn-atomic"))
+        self.assertNotIn(
+            "candidate.accepted",
+            [event["event_type"] for event in self.slp_store.list_slp_events()],
+        )
 
     async def test_missing_execution_route_is_model_visible_and_starts_no_attempt(self) -> None:
         graph = graph_payload()

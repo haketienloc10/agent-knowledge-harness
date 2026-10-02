@@ -9,10 +9,14 @@ from typing import Annotated, Any, Literal
 from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import BaseModel, ConfigDict, Field
 
+from core import task_packet_work_item_ref
 from server import (
     STATE_DB,
     TaskContextInput,
     _load_repo_registry,
+    _reset_repo_dispatch_boundary_hook,
+    _set_repo_dispatch_boundary_hook,
+    _store,
     delegate_repo_task,
     mcp,
 )
@@ -31,6 +35,12 @@ _PRESERVED_SESSION_PATTERN = re.compile(
     r"native session ownership was preserved and can be resumed with "
     r"session_id=(?P<literal>'(?:\\.|[^'])*'|\"(?:\\.|[^\"])*\")"
 )
+_GRAPH_DISPOSITION_ACTIONS = {
+    "accept": "accept",
+    "retry": "repair",
+    "replan": "defer",
+    "block": "defer",
+}
 
 
 class TaskPacketInput(BaseModel):
@@ -98,10 +108,14 @@ class RetryDecisionInput(_DecisionInput):
 
 class ReplanDecisionInput(_DecisionInput):
     action: Literal["replan"]
+    owner: str = Field(min_length=1)
+    return_checkpoint: str = Field(min_length=1)
 
 
 class BlockDecisionInput(_DecisionInput):
     action: Literal["block"]
+    owner: str = Field(min_length=1)
+    return_checkpoint: str = Field(min_length=1)
 
 
 GraphDecisionInput = Annotated[
@@ -209,6 +223,7 @@ async def _execute_repo_task(
     node: GraphNode,
     *,
     session_id: str | None,
+    graph_run_id: str | None = None,
 ) -> dict[str, Any]:
     """Adapt one GraphNode back into the existing direct delegation primitive."""
 
@@ -217,8 +232,55 @@ async def _execute_repo_task(
             f"runnable node {node.node_id!r} has no route for repository execution"
         )
     packet = node.task_packet
+    dependency_sources: list[str] = []
+    work_item_id: str | None = None
+    work_item_revision: int | None = None
+    if graph_run_id is not None and node.depends_on:
+        work_item_id, work_item_revision = task_packet_work_item_ref(packet)
+        for dependency_node_id in node.depends_on:
+            dependency = _graph_runtime.store.get_node(
+                graph_run_id, dependency_node_id
+            )
+            if dependency is None:
+                raise RuntimeError(
+                    "TaskGraph dependency state disappeared during execution: "
+                    f"{dependency_node_id!r}"
+                )
+            source_turn_id = dependency.get("turn_id")
+            if not isinstance(source_turn_id, str) or not source_turn_id:
+                raise RuntimeError(
+                    "TaskGraph consumed a satisfied dependency without captured "
+                    f"Peer turn evidence: {dependency_node_id!r}"
+                )
+            dependency_sources.append(source_turn_id)
+
+    dispatch_token = None
+    if dependency_sources:
+        assert graph_run_id is not None
+
+        def record_dependency_consumption(conn: Any) -> None:
+            # This callback runs inside the same BEGIN IMMEDIATE transaction that
+            # records peer.dispatched. Every source is validated before commit, so
+            # one invalid later dependency rolls back all earlier consumption rows.
+            for source_turn_id in dependency_sources:
+                _store.record_dependency_consumed_in_transaction(
+                    conn,
+                    source_turn_id=source_turn_id,
+                    consumer_turn_id=None,
+                    repository=node.repository,
+                    graph_run_id=graph_run_id,
+                    node_id=node.node_id,
+                    work_item_id=work_item_id,
+                    work_item_revision=work_item_revision,
+                    require_current_source=True,
+                )
+
+        dispatch_token = _set_repo_dispatch_boundary_hook(
+            record_dependency_consumption
+        )
+
     try:
-        return await delegate_repo_task(
+        result = await delegate_repo_task(
             repository=node.repository,
             route=node.route,
             objective=packet.objective,
@@ -230,6 +292,7 @@ async def _execute_repo_task(
             known_unknowns=list(packet.known_unknowns),
             session_id=session_id,
         )
+        return result
     except ToolError as exc:
         preserved_session_id = _preserved_session_id(exc)
         if preserved_session_id is None:
@@ -238,6 +301,9 @@ async def _execute_repo_task(
             str(exc),
             session_id=preserved_session_id,
         ) from exc
+    finally:
+        if dispatch_token is not None:
+            _reset_repo_dispatch_boundary_hook(dispatch_token)
 
 
 async def _start_repo_task(node: GraphNode) -> dict[str, Any]:
@@ -246,6 +312,24 @@ async def _start_repo_task(node: GraphNode) -> dict[str, Any]:
 
 async def _resume_repo_task(node: GraphNode, session_id: str) -> dict[str, Any]:
     return await _execute_repo_task(node, session_id=session_id)
+
+
+def _graph_executors(graph_run_id: str):
+    async def start(node: GraphNode) -> dict[str, Any]:
+        return await _execute_repo_task(
+            node,
+            session_id=None,
+            graph_run_id=graph_run_id,
+        )
+
+    async def resume(node: GraphNode, session_id: str) -> dict[str, Any]:
+        return await _execute_repo_task(
+            node,
+            session_id=session_id,
+            graph_run_id=graph_run_id,
+        )
+
+    return start, resume
 
 
 @mcp.tool()
@@ -360,10 +444,11 @@ async def delegate_next(graph_run_id: str) -> dict[str, Any]:
     node per repository enters a wave. Existing delegate_repo_task repository/session
     ownership remains the authoritative runtime conflict guard.
     """
+    executor, resume_executor = _graph_executors(graph_run_id)
     return await _graph_runtime.delegate_next(
         graph_run_id,
-        executor=_start_repo_task,
-        resume_executor=_resume_repo_task,
+        executor=executor,
+        resume_executor=resume_executor,
     )
 
 
@@ -376,7 +461,9 @@ async def submit_decisions(
 ) -> dict[str, Any]:
     """Apply QiQi per-node semantic review decisions and recompute graph state.
 
-    Supported actions are `accept`, `retry`, `replan`, and `block`. For `retry`, QiQi may
+    Supported actions are `accept`, `retry`, `replan`, and `block`. `replan` and `block`
+    require explicit `owner` and `return_checkpoint` so a persisted defer remains actionable.
+    For `retry`, QiQi may
     set `resume_session=true` to continue the exact prior native session and may provide
     `feedback=[...]`; feedback is carried into a fresh TaskPacket snapshot through the
     existing context.claims_to_investigate contract. Omit/false `resume_session` for a
@@ -384,12 +471,71 @@ async def submit_decisions(
     wave. `replan` fails closed until QiQi calls `reconcile_graph` with an explicitly
     authored replacement graph and the current revision.
     """
+    parsed = decisions_from_payload(
+        [decision.model_dump(exclude_none=True, exclude_defaults=True) for decision in decisions]
+    )
+    lead_dispositions: list[dict[str, Any]] = []
+    for decision in parsed:
+        node = _graph_runtime.store.get_node(graph_run_id, decision.node_id)
+        if node is None:
+            raise RuntimeError(
+                f"persisted graph run is missing node state for {decision.node_id!r}"
+            )
+        raw_turn_id = node.get("turn_id")
+        raw_attempt_id = node.get("current_attempt_id")
+        turn_id = raw_turn_id if isinstance(raw_turn_id, str) and raw_turn_id else None
+        attempt_id = (
+            raw_attempt_id
+            if isinstance(raw_attempt_id, str) and raw_attempt_id
+            else None
+        )
+        captured_turn = _store.get_turn(turn_id) if turn_id is not None else None
+
+        # ACCEPT is a technical acceptance of one exact captured Peer response. A blocked
+        # or capture_ambiguous attempt may carry a transport turn locator without a
+        # canonical turns row; fail closed before changing graph state in that case.
+        if decision.action == "accept" and captured_turn is None:
+            raise RuntimeError(
+                f"TaskGraph node {decision.node_id!r} cannot be accepted without "
+                "an exact captured Peer turn; resolve/retry the current attempt first"
+            )
+
+        # Retry/replan/block may legitimately apply to an execution/capture failure with
+        # no captured Peer response. In that case there is no communication loop to
+        # disposition, so persist only the graph recovery decision.
+        if captured_turn is None or turn_id is None:
+            continue
+
+        reason = f"TaskGraph semantic decision: {decision.action}"
+        if decision.feedback:
+            reason += "; feedback=" + " | ".join(decision.feedback)
+        if decision.action in {"replan", "block"}:
+            assert decision.owner is not None
+            assert decision.return_checkpoint is not None
+            reason += (
+                f"; owner={decision.owner}; "
+                f"return_checkpoint={decision.return_checkpoint}"
+            )
+        disposition_record = {
+            "turn_id": turn_id,
+            "action": _GRAPH_DISPOSITION_ACTIONS[decision.action],
+            "reason": reason,
+            "graph_run_id": graph_run_id,
+            "node_id": decision.node_id,
+            "attempt_id": attempt_id,
+        }
+        if decision.action in {"replan", "block"}:
+            assert decision.owner is not None
+            assert decision.return_checkpoint is not None
+            disposition_record["owner"] = decision.owner
+            disposition_record["return_checkpoint"] = decision.return_checkpoint
+        lead_dispositions.append(disposition_record)
+
     return _graph_runtime.submit_decisions(
         graph_run_id,
-        decisions_from_payload(
-            [decision.model_dump(exclude_none=True, exclude_defaults=True) for decision in decisions]
-        ),
+        parsed,
         expected_revision=expected_revision,
+        lead_dispositions=tuple(lead_dispositions),
     )
 
 

@@ -1,0 +1,22 @@
+{
+  "version": 59,
+  "from_ref": "7db72313a4ecc73f23d01103bdae3f3cbccedf1f",
+  "to_ref": "1198600bfb2f63ebef0ef1f4d6e62c1323d117d5",
+  "description": "harden the live autonomous Supervisor E2E Lead startup gate: wait for Herdr result.agent.interactive_ready with a usable agent_status instead of treating named-agent existence as readiness, fail early if the broker exits during startup, and retry only the explicit agent_not_ready race before sending the single accepted Lead prompt",
+  "workspace": {
+    "merge": [
+      "workspace-template/scripts/workspace-check.sh"
+    ],
+    "replace": [
+      "workspace-template/scripts/e2e-autonomous-supervisor.sh"
+    ],
+    "delete": [],
+    "manual_review": []
+  },
+  "repo": {
+    "merge": [],
+    "replace": [],
+    "delete": [],
+    "manual_review": []
+  }
+}
