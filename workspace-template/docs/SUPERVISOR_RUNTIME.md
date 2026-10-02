@@ -207,10 +207,13 @@ Supervisor responses are captured through the native Stop hook. The broker does 
 
 Confirmed Supervisor findings are delivered to Lead with Herdr `agent prompt` without treating
 prompt acknowledgement as completion. Immediately before each Lead wakeup, the runtime replays
-durable semantic events again and rechecks the materialized case status, so a disposition or
-resolution committed after Supervisor review suppresses an obsolete notification. R2 wakeups carry
-the exact `consumption_event_seq` in the deterministic runtime locator; Lead does not have to rely
-on the model-authored evidence text to recover the remediation key.
+durable semantic events again, then acquires a SQLite writer-ordered delivery guard. The guard
+requires the broker cursor to equal the latest durable semantic sequence and keeps that ordering
+reservation through notification enqueue + delivered-state persistence. A closure committed first
+therefore suppresses the obsolete wakeup; a closure that loses the writer ordering is durably later
+than notification selection. R2 wakeups carry the exact `consumption_event_seq` in the deterministic
+runtime locator; Lead does not have to rely on model-authored evidence text to recover the
+remediation key.
 
 ## Operations
 
