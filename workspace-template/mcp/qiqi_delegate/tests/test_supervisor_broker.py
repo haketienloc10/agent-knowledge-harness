@@ -144,7 +144,7 @@ class SupervisorBrokerTests(unittest.TestCase):
         self.assertEqual(replay["opened"], 0)
         self.assertEqual(len(self.cases("R1")), 1)
 
-    def test_r2_dependency_consumed_requires_explicit_accept(self) -> None:
+    def test_r2_dependency_consumed_before_accept_remains_a_temporal_violation(self) -> None:
         self.record_turn("turn-source")
         self.broker.process_pending()
 
@@ -166,10 +166,34 @@ class SupervisorBrokerTests(unittest.TestCase):
         self.store.record_lead_disposition(
             turn_id="turn-source",
             action="accept",
-            reason="upstream candidate explicitly accepted",
+            reason="upstream candidate explicitly accepted after consumption",
         )
         self.broker.process_pending()
-        self.assertEqual(self.cases("R2")[0]["status"], "CLOSED")
+        self.assertEqual(self.cases("R2")[0]["status"], "OPEN")
+
+    def test_r2_broker_lag_does_not_let_later_accept_hide_violation(self) -> None:
+        self.record_turn("turn-lagged-source")
+        self.store.record_slp_event(
+            event_type="dependency.consumed",
+            turn_id="turn-lagged-consumer",
+            repository="repo-b",
+            payload={"source_turn_id": "turn-lagged-source"},
+        )
+        self.store.record_lead_disposition(
+            turn_id="turn-lagged-source",
+            action="accept",
+            reason="accepted only after downstream already consumed it",
+        )
+
+        self.broker.process_pending()
+
+        cases = self.cases("R2")
+        self.assertEqual(len(cases), 1)
+        self.assertEqual(cases[0]["status"], "OPEN")
+        self.assertEqual(
+            cases[0]["details"]["source_turn_id"],
+            "turn-lagged-source",
+        )
 
     def test_r3_overlapping_active_write_scopes_open_and_release_closes_case(self) -> None:
         self.store.record_slp_event(
