@@ -1,5 +1,5 @@
 {
-  "version": 54,
+  "version": 55,
   "from_ref": "6351950f66307786c5d3acd85d3a42883f48f883",
   "to_ref": "47aa5e61b415590d60560f85622ad4dd3d15b2d6",
   "description": "fix the live autonomous Supervisor E2E harness so it accepts a non-executable broker launcher file and invokes it through bash, preserving the installed v53 runtime while allowing the operator E2E to start the Supervisor broker reliably",
