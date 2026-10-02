@@ -560,6 +560,12 @@ try:
                 continue
 
             target = item["target"]
+            validate_path_ancestors(item["client"], item["requested"])
+            if os.path.realpath(item["requested"]) != target:
+                raise RuntimeError(
+                    f"{item['client']} instruction path changed before "
+                    f"transaction completion: {item['requested']}"
+                )
             if (
                 not item["installed"]
                 or not os.path.isfile(target)
