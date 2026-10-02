@@ -563,6 +563,7 @@ def run():
 
     warnings = []
     retained_backups = set()
+    transaction_complete = False
 
     try:
         ensure_roots(states)
@@ -578,8 +579,14 @@ def run():
         for state in states:
             commit_one(state)
 
-        # Installation is now committed. Block managed signals while deleting
-        # rollback material so a late interruption cannot trigger a fake rollback.
+        # Both targets now contain the staged skill. From this point onward,
+        # interruption must not roll back a successfully committed install.
+        transaction_complete = True
+
+        # Block managed signals while deleting rollback material. If a signal
+        # was already pending, it may be delivered when the mask is restored;
+        # the exception path below sees transaction_complete=True and will not
+        # attempt a destructive rollback without backups.
         previous = block_signals()
         try:
             cleanup_success_backups(states, warnings)
@@ -589,28 +596,44 @@ def run():
             restore_signals(previous)
 
     except BaseException as exc:
-        previous = block_signals()
-        rollback_errors = []
-        try:
-            for state in reversed(states):
-                try:
-                    rollback_one(state, rollback_errors, retained_backups)
-                except BaseException as rollback_exc:
-                    state["rollback_failed"] = True
-                    if (
-                        state["backup_parent"]
-                        and os.path.isdir(state["backup_parent"])
-                    ):
-                        retained_backups.add(state["backup_parent"])
-                    rollback_errors.append(
-                        f"{state['client']}: rollback raised {rollback_exc}"
-                    )
+        # Keep managed signals blocked for the remainder of error handling.
+        # The process is exiting, so there is no need to restore the mask.
+        block_signals()
 
+        if transaction_complete:
+            # Commit already succeeded for both clients. Never attempt rollback
+            # after rollback material may have been deleted.
+            cleanup_success_backups(states, warnings)
             for state in states:
                 cleanup_stage(state, warnings)
-                cleanup_created_root(state, warnings)
-        finally:
-            restore_signals(previous)
+
+            for warning in warnings:
+                sys.stderr.write(f"WARNING: {warning}\n")
+            if isinstance(exc, InstallInterrupted):
+                return 128 + exc.signum
+            sys.stderr.write(
+                f"ERROR: skill install completed but final cleanup failed: {exc}\n"
+            )
+            return 1
+
+        rollback_errors = []
+        for state in reversed(states):
+            try:
+                rollback_one(state, rollback_errors, retained_backups)
+            except BaseException as rollback_exc:
+                state["rollback_failed"] = True
+                if (
+                    state["backup_parent"]
+                    and os.path.isdir(state["backup_parent"])
+                ):
+                    retained_backups.add(state["backup_parent"])
+                rollback_errors.append(
+                    f"{state['client']}: rollback raised {rollback_exc}"
+                )
+
+        for state in states:
+            cleanup_stage(state, warnings)
+            cleanup_created_root(state, warnings)
 
         if rollback_errors:
             sys.stderr.write(
@@ -647,5 +670,16 @@ def run():
     return 0
 
 
-raise SystemExit(run())
+try:
+    exit_code = run()
+except InstallInterrupted as exc:
+    exit_code = 128 + exc.signum
+except InstallError as exc:
+    sys.stderr.write(f"ERROR: {exc}\n")
+    exit_code = exc.code
+except BaseException as exc:
+    sys.stderr.write(f"ERROR: {exc}\n")
+    exit_code = 1
+
+raise SystemExit(exit_code)
 PY
