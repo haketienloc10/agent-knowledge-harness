@@ -7,7 +7,7 @@ import sqlite3
 import sys
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -22,6 +22,7 @@ from supervisor_broker import (  # noqa: E402
     _drain_durable,
     main,
     resolve_herdr_socket,
+    serve,
 )
 
 
@@ -399,6 +400,20 @@ class SupervisorBrokerTests(unittest.TestCase):
 
 @unittest.skipIf(os.name == "nt", "broker singleton uses POSIX flock")
 class BrokerInstanceLockTests(unittest.TestCase):
+    def test_once_mode_uses_same_singleton_lock_as_daemon(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            state_db = Path(temp) / "qiqi_delegate.sqlite3"
+            daemon_lock = BrokerInstanceLock(state_db)
+            daemon_lock.acquire()
+            try:
+                with self.assertRaisesRegex(
+                    RuntimeError,
+                    "another Supervisor broker already owns this state DB",
+                ):
+                    main(["--once", "--db", str(state_db)])
+            finally:
+                daemon_lock.release()
+
     def test_second_lock_for_same_state_db_fails_until_first_releases(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             state_db = Path(temp) / "qiqi_delegate.sqlite3"
@@ -437,7 +452,9 @@ class BrokerHealthTests(unittest.TestCase):
 
 
 class DurableDrainTests(unittest.IsolatedAsyncioTestCase):
-    async def test_drain_consumes_all_bounded_batches_before_waiting_for_wakeup(self) -> None:
+    async def test_drain_replays_full_broker_backlog_before_reviewing_cases(self) -> None:
+        call_order: list[str] = []
+
         class Broker:
             def __init__(self):
                 self.calls = 0
@@ -445,12 +462,14 @@ class DurableDrainTests(unittest.IsolatedAsyncioTestCase):
 
             def process_pending(self, *, limit):
                 self.calls += 1
+                call_order.append(f"broker-{self.calls}")
+                processed = {1: limit, 2: 3}.get(self.calls, 0)
                 return {
                     "from_seq": 0,
                     "last_processed_seq": self.calls,
-                    "processed": limit if self.calls == 1 else 3,
+                    "processed": processed,
                     "opened": 1 if self.calls == 1 else 0,
-                    "closed": 0,
+                    "closed": 1 if self.calls == 2 else 0,
                 }
 
             def mark_healthy(self):
@@ -470,11 +489,11 @@ class DurableDrainTests(unittest.IsolatedAsyncioTestCase):
 
             async def handle_pending_cases(self, *, limit):
                 self.calls += 1
-                attempted = limit if self.calls == 1 else 0
+                call_order.append(f"runtime-{self.calls}")
                 return {
-                    "reviewed": attempted,
+                    "reviewed": 0,
                     "delivered_to_lead": 0,
-                    "review_attempted": attempted,
+                    "review_attempted": 0,
                     "delivery_attempted": 0,
                     "review_failures": 0,
                     "delivery_failures": 0,
@@ -483,11 +502,47 @@ class DurableDrainTests(unittest.IsolatedAsyncioTestCase):
         broker = Broker()
         runtime = Runtime()
         result = await _drain_durable(broker, runtime)
-        self.assertEqual(broker.calls, 2)
-        self.assertEqual(runtime.calls, 2)
+
+        self.assertEqual(call_order, ["broker-1", "broker-2", "runtime-1", "broker-3"])
         self.assertTrue(broker.healthy)
         self.assertEqual(result["broker"]["processed"], 1003)
-        self.assertEqual(result["supervisor"]["reviewed"], 20)
+        self.assertEqual(result["broker"]["opened"], 1)
+        self.assertEqual(result["broker"]["closed"], 1)
+        self.assertEqual(result["supervisor"]["reviewed"], 0)
+
+    async def test_serve_retries_transient_sqlite_failure_even_if_health_write_fails(
+        self,
+    ) -> None:
+        class Broker:
+            def __init__(self):
+                self.retry_attempts = 0
+
+            def mark_retrying(self, _error):
+                self.retry_attempts += 1
+                raise sqlite3.OperationalError("health state is locked")
+
+        drain = AsyncMock(
+            side_effect=[
+                sqlite3.OperationalError("semantic state is locked"),
+                asyncio.CancelledError(),
+            ]
+        )
+        broker = Broker()
+        with (
+            patch("supervisor_broker._drain_durable", new=drain),
+            patch("supervisor_broker.asyncio.sleep", new=AsyncMock()),
+            patch("builtins.print"),
+        ):
+            with self.assertRaises(asyncio.CancelledError):
+                await serve(
+                    broker,
+                    object(),
+                    object(),
+                    reconnect_seconds=0.01,
+                )
+
+        self.assertEqual(drain.await_count, 2)
+        self.assertEqual(broker.retry_attempts, 1)
 
 
 class SuperviseOnceTests(unittest.TestCase):
