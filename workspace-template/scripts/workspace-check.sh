@@ -215,8 +215,8 @@ grep -Fq 'partially created slp-control workspace' "$supervisor_control" || \
   fail 'Supervisor control-plane creation must clean up provisional topology on failure'
 grep -Fq 'record_write_scope_recovery_release' "$mcp_project/core.py" || \
   fail 'SessionStore must expose an explicit orphan write-claim recovery path'
-grep -Fq 'write-scope claim {write_claim_id!r} was retained for explicit' "$mcp_project/server.py" || \
-  fail 'delegation cleanup must retain durable ownership when Peer shutdown is unconfirmed'
+grep -Fq 'was retained for explicit recovery' "$mcp_project/server.py" || \
+  fail 'delegation cleanup must retain durable ownership when cleanup persistence is unconfirmed'
 grep -Fq '"cleanup_state": "workspace_close_unconfirmed"' "$mcp_project/server.py" || \
   fail 'delegation shutdown failure must preserve captured semantic result with recovery metadata'
 grep -Fq '"write_claim_release_unconfirmed"' "$mcp_project/server.py" || \
