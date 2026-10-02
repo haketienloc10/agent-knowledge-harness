@@ -1629,49 +1629,70 @@ async def delegate_repo_task(
             except Exception as exc:
                 close_error = exc
 
+        release_error: Exception | None = None
         try:
             if close_error is None:
-                _store.record_write_scope_release(
-                    claim_id=write_claim_id,
-                    repository=repository,
-                    turn_id=qiqi_turn_id,
-                    work_item_id=work_item_id,
-                    work_item_revision=work_item_revision,
-                )
+                try:
+                    _store.record_write_scope_release(
+                        claim_id=write_claim_id,
+                        repository=repository,
+                        turn_id=qiqi_turn_id,
+                        work_item_id=work_item_id,
+                        work_item_revision=work_item_revision,
+                    )
+                except Exception as exc:
+                    release_error = exc
         finally:
             # The in-process ownership guard may be released because the durable
-            # claim remains authoritative when Herdr shutdown was not confirmed.
-            # A later delegation therefore still fails closed until explicit
-            # verified-abandonment recovery releases that durable claim.
+            # claim remains authoritative whenever shutdown or durable release was
+            # not confirmed. A later delegation therefore still fails closed until
+            # explicit recovery clears that claim.
             await _release_resources(repo, session_id)
 
-        if close_error is not None:
+        cleanup_error = close_error or release_error
+        if cleanup_error is not None:
+            if close_error is not None:
+                cleanup_state = "workspace_close_unconfirmed"
+                cleanup_message = (
+                    "failed to confirm delegated Herdr workspace shutdown"
+                )
+                recovery_action = (
+                    "verify the delegated Peer is terminated or intentionally "
+                    "abandoned, then call release_write_scope_claim with the "
+                    "returned write_claim_id and write_claim_repository"
+                )
+            else:
+                cleanup_state = "write_claim_release_unconfirmed"
+                cleanup_message = (
+                    "delegated Herdr workspace shutdown succeeded but durable "
+                    "write-scope release could not be confirmed"
+                )
+                recovery_action = (
+                    "workspace shutdown is confirmed; call release_write_scope_claim "
+                    "with the returned write_claim_id and write_claim_repository to "
+                    "repair the durable ownership ledger"
+                )
+
             if result_payload is not None:
                 # Do not discard an already-captured semantic result merely because
-                # transport cleanup failed afterward. The durable claim stays active
-                # and the returned recovery locators make that degraded state explicit.
+                # post-capture cleanup persistence failed. The durable claim remains
+                # authoritative until explicit recovery and the exact candidate stays
+                # available to callers for disposition.
                 result_payload.update(
                     {
-                        "cleanup_state": "workspace_close_unconfirmed",
-                        "cleanup_error": (
-                            "failed to confirm delegated Herdr workspace shutdown"
-                        ),
+                        "cleanup_state": cleanup_state,
+                        "cleanup_error": cleanup_message,
                         "write_claim_id": write_claim_id,
                         "write_claim_repository": repository,
                         "workspace_id": workspace_id,
-                        "recovery_action": (
-                            "verify the delegated Peer is terminated or intentionally "
-                            "abandoned, then call release_write_scope_claim with the "
-                            "returned write_claim_id and write_claim_repository"
-                        ),
+                        "recovery_action": recovery_action,
                     }
                 )
             else:
                 raise RuntimeError(
-                    "failed to confirm delegated Herdr workspace shutdown; durable "
-                    f"write-scope claim {write_claim_id!r} was retained for explicit "
-                    "recovery"
-                ) from close_error
+                    f"{cleanup_message}; durable write-scope claim "
+                    f"{write_claim_id!r} was retained for explicit recovery"
+                ) from cleanup_error
 
 
 if __name__ == "__main__":
