@@ -329,6 +329,7 @@ def restore_commit_signals(previous):
 prepared = []
 temps = set()
 preserved_backups = set()
+completed_backups = set()
 transaction_complete = False
 
 def quarantine_installed_target(item):
@@ -579,6 +580,15 @@ try:
                     "transaction completion"
                 )
 
+        # Existing instruction files were moved aside as exact inode backups.
+        # Keep those backups after success: an editor may still hold an open
+        # descriptor to the old inode and write after the new target is published.
+        for item in prepared:
+            backup = item["backup"]
+            if item["moved_aside"] and backup and os.path.lexists(backup):
+                temps.discard(backup)
+                completed_backups.add(backup)
+
         transaction_complete = True
 
     except BaseException as commit_error:
@@ -665,6 +675,12 @@ finally:
             if transaction_complete:
                 raise SystemExit(128 + cleanup_interrupt.signum)
             raise
+
+for retained in sorted(completed_backups):
+    sys.stderr.write(
+        "WARNING: retained replaced instruction backup for descriptor-safe recovery: "
+        f"{retained}\n"
+    )
 
 PY
 
