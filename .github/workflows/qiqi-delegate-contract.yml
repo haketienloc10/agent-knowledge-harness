@@ -10,6 +10,8 @@ on:
       - 'migrations/**'
       - 'scripts/migrate_workspace.py'
       - 'scripts/tests/**'
+      - 'user-rules-template/**'
+      - 'writing-template/**'
   workflow_dispatch:
 
 permissions:
@@ -113,3 +115,82 @@ jobs:
           bash -n work-item-template/scripts/install-workspace-skill.sh
           bash -n work-item-template/scripts/install-user-skill.sh
           bash -n work-item-template/scripts/remove-legacy-user-mcp.sh
+          bash -n user-rules-template/scripts/install-user-rules.sh
+          bash -n writing-template/scripts/install-user-skill.sh
+      - name: Smoke test user-scope installers
+        run: |
+          set -euo pipefail
+          t="$(mktemp -d)"
+          trap 'rm -rf "$t"' EXIT
+
+          export HOME="$t/home"
+          export CODEX_HOME="$t/codex-home"
+          mkdir -p "$HOME"
+
+          bash writing-template/scripts/install-user-skill.sh
+          test -f "$CODEX_HOME/skills/ste-vi/SKILL.md"
+          test -f "$HOME/.claude/skills/ste-vi/SKILL.md"
+          bash writing-template/scripts/install-user-skill.sh
+
+          bash user-rules-template/scripts/install-user-rules.sh
+          grep -q '<!-- AKH: response-rules -->' "$CODEX_HOME/AGENTS.md"
+          grep -q '<!-- AKH: response-rules -->' "$HOME/.claude/CLAUDE.md"
+          bash user-rules-template/scripts/install-user-rules.sh
+
+          shared="$t/shared"
+          mkdir -p "$shared"
+          if bash writing-template/scripts/install-user-skill.sh \
+            --codex-root "$shared" \
+            --claude-root "$shared/ste-vi/claude-skills"; then
+            echo 'nested skill roots must be rejected' >&2
+            exit 1
+          fi
+
+          marker_root="$t/marker-root"
+          mkdir -p "$marker_root/ste-vi"
+          ln -s "$t/external-marker" \
+            "$marker_root/ste-vi/.agent-knowledge-harness-managed"
+          : > "$t/external-marker"
+          if bash writing-template/scripts/install-user-skill.sh \
+            --codex-root "$marker_root" \
+            --claude-root "$t/marker-claude"; then
+            echo 'symlinked management marker must be rejected' >&2
+            exit 1
+          fi
+
+          python3 - "$t" <<'PY'
+          from pathlib import Path
+          import sys
+
+          root = Path(sys.argv[1])
+          claude = root / "mixed-claude.md"
+          codex = root / "mixed-codex.md"
+          start = "<!-- AKH: response-rules -->"
+          end = "<!-- /AKH: response-rules -->"
+          claude.write_bytes(
+              b"prefix\n"
+              + start.encode()
+              + b"\nold\n"
+              + end.encode()
+              + b"\r\nsuffix\r\n"
+          )
+          codex.write_bytes(b"\xef\xbb\xbf# Codex\r\n")
+          PY
+
+          bash user-rules-template/scripts/install-user-rules.sh \
+            --claude-file "$t/mixed-claude.md" \
+            --codex-file "$t/mixed-codex.md"
+
+          python3 - "$t" <<'PY'
+          from pathlib import Path
+          import sys
+
+          root = Path(sys.argv[1])
+          claude = (root / "mixed-claude.md").read_bytes()
+          codex = (root / "mixed-codex.md").read_bytes()
+          marker = b"<!-- /AKH: response-rules -->"
+          marker_end = claude.index(marker) + len(marker)
+          assert claude[marker_end:marker_end + 2] == b"\r\n"
+          assert codex.startswith(b"\xef\xbb\xbf")
+          assert b"# Codex\r\n" in codex
+          PY
