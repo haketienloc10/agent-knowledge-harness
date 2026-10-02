@@ -373,6 +373,14 @@ def render_lead_finding(finding: dict[str, Any]) -> str:
             locator_lines.append(
                 f"consumption_event_seq: {consumption_event_seq}"
             )
+        repository = context.get("repository")
+        if isinstance(repository, str) and repository:
+            locator_lines.append(f"repository: {repository}")
+        claim_ids = context.get("claim_ids")
+        if isinstance(claim_ids, list):
+            for claim_id in claim_ids:
+                if isinstance(claim_id, str) and claim_id:
+                    locator_lines.append(f"write_claim_id: {claim_id}")
     locator_block = (
         "Runtime locator:\n" + "\n".join(locator_lines) + "\n"
         if locator_lines
@@ -604,13 +612,29 @@ class SupervisorControlStore:
                 "work_item_revision": row["work_item_revision"],
                 "candidate_id": row["candidate_id"],
             }
+            details = json.loads(row["details_json"])
             if row["rule"] == "R2":
-                details = json.loads(row["details_json"])
                 consumption_event_seq = details.get("consumption_event_seq")
                 if isinstance(consumption_event_seq, int) and not isinstance(
                     consumption_event_seq, bool
                 ):
                     context["consumption_event_seq"] = consumption_event_seq
+            elif row["rule"] == "R3":
+                repository = details.get("repository")
+                claim_ids = details.get("claim_ids")
+                if isinstance(repository, str) and repository.strip():
+                    context["repository"] = repository.strip()
+                if (
+                    isinstance(claim_ids, list)
+                    and claim_ids
+                    and all(
+                        isinstance(claim_id, str) and claim_id.strip()
+                        for claim_id in claim_ids
+                    )
+                ):
+                    context["claim_ids"] = [
+                        claim_id.strip() for claim_id in claim_ids
+                    ]
             finding["_case_context"] = context
             result.append(finding)
         return result
