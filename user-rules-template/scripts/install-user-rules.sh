@@ -329,6 +329,7 @@ def restore_commit_signals(previous):
 prepared = []
 temps = set()
 preserved_backups = set()
+transaction_complete = False
 
 def quarantine_installed_target(item):
     """Remove our installed object without deleting a concurrent writer's replacement."""
@@ -578,6 +579,8 @@ try:
                     "transaction completion"
                 )
 
+        transaction_complete = True
+
     except BaseException as commit_error:
         # Do not let a second HUP/INT/TERM interrupt rollback.
         if hasattr(signal, "pthread_sigmask"):
@@ -656,7 +659,12 @@ finally:
                     f"WARNING: could not remove temporary file {tmp}: {cleanup_error}\n"
                 )
     finally:
-        restore_commit_signals(previous_cleanup_mask)
+        try:
+            restore_commit_signals(previous_cleanup_mask)
+        except InstallInterrupted as cleanup_interrupt:
+            if transaction_complete:
+                raise SystemExit(128 + cleanup_interrupt.signum)
+            raise
 
 PY
 
