@@ -125,16 +125,19 @@ jobs:
 
           export HOME="$t/home"
           export CODEX_HOME="$t/codex-home"
+          export CLAUDE_CONFIG_DIR="$t/claude-config"
           mkdir -p "$HOME"
 
           bash writing-template/scripts/install-user-skill.sh
           test -f "$CODEX_HOME/skills/ste-vi/SKILL.md"
-          test -f "$HOME/.claude/skills/ste-vi/SKILL.md"
+          test -f "$CLAUDE_CONFIG_DIR/skills/ste-vi/SKILL.md"
+          test ! -e "$HOME/.claude/skills/ste-vi"
           bash writing-template/scripts/install-user-skill.sh
 
           bash user-rules-template/scripts/install-user-rules.sh
           grep -q '<!-- AKH: response-rules -->' "$CODEX_HOME/AGENTS.md"
-          grep -q '<!-- AKH: response-rules -->' "$HOME/.claude/CLAUDE.md"
+          grep -q '<!-- AKH: response-rules -->' "$CLAUDE_CONFIG_DIR/CLAUDE.md"
+          test ! -e "$HOME/.claude/CLAUDE.md"
           bash user-rules-template/scripts/install-user-rules.sh
 
           shared="$t/shared"
