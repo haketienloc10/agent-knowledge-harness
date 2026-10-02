@@ -765,6 +765,28 @@ class DirectDelegationPhase4IntegrationTests(unittest.IsolatedAsyncioTestCase):
 
 
 class TaskGraphPhase4IntegrationTests(unittest.IsolatedAsyncioTestCase):
+    @staticmethod
+    def dispatching_delegate(
+        *,
+        turn_id: str,
+        result: dict | None = None,
+        error: Exception | None = None,
+    ) -> AsyncMock:
+        async def execute(**kwargs):
+            server._record_peer_dispatch(
+                turn_id=turn_id,
+                repository=kwargs["repository"],
+                route=kwargs["route"],
+                work_item_id=None,
+                work_item_revision=None,
+            )
+            if error is not None:
+                raise error
+            assert result is not None
+            return result
+
+        return AsyncMock(side_effect=execute)
+
     async def test_downstream_execution_emits_dependency_consumed_from_upstream_turn(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             db_path = Path(temp) / "qiqi_delegate.sqlite3"
@@ -817,18 +839,20 @@ class TaskGraphPhase4IntegrationTests(unittest.IsolatedAsyncioTestCase):
             graph_store = MagicMock()
             graph_store.get_node.return_value = {"turn_id": "turn-upstream"}
             graph_runtime = SimpleNamespace(store=graph_store)
-            delegate = AsyncMock(
-                return_value={
+            delegate = self.dispatching_delegate(
+                turn_id="turn-downstream",
+                result={
                     "session_id": "session-downstream",
                     "turn_id": "turn-downstream",
                     "state": "settled",
                     "agent_response": "downstream evidence",
-                }
+                },
             )
 
             with (
                 patch.object(task_graph_mcp, "_store", store),
                 patch.object(task_graph_mcp, "_graph_runtime", graph_runtime),
+                patch.object(server, "_store", store),
                 patch.object(task_graph_mcp, "delegate_repo_task", delegate),
             ):
                 await task_graph_mcp._execute_repo_task(
@@ -892,14 +916,15 @@ class TaskGraphPhase4IntegrationTests(unittest.IsolatedAsyncioTestCase):
             graph_store.get_node.return_value = {"turn_id": "turn-upstream-failure"}
             graph_runtime = SimpleNamespace(store=graph_store)
 
+            delegate = self.dispatching_delegate(
+                turn_id="turn-downstream-failure",
+                error=ToolError("final response transport failed"),
+            )
             with (
                 patch.object(task_graph_mcp, "_store", store),
                 patch.object(task_graph_mcp, "_graph_runtime", graph_runtime),
-                patch.object(
-                    task_graph_mcp,
-                    "delegate_repo_task",
-                    AsyncMock(side_effect=ToolError("final response transport failed")),
-                ),
+                patch.object(server, "_store", store),
+                patch.object(task_graph_mcp, "delegate_repo_task", delegate),
             ):
                 with self.assertRaises(ToolError):
                     await task_graph_mcp._execute_repo_task(
@@ -953,18 +978,20 @@ class TaskGraphPhase4IntegrationTests(unittest.IsolatedAsyncioTestCase):
             graph_store = MagicMock()
             graph_store.get_node.return_value = {"turn_id": "turn-legacy-upstream"}
             graph_runtime = SimpleNamespace(store=graph_store)
-            delegate = AsyncMock(
-                return_value={
+            delegate = self.dispatching_delegate(
+                turn_id="turn-downstream",
+                result={
                     "session_id": "session-downstream",
                     "turn_id": "turn-downstream",
                     "state": "settled",
                     "agent_response": "must not run",
-                }
+                },
             )
 
             with (
                 patch.object(task_graph_mcp, "_store", store),
                 patch.object(task_graph_mcp, "_graph_runtime", graph_runtime),
+                patch.object(server, "_store", store),
                 patch.object(task_graph_mcp, "delegate_repo_task", delegate),
             ):
                 with self.assertRaisesRegex(
@@ -977,11 +1004,138 @@ class TaskGraphPhase4IntegrationTests(unittest.IsolatedAsyncioTestCase):
                         graph_run_id="legacy-graph",
                     )
 
-            delegate.assert_not_awaited()
+            delegate.assert_awaited_once()
+            event_types = [event["event_type"] for event in store.list_slp_events()]
+            self.assertNotIn("dependency.consumed", event_types)
+            self.assertNotIn("peer.dispatched", event_types)
+
+    async def test_predispatch_failure_does_not_record_dependency_consumption(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            store = SessionStore(Path(temp) / "qiqi_delegate.sqlite3")
+            packet = build_task_packet(
+                objective="Accepted upstream.",
+                scope=["contract"],
+                acceptance_criteria=["accepted"],
+            )
+            store.record_turn(
+                turn_id="turn-upstream-preflight",
+                session_id="session-upstream-preflight",
+                repository="upstream",
+                agent="claude",
+                route="claude-balanced",
+                state="settled",
+                native_turn_id=None,
+                packet=packet,
+                agent_response="accepted evidence",
+            )
+            store.record_lead_disposition(
+                turn_id="turn-upstream-preflight",
+                action="accept",
+                reason="accepted",
+            )
+            node = GraphNode(
+                node_id="downstream",
+                repository="downstream",
+                task_packet=build_task_packet(
+                    objective="Consume dependency.",
+                    scope=["downstream"],
+                    acceptance_criteria=["done"],
+                ),
+                depends_on=("upstream",),
+                route="claude-balanced",
+            )
+            graph_store = MagicMock()
+            graph_store.get_node.return_value = {"turn_id": "turn-upstream-preflight"}
+            graph_runtime = SimpleNamespace(store=graph_store)
+            delegate = AsyncMock(side_effect=ToolError("integration preflight failed"))
+
+            with (
+                patch.object(task_graph_mcp, "_store", store),
+                patch.object(task_graph_mcp, "_graph_runtime", graph_runtime),
+                patch.object(task_graph_mcp, "delegate_repo_task", delegate),
+            ):
+                with self.assertRaises(ToolError):
+                    await task_graph_mcp._execute_repo_task(
+                        node,
+                        session_id=None,
+                        graph_run_id="graph-preflight",
+                    )
+
             self.assertNotIn(
                 "dependency.consumed",
                 [event["event_type"] for event in store.list_slp_events()],
             )
+
+    async def test_invalid_later_dependency_rolls_back_all_dispatch_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            store = SessionStore(Path(temp) / "qiqi_delegate.sqlite3")
+            packet = build_task_packet(
+                objective="Upstream result.",
+                scope=["contract"],
+                acceptance_criteria=["evidence"],
+            )
+            for turn_id in ("turn-good", "turn-bad"):
+                store.record_turn(
+                    turn_id=turn_id,
+                    session_id=f"session-{turn_id}",
+                    repository="upstream",
+                    agent="claude",
+                    route="claude-balanced",
+                    state="settled",
+                    native_turn_id=None,
+                    packet=packet,
+                    agent_response="upstream evidence",
+                )
+            store.record_lead_disposition(
+                turn_id="turn-good",
+                action="accept",
+                reason="first dependency accepted",
+            )
+            node = GraphNode(
+                node_id="downstream",
+                repository="downstream",
+                task_packet=build_task_packet(
+                    objective="Consume both dependencies.",
+                    scope=["downstream"],
+                    acceptance_criteria=["done"],
+                ),
+                depends_on=("good", "bad"),
+                route="claude-balanced",
+            )
+            graph_store = MagicMock()
+            graph_store.get_node.side_effect = lambda _run, node_id: {
+                "turn_id": "turn-good" if node_id == "good" else "turn-bad"
+            }
+            graph_runtime = SimpleNamespace(store=graph_store)
+            delegate = self.dispatching_delegate(
+                turn_id="turn-downstream-multi",
+                result={
+                    "session_id": "session-downstream",
+                    "turn_id": "turn-downstream-multi",
+                    "state": "settled",
+                    "agent_response": "must not run",
+                },
+            )
+
+            with (
+                patch.object(task_graph_mcp, "_store", store),
+                patch.object(task_graph_mcp, "_graph_runtime", graph_runtime),
+                patch.object(server, "_store", store),
+                patch.object(task_graph_mcp, "delegate_repo_task", delegate),
+            ):
+                with self.assertRaisesRegex(
+                    RuntimeError,
+                    "lacks an explicit ACCEPT disposition",
+                ):
+                    await task_graph_mcp._execute_repo_task(
+                        node,
+                        session_id=None,
+                        graph_run_id="graph-multi",
+                    )
+
+            event_types = [event["event_type"] for event in store.list_slp_events()]
+            self.assertNotIn("dependency.consumed", event_types)
+            self.assertNotIn("peer.dispatched", event_types)
 
 
 class _AutonomousE2EControlPlane:
