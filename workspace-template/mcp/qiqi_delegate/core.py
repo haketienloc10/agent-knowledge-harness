@@ -1473,6 +1473,56 @@ class SessionStore:
                 payload=payload,
             )
 
+    @staticmethod
+    def _active_write_scope_claims_in_transaction(
+        conn: sqlite3.Connection,
+        *,
+        repository: str,
+    ) -> dict[str, dict[str, Any]]:
+        rows = conn.execute(
+            "SELECT seq, event_type, turn_id, work_item_id, work_item_revision, "
+            "payload_json FROM slp_events "
+            "WHERE repository = ? "
+            "AND event_type IN ('write_scope.claimed', 'write_scope.released') "
+            "ORDER BY seq",
+            (repository,),
+        ).fetchall()
+        active: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            payload = json.loads(row["payload_json"])
+            claim_id = payload.get("claim_id")
+            if not isinstance(claim_id, str) or not claim_id.strip():
+                continue
+            claim_id = claim_id.strip()
+            if row["event_type"] == "write_scope.claimed":
+                active[claim_id] = {
+                    "claim_id": claim_id,
+                    "turn_id": row["turn_id"],
+                    "work_item_id": row["work_item_id"],
+                    "work_item_revision": row["work_item_revision"],
+                    "owner": payload.get("owner"),
+                    "scope": payload.get("scope"),
+                    "claimed_event_seq": int(row["seq"]),
+                }
+            else:
+                active.pop(claim_id, None)
+        return active
+
+    def list_active_write_scope_claims(
+        self,
+        *,
+        repository: str,
+    ) -> list[dict[str, Any]]:
+        clean_repository = self._optional_runtime_text(repository, "repository")
+        if clean_repository is None:
+            raise ValueError("repository is required")
+        with self._connect() as conn:
+            active = self._active_write_scope_claims_in_transaction(
+                conn,
+                repository=clean_repository,
+            )
+        return sorted(active.values(), key=lambda item: item["claimed_event_seq"])
+
     def record_write_scope_claim(
         self,
         *,
@@ -1483,6 +1533,7 @@ class SessionStore:
         turn_id: str | None = None,
         work_item_id: str | None = None,
         work_item_revision: int | None = None,
+        require_repository_clear: bool = False,
     ) -> int:
         clean_claim = self._optional_runtime_text(claim_id, "claim_id")
         clean_repository = self._optional_runtime_text(repository, "repository")
@@ -1492,6 +1543,8 @@ class SessionStore:
         clean_work_item_revision = self._optional_work_item_revision(work_item_revision)
         if clean_claim is None or clean_repository is None or clean_owner is None:
             raise ValueError("claim_id, repository and owner are required")
+        if not isinstance(require_repository_clear, bool):
+            raise ValueError("require_repository_clear must be a boolean")
         if (clean_work_item_id is None) != (clean_work_item_revision is None):
             raise ValueError("work_item_id and work_item_revision must be provided together")
         if not isinstance(scope, list) or not scope:
@@ -1501,18 +1554,35 @@ class SessionStore:
             if not isinstance(item, str) or not item.strip():
                 raise ValueError("scope entries must be non-empty strings")
             clean_scope.append(item.strip())
-        return self.record_slp_event(
-            event_type="write_scope.claimed",
-            turn_id=clean_turn,
-            repository=clean_repository,
-            work_item_id=clean_work_item_id,
-            work_item_revision=clean_work_item_revision,
-            payload={
-                "claim_id": clean_claim,
-                "owner": clean_owner,
-                "scope": clean_scope,
-            },
-        )
+
+        with self._connect() as conn:
+            if require_repository_clear:
+                conn.execute("BEGIN IMMEDIATE")
+                active = self._active_write_scope_claims_in_transaction(
+                    conn,
+                    repository=clean_repository,
+                )
+                if active:
+                    claims = ", ".join(sorted(active))
+                    raise RuntimeError(
+                        "repository has an active durable write-scope claim from a "
+                        "previous or concurrent delegation; resolve/release it before "
+                        f"dispatching another writer: repository={clean_repository!r}, "
+                        f"claim_ids={claims}"
+                    )
+            return self._insert_slp_event(
+                conn,
+                event_type="write_scope.claimed",
+                turn_id=clean_turn,
+                repository=clean_repository,
+                work_item_id=clean_work_item_id,
+                work_item_revision=clean_work_item_revision,
+                payload={
+                    "claim_id": clean_claim,
+                    "owner": clean_owner,
+                    "scope": clean_scope,
+                },
+            )
 
     def record_write_scope_release(
         self,
