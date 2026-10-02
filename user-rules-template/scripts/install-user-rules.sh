@@ -45,6 +45,7 @@ python3 - "$source_rules" "$marker" \
 import os
 import re
 import shutil
+import signal
 import sys
 import tempfile
 
@@ -58,9 +59,73 @@ with open(source, encoding="utf-8", newline="") as f:
 block = source_block.replace("\r\n", "\n").replace("\r", "\n").rstrip("\n")
 start, end = f"<!-- {name} -->", f"<!-- /{name} -->"
 
+
+class InstallInterrupted(BaseException):
+    def __init__(self, signum):
+        super().__init__(f"interrupted by signal {signum}")
+        self.signum = signum
+
+
+managed_signals = [
+    sig
+    for sig in (
+        getattr(signal, "SIGHUP", None),
+        getattr(signal, "SIGINT", None),
+        getattr(signal, "SIGTERM", None),
+    )
+    if sig is not None
+]
+
+
+def interrupt_handler(signum, _frame):
+    raise InstallInterrupted(signum)
+
+
+for sig in managed_signals:
+    signal.signal(sig, interrupt_handler)
+
+
+def validate_path_ancestors(client, requested):
+    parent = os.path.dirname(requested)
+    components = []
+    probe = parent
+    while probe and probe != os.path.dirname(probe):
+        components.append(probe)
+        probe = os.path.dirname(probe)
+
+    for component in reversed(components):
+        if os.path.islink(component):
+            if not os.path.exists(component):
+                sys.stderr.write(
+                    f"ERROR: {client} instruction path has a dangling symlink ancestor: {component}\n"
+                )
+                sys.exit(65)
+            if not os.path.isdir(component):
+                sys.stderr.write(
+                    f"ERROR: {client} instruction path symlink ancestor is not a directory: {component}\n"
+                )
+                sys.exit(65)
+        elif os.path.lexists(component) and not os.path.isdir(component):
+            sys.stderr.write(
+                f"ERROR: {client} instruction path has a non-directory ancestor: {component}\n"
+            )
+            sys.exit(65)
+
+
+def stat_signature(path):
+    st = os.stat(path, follow_symlinks=True)
+    return (st.st_dev, st.st_ino, st.st_mode, st.st_size, st.st_mtime_ns)
+
+
+def read_text(path):
+    with open(path, encoding="utf-8", newline="") as f:
+        return f.read()
+
+
 plans = []
 for client, requested in zip(raw_pairs[0::2], raw_pairs[1::2]):
     requested = os.path.abspath(os.path.expanduser(requested))
+    validate_path_ancestors(client, requested)
     target = os.path.realpath(requested)
 
     if os.path.islink(requested):
@@ -74,12 +139,13 @@ for client, requested in zip(raw_pairs[0::2], raw_pairs[1::2]):
             sys.exit(65)
 
     text = None
+    snapshot = None
     if os.path.exists(target):
         if not os.path.isfile(target):
             sys.stderr.write(f"ERROR: {client} instruction target is not a regular file: {target}\n")
             sys.exit(65)
-        with open(target, encoding="utf-8", newline="") as f:
-            text = f.read()
+        snapshot = stat_signature(target)
+        text = read_text(target)
 
     bom = "\ufeff" if text is not None and text.startswith("\ufeff") else ""
     body = text[len(bom):] if text is not None else None
@@ -91,22 +157,25 @@ for client, requested in zip(raw_pairs[0::2], raw_pairs[1::2]):
         eol = "\n"
 
     managed_block = block.replace("\n", eol)
-    managed = f"{start}{eol}{managed_block}{eol}{end}{eol}"
+    managed_core = f"{start}{eol}{managed_block}{eol}{end}"
 
     if body is None:
-        new_body = managed
+        new_body = managed_core + eol
     else:
         starts, ends = body.count(start), body.count(end)
         if starts == 0 and ends == 0:
-            new_body = managed + (eol + body if body else "")
+            new_body = managed_core + eol + (eol + body if body else "")
         elif starts == 1 and ends == 1 and body.index(start) < body.index(end):
             i = body.index(start)
-            j = body.index(end) + len(end)
-            if body.startswith("\r\n", j):
-                j += 2
-            elif body[j:j + 1] in ("\n", "\r"):
-                j += 1
-            new_body = body[:i] + managed + body[j:]
+            marker_end = body.index(end) + len(end)
+            if body.startswith("\r\n", marker_end):
+                terminator = "\r\n"
+            elif body[marker_end:marker_end + 1] in ("\n", "\r"):
+                terminator = body[marker_end:marker_end + 1]
+            else:
+                terminator = ""
+            j = marker_end + len(terminator)
+            new_body = body[:i] + managed_core + terminator + body[j:]
         else:
             sys.stderr.write(
                 f"ERROR: {client} file has malformed marker block ({start} x{starts}, {end} x{ends}): {requested}\n"
@@ -114,7 +183,7 @@ for client, requested in zip(raw_pairs[0::2], raw_pairs[1::2]):
             sys.exit(65)
 
     new = bom + new_body
-    plans.append((client, requested, target, text, new))
+    plans.append((client, requested, target, text, snapshot, new))
 
 # Reject identical or nested resolved targets before parent directories are created.
 for index, left in enumerate(plans):
@@ -133,74 +202,143 @@ for index, left in enumerate(plans):
             )
             sys.exit(65)
 
+
+def assert_target_unchanged(client, requested, target, original_text, snapshot):
+    validate_path_ancestors(client, requested)
+
+    if os.path.realpath(requested) != target:
+        raise RuntimeError(
+            f"{client} instruction path changed after preflight: {requested}"
+        )
+
+    if original_text is None:
+        if os.path.lexists(target):
+            raise RuntimeError(
+                f"{client} instruction target appeared after preflight: {target}"
+            )
+        return
+
+    if not os.path.isfile(target) or os.path.islink(target):
+        raise RuntimeError(
+            f"{client} instruction target identity changed after preflight: {target}"
+        )
+
+    if stat_signature(target) != snapshot or read_text(target) != original_text:
+        raise RuntimeError(
+            f"{client} instruction target changed after preflight: {target}"
+        )
+
+
+def block_commit_signals():
+    if hasattr(signal, "pthread_sigmask"):
+        return signal.pthread_sigmask(signal.SIG_BLOCK, managed_signals)
+    return None
+
+
+def restore_commit_signals(previous):
+    if previous is not None:
+        signal.pthread_sigmask(signal.SIG_SETMASK, previous)
+
+
 # Prepare every replacement and rollback backup before any target is changed.
 prepared = []
 temps = set()
 committed = []
 try:
-    for client, requested, target, text, new in plans:
-        if new == text:
-            prepared.append((client, requested, target, None, text is not None, None))
-            continue
-
-        parent = os.path.dirname(target)
-        os.makedirs(parent, exist_ok=True)
-
-        fd, tmp = tempfile.mkstemp(dir=parent, prefix=".akh-rules.")
-        temps.add(tmp)
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8", newline="") as f:
-                f.write(new)
-        except Exception:
-            try:
-                os.close(fd)
-            except OSError:
-                pass
-            raise
-
-        had_original = text is not None
-        backup = None
-        if had_original:
-            shutil.copymode(target, tmp)
-
-            backup_fd, backup = tempfile.mkstemp(
-                dir=parent, prefix=".akh-rules.backup."
-            )
-            os.close(backup_fd)
-            temps.add(backup)
-            shutil.copy2(target, backup)
-
-        prepared.append(
-            (client, requested, target, tmp, had_original, backup)
-        )
-
     try:
+        for client, requested, target, text, snapshot, new in plans:
+            if new == text:
+                prepared.append(
+                    (client, requested, target, None, text, snapshot, None, new)
+                )
+                continue
+
+            parent = os.path.dirname(target)
+            os.makedirs(parent, exist_ok=True)
+
+            fd, tmp = tempfile.mkstemp(dir=parent, prefix=".akh-rules.")
+            temps.add(tmp)
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8", newline="") as f:
+                    f.write(new)
+            except BaseException:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+                raise
+
+            backup = None
+            if text is not None:
+                shutil.copymode(target, tmp)
+
+                backup_fd, backup = tempfile.mkstemp(
+                    dir=parent, prefix=".akh-rules.backup."
+                )
+                os.close(backup_fd)
+                temps.add(backup)
+                shutil.copy2(target, backup)
+
+            prepared.append(
+                (client, requested, target, tmp, text, snapshot, backup, new)
+            )
+
         for item in prepared:
-            client, requested, target, tmp, had_original, backup = item
+            client, requested, target, tmp, text, snapshot, backup, new = item
             if tmp is None:
                 print(f"{client} rules unchanged: {requested}")
                 continue
 
-            os.replace(tmp, target)
-            temps.discard(tmp)
-            committed.append(item)
-            print(f"{client} rules installed: {requested}")
-    except Exception as commit_error:
-        rollback_errors = []
-        for item in reversed(committed):
-            client, requested, target, tmp, had_original, backup = item
+            assert_target_unchanged(
+                client, requested, target, text, snapshot
+            )
+
+            previous_mask = block_commit_signals()
             try:
-                if had_original:
+                os.replace(tmp, target)
+                installed_snapshot = stat_signature(target)
+                temps.discard(tmp)
+                committed.append((item, installed_snapshot))
+            finally:
+                restore_commit_signals(previous_mask)
+
+            print(f"{client} rules installed: {requested}")
+
+    except BaseException as commit_error:
+        # Do not let a second HUP/INT/TERM interrupt rollback.
+        if hasattr(signal, "pthread_sigmask"):
+            signal.pthread_sigmask(signal.SIG_BLOCK, managed_signals)
+
+        rollback_errors = []
+        for committed_item, installed_snapshot in reversed(committed):
+            (
+                client,
+                requested,
+                target,
+                tmp,
+                text,
+                snapshot,
+                backup,
+                new,
+            ) = committed_item
+            try:
+                if (
+                    not os.path.isfile(target)
+                    or stat_signature(target) != installed_snapshot
+                    or read_text(target) != new
+                ):
+                    raise RuntimeError(
+                        "target changed again after this installer committed it"
+                    )
+
+                if text is not None:
                     if backup is None:
                         raise RuntimeError("missing rollback backup")
                     os.replace(backup, target)
                     temps.discard(backup)
                 else:
-                    try:
-                        os.unlink(target)
-                    except FileNotFoundError:
-                        pass
-            except Exception as rollback_error:
+                    os.unlink(target)
+            except BaseException as rollback_error:
                 rollback_errors.append(
                     f"{client} ({requested}): {rollback_error}"
                 )
@@ -211,13 +349,18 @@ try:
                 + "; ".join(rollback_errors)
                 + "\n"
             )
-        raise commit_error
+
+        if isinstance(commit_error, InstallInterrupted):
+            raise SystemExit(128 + commit_error.signum)
+        raise
+
 finally:
     for tmp in list(temps):
         try:
             os.unlink(tmp)
         except FileNotFoundError:
             pass
+
 PY
 
 printf 'Open a fresh agent session to load the updated rules.\n'
