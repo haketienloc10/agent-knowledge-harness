@@ -695,7 +695,14 @@ class SupervisorBroker:
         source_turn_id = payload.get("source_turn_id")
         if not isinstance(source_turn_id, str) or not source_turn_id.strip():
             source_turn_id = None
-        disposition = self._lead_disposition(conn, source_turn_id)
+        disposition = None
+        if source_turn_id:
+            disposition = conn.execute(
+                "SELECT * FROM lead_dispositions "
+                "WHERE turn_id = ? AND event_seq < ? "
+                "ORDER BY event_seq DESC LIMIT 1",
+                (source_turn_id, int(event["seq"])),
+            ).fetchone()
         if disposition is not None and disposition["action"] == "accept":
             return 0, 0
 
