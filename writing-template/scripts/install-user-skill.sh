@@ -4,7 +4,7 @@ set -euo pipefail
 home="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 name="ste-vi"
 source_skill="$home/skills/$name"
-codex_root="${HOME}/.agents/skills"
+codex_root="${CODEX_HOME:-${HOME}/.codex}/skills"
 claude_root="${HOME}/.claude/skills"
 
 usage() {
@@ -31,13 +31,10 @@ done
   exit 66
 }
 
-install_skill() {
+preflight_skill() {
   local client="$1" root="$2"
   local target="$root/$name"
   local marker="$target/.agent-knowledge-harness-managed"
-  local temp_parent
-
-  mkdir -p "$root"
 
   if [[ -e "$target" && ! -d "$target" ]]; then
     printf 'ERROR: %s skill target exists and is not a directory: %s\n' "$client" "$target" >&2
@@ -50,7 +47,14 @@ install_skill() {
     printf 'Move/remove that skill explicitly, then rerun installer.\n' >&2
     return 78
   fi
+}
 
+install_skill() {
+  local client="$1" root="$2"
+  local target="$root/$name"
+  local temp_parent
+
+  mkdir -p "$root"
   temp_parent="$(mktemp -d "$root/.$name.XXXXXX")"
   cp -R "$source_skill" "$temp_parent/$name"
   : > "$temp_parent/$name/.agent-knowledge-harness-managed"
@@ -62,6 +66,10 @@ install_skill() {
 
   printf '%s skill installed: %s/SKILL.md\n' "$client" "$target"
 }
+
+# Validate both destinations before mutating either one.
+preflight_skill 'Codex' "$codex_root"
+preflight_skill 'Claude' "$claude_root"
 
 install_skill 'Codex' "$codex_root"
 install_skill 'Claude' "$claude_root"
