@@ -452,6 +452,8 @@ class AutonomousSupervisorRuntimeTests(unittest.IsolatedAsyncioTestCase):
         result = await runtime.handle_pending_cases()
 
         self.assertEqual(result["review_failures"], 1)
+        self.assertIn("transient supervisor failure", result["last_error"])
+        self.assertIn("turn-fail", result["last_error"])
         self.assertEqual(result["reviewed"], 1)
         self.assertEqual(result["delivered_to_lead"], 1)
         self.assertEqual(
@@ -604,6 +606,23 @@ class _StaleNamedAgentControlPlane(_RecordingHerdrControlPlane):
         return await super()._wait_agent_prompt_ready(name, timeout_ms=timeout_ms)
 
 
+class _AbruptAfterLeadStartControlPlane(_RecordingHerdrControlPlane):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.crash_once = True
+
+    async def _start_agent(
+        self,
+        name: str,
+        pane_id: str,
+        args: list[str],
+    ) -> None:
+        await super()._start_agent(name, pane_id, args)
+        if name == "lead" and self.crash_once:
+            self.crash_once = False
+            raise KeyboardInterrupt("simulated process termination after lead start")
+
+
 class _PartialCreateFailureControlPlane(_RecordingHerdrControlPlane):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -668,8 +687,72 @@ class HerdrControlPlaneCommandTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(process.terminated)
             self.assertFalse(process.killed)
 
+    async def test_declared_herdr_timeout_extends_outer_command_bound(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            workspace = root / "workspace"
+            workspace.mkdir()
+            control = HerdrControlPlane(
+                workspace_root=workspace,
+                state_db=workspace / ".qiqi" / "state" / "qiqi_delegate.sqlite3",
+                supervisor_home=root / "isolated-supervisor",
+                command_timeout_seconds=0.01,
+            )
+
+            self.assertGreaterEqual(
+                control._outer_command_timeout(
+                    (
+                        "agent",
+                        "prompt",
+                        "supervisor",
+                        "review",
+                        "--wait",
+                        "--timeout",
+                        "120000",
+                    )
+                ),
+                121.0,
+            )
+            self.assertGreaterEqual(
+                control._outer_command_timeout(
+                    ("agent", "start", "lead", "--timeout", "60000")
+                ),
+                61.0,
+            )
+
 
 class HerdrControlPlaneTopologyTests(unittest.IsolatedAsyncioTestCase):
+    async def test_provisional_topology_survives_abrupt_agent_start_termination(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            workspace = root / "workspace"
+            workspace.mkdir()
+            state_db = workspace / ".qiqi" / "state" / "qiqi_delegate.sqlite3"
+            control = _AbruptAfterLeadStartControlPlane(
+                workspace_root=workspace,
+                state_db=state_db,
+                supervisor_home=root / "isolated-supervisor",
+            )
+
+            with self.assertRaisesRegex(
+                KeyboardInterrupt,
+                "simulated process termination",
+            ):
+                await control.ensure_started()
+
+            provisional = control.store.get_control_plane()
+            self.assertIsNotNone(provisional)
+            self.assertEqual(provisional["workspace_id"], "w-control")
+            self.assertEqual(provisional["lead_pane_id"], "w-control:p1")
+            self.assertEqual(provisional["supervisor_pane_id"], "w-control:p2")
+
+            recovered = await control.ensure_started()
+            self.assertEqual(recovered["workspace_id"], "w-control")
+            self.assertIn("lead", control.agent_names)
+            self.assertIn("supervisor", control.agent_names)
+
     async def test_partial_initial_creation_is_closed_before_retry(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
