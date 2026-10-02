@@ -522,6 +522,7 @@ class _RecordingHerdrControlPlane(HerdrControlPlane):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.commands: list[tuple[str, ...]] = []
+        self.command_sessions: list[str | None] = []
         self.agent_names: set[str] = set()
         self.agent_panes: dict[str, str] = {}
 
@@ -541,8 +542,14 @@ class _RecordingHerdrControlPlane(HerdrControlPlane):
             "launch_pending": False,
         }
 
-    async def _run(self, *args: str, check: bool = True):
+    async def _run(
+        self,
+        *args: str,
+        check: bool = True,
+        session: str | None = None,
+    ):
         self.commands.append(tuple(args))
+        self.command_sessions.append(session)
         if len(args) >= 3 and args[:2] == ("agent", "start"):
             self.agent_names.add(args[2])
             pane_index = args.index("--pane") + 1
@@ -552,8 +559,9 @@ class _RecordingHerdrControlPlane(HerdrControlPlane):
             self.agent_panes.clear()
         return 0, "{}", ""
 
-    async def _run_json(self, *args: str):
+    async def _run_json(self, *args: str, session: str | None = None):
         self.commands.append(tuple(args))
+        self.command_sessions.append(session)
         if args[:2] == ("workspace", "create"):
             return {
                 "result": {
@@ -567,11 +575,16 @@ class _RecordingHerdrControlPlane(HerdrControlPlane):
 
 
 class _MissingPersistedPaneControlPlane(_RecordingHerdrControlPlane):
-    async def _run(self, *args: str, check: bool = True):
+    async def _run(
+        self,
+        *args: str,
+        check: bool = True,
+        session: str | None = None,
+    ):
         if args[:3] == ("pane", "get", "w-old:p1"):
             self.commands.append(tuple(args))
             return 1, "", "pane not found"
-        return await super()._run(*args, check=check)
+        return await super()._run(*args, check=check, session=session)
 
 
 class _StaleNamedAgentControlPlane(_RecordingHerdrControlPlane):
@@ -591,8 +604,13 @@ class _StaleNamedAgentControlPlane(_RecordingHerdrControlPlane):
             "launch_pending": not self.ready,
         }
 
-    async def _run(self, *args: str, check: bool = True):
-        result = await super()._run(*args, check=check)
+    async def _run(
+        self,
+        *args: str,
+        check: bool = True,
+        session: str | None = None,
+    ):
+        result = await super()._run(*args, check=check, session=session)
         if args[:2] == ("workspace", "close"):
             # The recreated control room starts fresh agents that can become ready.
             self.ready = True
