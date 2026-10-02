@@ -227,7 +227,7 @@ class Phase4SemanticStoreTests(unittest.TestCase):
             turn_id="turn-signal-provenance",
             signal="REOPEN_REQUEST",
         )
-        with self.assertRaisesRegex(RuntimeError, "does not match the captured Peer turn"):
+        with self.assertRaisesRegex(RuntimeError, "does not match the durable Peer signal"):
             self.store.record_peer_signal_resolution(
                 turn_id="turn-signal-provenance",
                 signal="REOPEN_REQUEST",
