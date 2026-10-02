@@ -624,7 +624,11 @@ class DirectDelegationPhase4IntegrationTests(unittest.IsolatedAsyncioTestCase):
                     patch.object(server, "_release_resources", new=release)
                 )
                 stack.enter_context(
-                    patch.object(store, "record_slp_event", side_effect=fail_dispatch)
+                    patch.object(
+                        server,
+                        "_record_peer_dispatch",
+                        side_effect=RuntimeError("dispatch event insert failed"),
+                    )
                 )
 
                 with self.assertRaisesRegex(ToolError, "dispatch event insert failed"):
