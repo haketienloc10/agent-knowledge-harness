@@ -24,12 +24,12 @@ Script ghi `rules/response-rules.md` vào hai file:
 
 | Client | File mặc định |
 |---|---|
-| Claude Code | `~/.claude/CLAUDE.md` |
+| Claude Code | `${CLAUDE_CONFIG_DIR:-$HOME/.claude}/CLAUDE.md` |
 | Codex | `${CODEX_HOME:-$HOME/.codex}/AGENTS.md` |
 
-Nếu `CODEX_HOME` có giá trị, installer dùng đúng Codex home đó. Đổi file đích bằng
-`--claude-file PATH` và `--codex-file PATH`. Dùng hai cờ này để thử trên bản sao trước khi ghi
-vào file thật.
+Nếu `CODEX_HOME` hoặc `CLAUDE_CONFIG_DIR` có giá trị, installer dùng đúng config directory
+đang hoạt động của client tương ứng. Đổi file đích bằng `--claude-file PATH` và
+`--codex-file PATH`. Dùng hai cờ này để thử trên bản sao trước khi ghi vào file thật.
 
 ## Ghi đè trong phạm vi marker
 
@@ -96,7 +96,8 @@ Khối rule gọi skill `ste-vi` ở mức 80%. Skill nằm ở `writing-templat
 không agent sẽ gặp dòng trỏ tới skill chưa tồn tại.
 
 Codex user skill mặc định được cài vào `${CODEX_HOME:-$HOME/.codex}/skills/ste-vi`. Claude Code
-user skill mặc định được cài vào `~/.claude/skills/ste-vi`.
+user skill mặc định được cài vào
+`${CLAUDE_CONFIG_DIR:-$HOME/.claude}/skills/ste-vi`.
 
 ## Kiểm tra nhanh
 
@@ -104,7 +105,7 @@ Thử trên bản sao, không đụng file thật:
 
 ```bash
 t=$(mktemp -d)
-cp ~/.claude/CLAUDE.md "$t/claude"
+cp "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/CLAUDE.md" "$t/claude"
 cp "${CODEX_HOME:-$HOME/.codex}/AGENTS.md" "$t/codex"
 user-rules-template/scripts/install-user-rules.sh --claude-file "$t/claude" --codex-file "$t/codex"
 ```
