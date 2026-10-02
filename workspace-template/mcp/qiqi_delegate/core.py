@@ -1086,6 +1086,111 @@ class SessionStore:
             "idempotent": False,
         }
 
+    def record_dependency_consumed_in_transaction(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        source_turn_id: str,
+        consumer_turn_id: str | None = None,
+        repository: str | None = None,
+        work_item_id: str | None = None,
+        work_item_revision: int | None = None,
+        candidate_id: str | None = None,
+        graph_run_id: str | None = None,
+        node_id: str | None = None,
+        attempt_id: str | None = None,
+        require_current_source: bool = False,
+    ) -> int:
+        """Record dependency consumption using the caller's active transaction."""
+        clean_source = self._optional_runtime_text(source_turn_id, "source_turn_id")
+        if clean_source is None:
+            raise ValueError("source_turn_id must not be empty")
+        if not isinstance(require_current_source, bool):
+            raise ValueError("require_current_source must be a boolean")
+        clean_consumer = self._optional_runtime_text(consumer_turn_id, "consumer_turn_id")
+        clean_repository = self._optional_runtime_text(repository, "repository")
+        clean_work_item_id = self._optional_runtime_text(work_item_id, "work_item_id")
+        clean_work_item_revision = self._optional_work_item_revision(work_item_revision)
+        if (clean_work_item_id is None) != (clean_work_item_revision is None):
+            raise ValueError("work_item_id and work_item_revision must be provided together")
+        clean_candidate = self._optional_runtime_text(candidate_id, "candidate_id")
+        clean_graph_run = self._optional_runtime_text(graph_run_id, "graph_run_id")
+        clean_node = self._optional_runtime_text(node_id, "node_id")
+        clean_attempt = self._optional_runtime_text(attempt_id, "attempt_id")
+
+        source = conn.execute(
+            "SELECT turn_id, task_packet_json FROM turns WHERE turn_id = ?",
+            (clean_source,),
+        ).fetchone()
+        if source is None:
+            raise RuntimeError(
+                "dependency consumption requires an existing captured source Peer turn: "
+                f"unknown source_turn_id={clean_source!r}"
+            )
+
+        if require_current_source:
+            disposition = conn.execute(
+                "SELECT action FROM lead_dispositions WHERE turn_id = ?",
+                (clean_source,),
+            ).fetchone()
+            if disposition is None or disposition["action"] != "accept":
+                raise RuntimeError(
+                    "TaskGraph dependency source lacks an explicit ACCEPT disposition: "
+                    f"source_turn_id={clean_source!r}"
+                )
+
+            source_packet = json.loads(source["task_packet_json"])
+            source_work_item_id, source_revision = _work_item_ref_from_payload(
+                source_packet
+            )
+            if source_work_item_id is not None and source_revision is not None:
+                latest = conn.execute(
+                    "SELECT work_item_revision FROM slp_events "
+                    "WHERE event_type = 'work_item.revision_changed' "
+                    "AND work_item_id = ? ORDER BY seq DESC LIMIT 1",
+                    (source_work_item_id,),
+                ).fetchone()
+                if latest is not None:
+                    current_revision = int(latest["work_item_revision"])
+                    if current_revision > source_revision:
+                        reconciliation = conn.execute(
+                            "SELECT work_item_revision, payload_json FROM slp_events "
+                            "WHERE event_type = 'candidate.reconciled' "
+                            "AND turn_id = ? AND work_item_id = ? "
+                            "ORDER BY seq DESC LIMIT 1",
+                            (clean_source, source_work_item_id),
+                        ).fetchone()
+                        is_current = False
+                        if reconciliation is not None:
+                            payload = json.loads(reconciliation["payload_json"])
+                            is_current = (
+                                payload.get("resolution") == "revalidated"
+                                and int(reconciliation["work_item_revision"])
+                                == current_revision
+                            )
+                        if not is_current:
+                            raise RuntimeError(
+                                "TaskGraph dependency source is stale for the current "
+                                "Work Item revision: "
+                                f"source_turn_id={clean_source!r}, "
+                                f"captured_revision={source_revision}, "
+                                f"current_revision={current_revision}"
+                            )
+
+        return self._insert_slp_event(
+            conn,
+            event_type="dependency.consumed",
+            turn_id=clean_consumer,
+            repository=clean_repository,
+            graph_run_id=clean_graph_run,
+            node_id=clean_node,
+            attempt_id=clean_attempt,
+            work_item_id=clean_work_item_id,
+            work_item_revision=clean_work_item_revision,
+            candidate_id=clean_candidate,
+            payload={"source_turn_id": clean_source},
+        )
+
     def record_dependency_consumed(
         self,
         *,
@@ -1100,100 +1205,23 @@ class SessionStore:
         attempt_id: str | None = None,
         require_current_source: bool = False,
     ) -> int:
-        source_turn = self._optional_runtime_text(source_turn_id, "source_turn_id")
-        if source_turn is None:
-            raise ValueError("source_turn_id must not be empty")
-        if not isinstance(require_current_source, bool):
-            raise ValueError("require_current_source must be a boolean")
-        clean_consumer = self._optional_runtime_text(consumer_turn_id, "consumer_turn_id")
-        clean_repository = self._optional_runtime_text(repository, "repository")
-        clean_work_item_id = self._optional_runtime_text(work_item_id, "work_item_id")
-        clean_work_item_revision = self._optional_work_item_revision(work_item_revision)
-        if (clean_work_item_id is None) != (clean_work_item_revision is None):
-            raise ValueError("work_item_id and work_item_revision must be provided together")
-        clean_candidate = self._optional_runtime_text(candidate_id, "candidate_id")
-        clean_graph_run = self._optional_runtime_text(graph_run_id, "graph_run_id")
-        clean_node = self._optional_runtime_text(node_id, "node_id")
-        clean_attempt = self._optional_runtime_text(attempt_id, "attempt_id")
         with self._connect() as conn:
             if require_current_source:
-                # Hold the writer reservation across current-revision validation and
-                # dependency.consumed insertion so a material revision cannot race the gate.
+                # Hold the writer reservation across validation and insertion so a
+                # material Work Item revision cannot race this exact consumption.
                 conn.execute("BEGIN IMMEDIATE")
-            source = conn.execute(
-                "SELECT turn_id, task_packet_json FROM turns WHERE turn_id = ?",
-                (source_turn,),
-            ).fetchone()
-            if source is None:
-                raise RuntimeError(
-                    "dependency consumption requires an existing captured source Peer turn: "
-                    f"unknown source_turn_id={source_turn!r}"
-                )
-
-            if require_current_source:
-                # A persisted TaskGraph "satisfied" bit is not sufficient after upgrades:
-                # legacy runs may predate durable Lead dispositions. Require exact ACCEPT
-                # evidence before allowing downstream semantics to consume this turn.
-                disposition = conn.execute(
-                    "SELECT action FROM lead_dispositions WHERE turn_id = ?",
-                    (source_turn,),
-                ).fetchone()
-                if disposition is None or disposition["action"] != "accept":
-                    raise RuntimeError(
-                        "TaskGraph dependency source lacks an explicit ACCEPT disposition: "
-                        f"source_turn_id={source_turn!r}"
-                    )
-
-                source_packet = json.loads(source["task_packet_json"])
-                source_work_item_id, source_revision = _work_item_ref_from_payload(
-                    source_packet
-                )
-                if source_work_item_id is not None and source_revision is not None:
-                    latest = conn.execute(
-                        "SELECT work_item_revision FROM slp_events "
-                        "WHERE event_type = 'work_item.revision_changed' "
-                        "AND work_item_id = ? ORDER BY seq DESC LIMIT 1",
-                        (source_work_item_id,),
-                    ).fetchone()
-                    if latest is not None:
-                        current_revision = int(latest["work_item_revision"])
-                        if current_revision > source_revision:
-                            reconciliation = conn.execute(
-                                "SELECT work_item_revision, payload_json FROM slp_events "
-                                "WHERE event_type = 'candidate.reconciled' "
-                                "AND turn_id = ? AND work_item_id = ? "
-                                "ORDER BY seq DESC LIMIT 1",
-                                (source_turn, source_work_item_id),
-                            ).fetchone()
-                            is_current = False
-                            if reconciliation is not None:
-                                payload = json.loads(reconciliation["payload_json"])
-                                is_current = (
-                                    payload.get("resolution") == "revalidated"
-                                    and int(reconciliation["work_item_revision"])
-                                    == current_revision
-                                )
-                            if not is_current:
-                                raise RuntimeError(
-                                    "TaskGraph dependency source is stale for the current "
-                                    "Work Item revision: "
-                                    f"source_turn_id={source_turn!r}, "
-                                    f"captured_revision={source_revision}, "
-                                    f"current_revision={current_revision}"
-                                )
-
-            return self._insert_slp_event(
+            return self.record_dependency_consumed_in_transaction(
                 conn,
-                event_type="dependency.consumed",
-                turn_id=clean_consumer,
-                repository=clean_repository,
-                graph_run_id=clean_graph_run,
-                node_id=clean_node,
-                attempt_id=clean_attempt,
-                work_item_id=clean_work_item_id,
-                work_item_revision=clean_work_item_revision,
-                candidate_id=clean_candidate,
-                payload={"source_turn_id": source_turn},
+                source_turn_id=source_turn_id,
+                consumer_turn_id=consumer_turn_id,
+                repository=repository,
+                work_item_id=work_item_id,
+                work_item_revision=work_item_revision,
+                candidate_id=candidate_id,
+                graph_run_id=graph_run_id,
+                node_id=node_id,
+                attempt_id=attempt_id,
+                require_current_source=require_current_source,
             )
 
     def record_peer_signal(
