@@ -54,21 +54,27 @@ Script chỉ đụng vào khối nằm giữa hai marker:
 | Hai target trùng hoặc lồng nhau sau khi resolve path | Dừng với exit 65 trước khi tạo parent hoặc ghi file |
 
 Installer preflight cả Claude và Codex trước khi thay file. Vì vậy lỗi marker, symlink hoặc target
-lồng nhau ở một client không làm client còn lại bị cập nhật một phần. Ngay trước mỗi `os.replace`,
-installer revalidate resolved path, file identity và content snapshot; nếu editor hoặc dotfile
-manager đã thay target thì installer abort thay vì ghi đè snapshot cũ.
+lồng nhau ở một client không làm client còn lại bị cập nhật một phần. Ngay trước commit, installer
+revalidate resolved path, file identity và exact content snapshot. Nếu editor hoặc dotfile manager
+đã thay target thì installer abort thay vì ghi đè snapshot cũ.
 
-Trước commit, installer tạo rollback backup cho mọi target hiện hữu cần thay. Nếu một
-`os.replace` về sau thất bại, hoặc process nhận `HUP`/`INT`/`TERM` trong commit phase, các
-target đã thay trước đó được restore theo thứ tự ngược. Signal được block trong khoảng
-`os.replace -> ghi nhận commit` để rollback không bỏ sót target vừa thay.
+Với target hiện hữu, installer move chính file hiện tại sang rollback path trước khi cài bản mới.
+Sau move, installer kiểm tra lại object vừa move. Nếu một writer thắng race giữa revalidation và
+move, transaction abort và restore đúng object vừa bị move. Bản mới được publish bằng hard link từ
+temporary file; thao tác này fail nếu target đã xuất hiện, nên không clobber file được tạo trong
+race cuối.
 
-Ghi nội dung qua file tạm rồi `os.replace`, giữ nguyên quyền của regular file cũ. Với symlink,
-`os.replace` áp dụng lên file đích đã resolve, không thay bản thân symlink. Installer cũng giữ
-nguyên UTF-8 BOM ở đầu file và line ending của phần nằm ngoài managed block. Với file mixed-EOL,
-terminator thực tế ngay sau end marker cũng được giữ nguyên; file CRLF không bị normalize toàn bộ
-sang LF. Temporary file được đăng ký cleanup ngay sau khi tạo, kể cả khi bước
-ghi hoặc `copymode` thất bại.
+Nếu commit sau thất bại, hoặc process nhận `HUP`/`INT`/`TERM`, các target đã commit trước đó
+được rollback theo thứ tự ngược. Signal bị block trong critical section để transaction state luôn
+được ghi nhận trước khi handler chạy. Nếu rollback không thể restore vì target đã bị process khác
+thay đổi, installer giữ rollback file và in chính xác path để phục hồi thủ công.
+
+Installer giữ nguyên symlink instruction bằng cách thao tác trên file đích đã resolve, không thay
+bản thân symlink. Installer cũng giữ nguyên UTF-8 BOM ở đầu file và line ending của phần nằm ngoài
+managed block. Với file mixed-EOL, terminator thực tế ngay sau end marker cũng được giữ nguyên;
+file CRLF không bị normalize toàn bộ sang LF. Replacement temp và rollback temp được đăng ký
+cleanup trong lúc managed signal đang bị block, nên interruption không để lại temp không được
+theo dõi.
 
 Lần cài đầu vào file đã có sẵn nội dung tương tự nhưng chưa có marker sẽ tạo bản trùng. Xóa
 nội dung cũ, hoặc bọc nó bằng marker, trước khi chạy script.
