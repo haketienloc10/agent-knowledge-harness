@@ -95,6 +95,7 @@ def read_stable_bytes(path):
 
 
 source_bytes, source_snapshot, source_digest = read_stable_bytes(source)
+source_real = os.path.realpath(source)
 source_block = source_bytes.decode("utf-8")
 block = source_block.replace("\r\n", "\n").replace("\r", "\n").rstrip("\n")
 start, end = f"<!-- {name} -->", f"<!-- /{name} -->"
@@ -188,6 +189,15 @@ for client, requested in zip(raw_pairs[0::2], raw_pairs[1::2]):
     requested = os.path.abspath(os.path.expanduser(requested))
     validate_path_ancestors(client, requested)
     target = os.path.realpath(requested)
+
+    if target == source_real or (
+        os.path.exists(target) and os.path.samefile(target, source_real)
+    ):
+        sys.stderr.write(
+            f"ERROR: {client} instruction target aliases source rules: "
+            f"{requested} -> {target}\n"
+        )
+        sys.exit(65)
 
     if os.path.islink(requested):
         if not os.path.exists(target):
@@ -351,14 +361,18 @@ def quarantine_installed_target(item):
         and stat_signature(quarantine) == item["installed_snapshot"]
         and read_text(quarantine) == item["new"]
     )
+
+    # Never unlink rollback quarantine based on a point-in-time check. Another
+    # process may still hold an open descriptor to the inode and write after this
+    # comparison. Keeping the quarantine preserves those writes for recovery.
+    temps.discard(quarantine)
+    preserved_backups.add(quarantine)
     if is_ours:
-        os.unlink(quarantine)
-        temps.discard(quarantine)
         return
 
-    # A concurrent writer replaced our published file. Never delete it. For a
-    # regular file, publish it back with a no-clobber hard link; otherwise retain
-    # the quarantined object and report its exact path.
+    # A concurrent writer replaced or changed our published file. For a regular
+    # file, republish the same inode with a no-clobber hard link while retaining
+    # the quarantine link as descriptor-safe recovery evidence.
     republished = False
     if os.path.isfile(quarantine) and not os.path.islink(quarantine):
         try:
@@ -366,17 +380,14 @@ def quarantine_installed_target(item):
         except (FileExistsError, OSError):
             pass
         else:
-            os.unlink(quarantine)
-            temps.discard(quarantine)
             republished = True
 
     if republished:
         raise RuntimeError(
-            "installed target changed after commit; concurrent replacement was preserved"
+            "installed target changed after commit; concurrent replacement was "
+            f"preserved and rollback quarantine retained at {quarantine}"
         )
 
-    temps.discard(quarantine)
-    preserved_backups.add(quarantine)
     raise RuntimeError(
         "installed target changed after commit; concurrent replacement retained at "
         f"{quarantine}"
@@ -613,6 +624,11 @@ try:
                 "ERROR: rule install failed and rollback was incomplete: "
                 + "; ".join(rollback_errors)
                 + "\n"
+            )
+        for retained in sorted(preserved_backups):
+            sys.stderr.write(
+                "ERROR: retained rollback quarantine for manual recovery: "
+                f"{retained}\n"
             )
 
         if isinstance(commit_error, InstallInterrupted):
