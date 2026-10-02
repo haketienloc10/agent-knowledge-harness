@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import sqlite3
 import time
 import uuid
@@ -20,6 +21,32 @@ CAPTURE_LATEST_ACCEPT_RATIO = 0.35
 CAPTURE_HOUSEKEEPING_REJECT_RATIO = 0.15
 CAPTURE_MIN_SIGNIFICANT_DROP_CHARS = 600
 SUPPORTED_HOOK_ADAPTERS = {"claude", "codex"}
+SLP_EVENT_TYPES = frozenset(
+    {
+        "peer.dispatched",
+        "peer.response",
+        "peer.signal",
+        "peer.signal_resolved",
+        "peer.capture_ambiguous",
+        "lead.disposition",
+        "candidate.accepted",
+        "candidate.reconciled",
+        "dependency.consumed",
+        "dependency.consumption_resolved",
+        "write_scope.claimed",
+        "write_scope.released",
+        "work_item.revision_changed",
+    }
+)
+LEAD_DISPOSITION_ACTIONS = frozenset({"accept", "reject", "repair", "defer", "resolve"})
+CANDIDATE_RECONCILIATION_ACTIONS = frozenset({"superseded", "abandoned", "revalidated"})
+PEER_SIGNAL_TYPES = frozenset(
+    {"REOPEN_REQUEST", "DEPENDENCY_REQUEST", "BLOCKED", "runtime_blocked"}
+)
+SUPERVISOR_CASE_STATUSES = frozenset(
+    {"OPEN", "DELIVERED_TO_LEAD", "WAITING_FOR_EVIDENCE", "CLOSED", "ESCALATED_TO_HUMAN"}
+)
+_WORK_ITEM_REF_RE = re.compile(r"(?:^|;\s*)id=([^;]+);\s*revision=(\d+)(?:;|$)")
 
 
 def active_capture_filename(adapter: str, repo: Path) -> str:
@@ -127,6 +154,33 @@ class TaskPacket:
 
     def to_json(self) -> str:
         return json.dumps(self.as_dict(), ensure_ascii=False, separators=(",", ":"))
+
+
+def _work_item_ref_from_payload(payload: dict[str, Any]) -> tuple[str | None, int | None]:
+    context = payload.get("context")
+    if not isinstance(context, dict):
+        return None, None
+    trusted_facts = context.get("trusted_facts")
+    if not isinstance(trusted_facts, list):
+        return None, None
+    for item in trusted_facts:
+        if not isinstance(item, dict):
+            continue
+        fact = item.get("fact")
+        if not isinstance(fact, str) or "work_item_path=" not in fact:
+            continue
+        match = _WORK_ITEM_REF_RE.search(fact)
+        if match is None:
+            continue
+        work_item_id = match.group(1).strip()
+        if not work_item_id:
+            continue
+        return work_item_id, int(match.group(2))
+    return None, None
+
+
+def task_packet_work_item_ref(packet: TaskPacket) -> tuple[str | None, int | None]:
+    return _work_item_ref_from_payload(packet.as_dict())
 
 
 def _clean_required_text(value: Any, label: str) -> str:
@@ -318,6 +372,21 @@ def render_task_prompt(packet: TaskPacket) -> str:
     if packet.known_unknowns:
         sections.append(f"## Known unknowns\n\n{_bullet_lines(packet.known_unknowns)}")
 
+    sections.append(
+        "## Repository execution boundary\n\n"
+        "- Operate only inside the current Git root. Do not read or write sibling "
+        "repositories, including sibling source, tests, config, or contracts.\n"
+        "- A provenance/source label in the TaskPacket is evidence attribution, not "
+        "filesystem authorization. Do not dereference a sibling-repository path merely "
+        "because it is named as provenance.\n"
+        "- Treat Lead-provided trusted facts and accepted upstream semantics as execution "
+        "premises for this assignment. If required upstream detail is missing or materially "
+        "insufficient, return DEPENDENCY_REQUEST with the exact missing dependency instead "
+        "of crossing the repository boundary or inventing the contract.\n"
+        "- The mounted Work Item is a read-only exception only when an explicit "
+        "work_item_path locator is provided. Do not mutate it.\n"
+        "- Do not read or modify .qiqi/state."
+    )
 
     return "\n\n".join(sections).strip()
 
@@ -606,8 +675,1446 @@ class SessionStore:
                 PRIMARY KEY (capture_review_id, sequence),
                 FOREIGN KEY (capture_review_id) REFERENCES capture_reviews(capture_review_id)
             );
+            CREATE TABLE IF NOT EXISTS slp_events (
+                seq INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_type TEXT NOT NULL,
+                turn_id TEXT,
+                capture_review_id TEXT,
+                session_id TEXT,
+                repository TEXT,
+                route TEXT,
+                graph_run_id TEXT,
+                node_id TEXT,
+                attempt_id TEXT,
+                work_item_id TEXT,
+                work_item_revision INTEGER
+                    CHECK (work_item_revision IS NULL OR work_item_revision >= 0),
+                candidate_id TEXT,
+                payload_json TEXT NOT NULL,
+                created_at_ns INTEGER NOT NULL,
+                FOREIGN KEY (capture_review_id) REFERENCES capture_reviews(capture_review_id)
+            );
+            CREATE INDEX IF NOT EXISTS slp_events_type_seq_idx
+                ON slp_events(event_type, seq);
+            CREATE INDEX IF NOT EXISTS slp_events_turn_seq_idx
+                ON slp_events(turn_id, seq);
+            CREATE TABLE IF NOT EXISTS lead_dispositions (
+                disposition_id TEXT PRIMARY KEY,
+                event_seq INTEGER NOT NULL UNIQUE,
+                turn_id TEXT NOT NULL UNIQUE,
+                action TEXT NOT NULL
+                    CHECK (action IN ('accept', 'reject', 'repair', 'defer', 'resolve')),
+                work_item_id TEXT,
+                work_item_revision INTEGER
+                    CHECK (work_item_revision IS NULL OR work_item_revision >= 0),
+                candidate_id TEXT,
+                reason TEXT NOT NULL,
+                owner TEXT,
+                return_checkpoint TEXT,
+                graph_run_id TEXT,
+                node_id TEXT,
+                attempt_id TEXT,
+                created_at_ns INTEGER NOT NULL,
+                FOREIGN KEY (event_seq) REFERENCES slp_events(seq),
+                FOREIGN KEY (turn_id) REFERENCES turns(turn_id)
+            );
+            CREATE TABLE IF NOT EXISTS supervisor_cases (
+                case_id TEXT PRIMARY KEY,
+                rule TEXT NOT NULL,
+                status TEXT NOT NULL
+                    CHECK (status IN (
+                        'OPEN',
+                        'DELIVERED_TO_LEAD',
+                        'WAITING_FOR_EVIDENCE',
+                        'CLOSED',
+                        'ESCALATED_TO_HUMAN'
+                    )),
+                opened_event_seq INTEGER NOT NULL,
+                closed_event_seq INTEGER,
+                finding_fingerprint TEXT NOT NULL UNIQUE,
+                subject_key TEXT NOT NULL DEFAULT '',
+                turn_id TEXT,
+                work_item_id TEXT,
+                work_item_revision INTEGER
+                    CHECK (work_item_revision IS NULL OR work_item_revision >= 0),
+                candidate_id TEXT,
+                details_json TEXT NOT NULL DEFAULT '{}',
+                created_at_ns INTEGER NOT NULL,
+                updated_at_ns INTEGER NOT NULL,
+                FOREIGN KEY (opened_event_seq) REFERENCES slp_events(seq),
+                FOREIGN KEY (closed_event_seq) REFERENCES slp_events(seq)
+            );
+            CREATE TABLE IF NOT EXISTS supervisor_broker_state (
+                broker_id TEXT PRIMARY KEY,
+                last_processed_seq INTEGER NOT NULL DEFAULT 0
+                    CHECK (last_processed_seq >= 0),
+                health_status TEXT NOT NULL DEFAULT 'healthy'
+                    CHECK (health_status IN ('healthy', 'retrying')),
+                last_error TEXT,
+                last_error_at_ns INTEGER,
+                updated_at_ns INTEGER NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS write_scope_claims (
+                claim_id TEXT PRIMARY KEY,
+                claimed_event_seq INTEGER NOT NULL UNIQUE,
+                released_event_seq INTEGER,
+                repository TEXT NOT NULL,
+                owner TEXT NOT NULL,
+                scope_json TEXT NOT NULL,
+                active INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0, 1)),
+                created_at_ns INTEGER NOT NULL,
+                updated_at_ns INTEGER NOT NULL,
+                FOREIGN KEY (claimed_event_seq) REFERENCES slp_events(seq),
+                FOREIGN KEY (released_event_seq) REFERENCES slp_events(seq)
+            );
+            CREATE INDEX IF NOT EXISTS write_scope_claims_active_repo_idx
+                ON write_scope_claims(repository, active);
+            CREATE TABLE IF NOT EXISTS supervisor_findings (
+                case_id TEXT PRIMARY KEY,
+                verdict TEXT NOT NULL CHECK (verdict IN ('issue', 'no_issue')),
+                finding_json TEXT NOT NULL,
+                delivery_reserved_at_ns INTEGER,
+                delivered_to_lead_at_ns INTEGER,
+                created_at_ns INTEGER NOT NULL,
+                updated_at_ns INTEGER NOT NULL,
+                FOREIGN KEY (case_id) REFERENCES supervisor_cases(case_id)
+            );
+            CREATE TABLE IF NOT EXISTS supervisor_control_plane (
+                control_id TEXT PRIMARY KEY,
+                workspace_id TEXT NOT NULL,
+                lead_pane_id TEXT NOT NULL,
+                supervisor_pane_id TEXT NOT NULL,
+                lead_agent_name TEXT NOT NULL,
+                supervisor_agent_name TEXT NOT NULL,
+                herdr_session TEXT NOT NULL DEFAULT '',
+                lead_model TEXT NOT NULL DEFAULT '',
+                supervisor_model TEXT NOT NULL DEFAULT '',
+                supervisor_home TEXT NOT NULL,
+                supervisor_capture_dir TEXT NOT NULL,
+                supervisor_capture_nonce TEXT NOT NULL,
+                created_at_ns INTEGER NOT NULL,
+                updated_at_ns INTEGER NOT NULL
+            );
             """
         )
+        lead_disposition_columns = {
+            row["name"] if isinstance(row, sqlite3.Row) else row[1]
+            for row in conn.execute("PRAGMA table_info(lead_dispositions)").fetchall()
+        }
+        lead_disposition_additions = {
+            "owner": "TEXT",
+            "return_checkpoint": "TEXT",
+        }
+        for column, definition in lead_disposition_additions.items():
+            if column not in lead_disposition_columns:
+                conn.execute(
+                    f"ALTER TABLE lead_dispositions ADD COLUMN {column} {definition}"
+                )
+
+        supervisor_case_columns = {
+            row["name"] if isinstance(row, sqlite3.Row) else row[1]
+            for row in conn.execute("PRAGMA table_info(supervisor_cases)").fetchall()
+        }
+        supervisor_case_additions = {
+            "subject_key": "TEXT NOT NULL DEFAULT ''",
+            "turn_id": "TEXT",
+            "work_item_id": "TEXT",
+            "work_item_revision": "INTEGER",
+            "candidate_id": "TEXT",
+            "details_json": "TEXT NOT NULL DEFAULT '{}'",
+        }
+        for column, definition in supervisor_case_additions.items():
+            if column not in supervisor_case_columns:
+                conn.execute(
+                    f"ALTER TABLE supervisor_cases ADD COLUMN {column} {definition}"
+                )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS supervisor_cases_status_rule_idx "
+            "ON supervisor_cases(status, rule)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS supervisor_cases_turn_idx "
+            "ON supervisor_cases(turn_id, status)"
+        )
+        supervisor_finding_columns = {
+            row["name"] if isinstance(row, sqlite3.Row) else row[1]
+            for row in conn.execute("PRAGMA table_info(supervisor_findings)").fetchall()
+        }
+        if "delivery_reserved_at_ns" not in supervisor_finding_columns:
+            conn.execute(
+                "ALTER TABLE supervisor_findings "
+                "ADD COLUMN delivery_reserved_at_ns INTEGER"
+            )
+
+        supervisor_control_columns = {
+            row["name"] if isinstance(row, sqlite3.Row) else row[1]
+            for row in conn.execute("PRAGMA table_info(supervisor_control_plane)").fetchall()
+        }
+        supervisor_control_additions = {
+            "herdr_session": "TEXT NOT NULL DEFAULT ''",
+            "lead_model": "TEXT NOT NULL DEFAULT ''",
+            "supervisor_model": "TEXT NOT NULL DEFAULT ''",
+        }
+        for column, definition in supervisor_control_additions.items():
+            if column not in supervisor_control_columns:
+                conn.execute(
+                    f"ALTER TABLE supervisor_control_plane ADD COLUMN {column} {definition}"
+                )
+
+        broker_state_columns = {
+            row["name"] if isinstance(row, sqlite3.Row) else row[1]
+            for row in conn.execute("PRAGMA table_info(supervisor_broker_state)").fetchall()
+        }
+        broker_state_additions = {
+            "health_status": "TEXT NOT NULL DEFAULT 'healthy'",
+            "last_error": "TEXT",
+            "last_error_at_ns": "INTEGER",
+        }
+        for column, definition in broker_state_additions.items():
+            if column not in broker_state_columns:
+                conn.execute(
+                    f"ALTER TABLE supervisor_broker_state ADD COLUMN {column} {definition}"
+                )
+
+        # Workspaces created before the semantic ledger may already contain canonical
+        # captured Peer turns. Backfill exactly one peer.response event per missing turn
+        # so R1/R5 supervision applies after upgrade. The NOT EXISTS predicate makes
+        # this safe to run on every schema ensure/restart.
+        legacy_turns = conn.execute(
+            "SELECT t.* FROM turns t "
+            "WHERE NOT EXISTS ("
+            "SELECT 1 FROM slp_events e "
+            "WHERE e.event_type = 'peer.response' AND e.turn_id = t.turn_id"
+            ") ORDER BY t.created_at_ns, t.turn_id"
+        ).fetchall()
+        for turn in legacy_turns:
+            try:
+                packet_payload = json.loads(turn["task_packet_json"])
+            except json.JSONDecodeError as exc:
+                raise RuntimeError(
+                    "cannot backfill semantic event for legacy turn with invalid TaskPacket JSON: "
+                    f"{turn['turn_id']!r}"
+                ) from exc
+            work_item_id, work_item_revision = _work_item_ref_from_payload(packet_payload)
+            SessionStore._insert_slp_event(
+                conn,
+                event_type="peer.response",
+                turn_id=turn["turn_id"],
+                session_id=turn["session_id"],
+                repository=turn["repository"],
+                route=turn["route"],
+                work_item_id=work_item_id,
+                work_item_revision=work_item_revision,
+                payload={"backfilled_from": "turns"},
+                created_at_ns=int(turn["created_at_ns"]),
+            )
+
+        # Schema ensure may perform DML for legacy semantic backfill. Callers such as
+        # SupervisorBroker start their own explicit transaction immediately after this
+        # method returns, so leave every fresh connection at a clean transaction boundary.
+        conn.commit()
+
+    @staticmethod
+    def _optional_runtime_text(value: str | None, label: str) -> str | None:
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            raise ValueError(f"{label} must be a string when present")
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError(f"{label} must not be empty when present")
+        return cleaned
+
+    @staticmethod
+    def _optional_work_item_revision(value: int | None) -> int | None:
+        if value is None:
+            return None
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise ValueError("work_item_revision must be a non-negative integer when present")
+        return value
+
+    @staticmethod
+    def _slp_payload_json(payload: dict[str, Any] | None) -> str:
+        if payload is None:
+            payload = {}
+        if not isinstance(payload, dict):
+            raise ValueError("SLP event payload must be an object")
+        try:
+            return json.dumps(
+                payload,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+                allow_nan=False,
+            )
+        except (TypeError, ValueError) as exc:
+            raise ValueError("SLP event payload must be JSON-serializable") from exc
+
+    @classmethod
+    def _insert_slp_event(
+        cls,
+        conn: sqlite3.Connection,
+        *,
+        event_type: str,
+        turn_id: str | None = None,
+        capture_review_id: str | None = None,
+        session_id: str | None = None,
+        repository: str | None = None,
+        route: str | None = None,
+        graph_run_id: str | None = None,
+        node_id: str | None = None,
+        attempt_id: str | None = None,
+        work_item_id: str | None = None,
+        work_item_revision: int | None = None,
+        candidate_id: str | None = None,
+        payload: dict[str, Any] | None = None,
+        created_at_ns: int | None = None,
+    ) -> int:
+        if not isinstance(event_type, str) or event_type not in SLP_EVENT_TYPES:
+            raise ValueError(f"unsupported SLP event type: {event_type!r}")
+        clean_turn_id = cls._optional_runtime_text(turn_id, "turn_id")
+        clean_capture_review_id = cls._optional_runtime_text(
+            capture_review_id, "capture_review_id"
+        )
+        clean_session_id = cls._optional_runtime_text(session_id, "session_id")
+        clean_repository = cls._optional_runtime_text(repository, "repository")
+        clean_route = cls._optional_runtime_text(route, "route")
+        clean_graph_run_id = cls._optional_runtime_text(graph_run_id, "graph_run_id")
+        clean_node_id = cls._optional_runtime_text(node_id, "node_id")
+        clean_attempt_id = cls._optional_runtime_text(attempt_id, "attempt_id")
+        clean_work_item_id = cls._optional_runtime_text(work_item_id, "work_item_id")
+        clean_work_item_revision = cls._optional_work_item_revision(work_item_revision)
+        if (clean_work_item_id is None) != (clean_work_item_revision is None):
+            raise ValueError("work_item_id and work_item_revision must be provided together")
+        clean_candidate_id = cls._optional_runtime_text(candidate_id, "candidate_id")
+        payload_json = cls._slp_payload_json(payload)
+        now = created_at_ns if created_at_ns is not None else time.time_ns()
+        cursor = conn.execute(
+            "INSERT INTO slp_events("
+            "event_type, turn_id, capture_review_id, session_id, repository, route, "
+            "graph_run_id, node_id, attempt_id, work_item_id, work_item_revision, "
+            "candidate_id, payload_json, created_at_ns"
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                event_type,
+                clean_turn_id,
+                clean_capture_review_id,
+                clean_session_id,
+                clean_repository,
+                clean_route,
+                clean_graph_run_id,
+                clean_node_id,
+                clean_attempt_id,
+                clean_work_item_id,
+                clean_work_item_revision,
+                clean_candidate_id,
+                payload_json,
+                now,
+            ),
+        )
+        return int(cursor.lastrowid)
+
+    def record_slp_event(
+        self,
+        *,
+        event_type: str,
+        turn_id: str | None = None,
+        capture_review_id: str | None = None,
+        session_id: str | None = None,
+        repository: str | None = None,
+        route: str | None = None,
+        graph_run_id: str | None = None,
+        node_id: str | None = None,
+        attempt_id: str | None = None,
+        work_item_id: str | None = None,
+        work_item_revision: int | None = None,
+        candidate_id: str | None = None,
+        payload: dict[str, Any] | None = None,
+    ) -> int:
+        with self._connect() as conn:
+            return self._insert_slp_event(
+                conn,
+                event_type=event_type,
+                turn_id=turn_id,
+                capture_review_id=capture_review_id,
+                session_id=session_id,
+                repository=repository,
+                route=route,
+                graph_run_id=graph_run_id,
+                node_id=node_id,
+                attempt_id=attempt_id,
+                work_item_id=work_item_id,
+                work_item_revision=work_item_revision,
+                candidate_id=candidate_id,
+                payload=payload,
+            )
+
+    def record_work_item_revision(
+        self,
+        *,
+        work_item_id: str,
+        work_item_revision: int,
+        reason: str | None = None,
+    ) -> dict[str, Any]:
+        clean_id = self._optional_runtime_text(work_item_id, "work_item_id")
+        if clean_id is None:
+            raise ValueError("work_item_id must not be empty")
+        clean_revision = self._optional_work_item_revision(work_item_revision)
+        if clean_revision is None:
+            raise ValueError("work_item_revision is required")
+        clean_reason = self._optional_runtime_text(reason, "reason")
+        with self._connect() as conn:
+            # Serialize read -> monotonicity validation -> append. Without the
+            # writer reservation, concurrent revision 2 / revision 3 writers can
+            # both observe the same predecessor and commit out of order.
+            conn.execute("BEGIN IMMEDIATE")
+            latest = conn.execute(
+                "SELECT seq, work_item_revision FROM slp_events "
+                "WHERE event_type = 'work_item.revision_changed' AND work_item_id = ? "
+                "ORDER BY seq DESC LIMIT 1",
+                (clean_id,),
+            ).fetchone()
+            if latest is not None:
+                previous = int(latest["work_item_revision"])
+                if clean_revision < previous:
+                    raise RuntimeError(
+                        "Work Item revision must be monotonic: "
+                        f"current={previous}, attempted={clean_revision}"
+                    )
+                if clean_revision == previous:
+                    return {
+                        "event_seq": int(latest["seq"]),
+                        "work_item_id": clean_id,
+                        "work_item_revision": clean_revision,
+                        "idempotent": True,
+                    }
+            seq = self._insert_slp_event(
+                conn,
+                event_type="work_item.revision_changed",
+                work_item_id=clean_id,
+                work_item_revision=clean_revision,
+                payload={"reason": clean_reason} if clean_reason is not None else {},
+            )
+        return {
+            "event_seq": seq,
+            "work_item_id": clean_id,
+            "work_item_revision": clean_revision,
+            "idempotent": False,
+        }
+
+    def record_dependency_consumed_in_transaction(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        source_turn_id: str,
+        consumer_turn_id: str | None = None,
+        repository: str | None = None,
+        work_item_id: str | None = None,
+        work_item_revision: int | None = None,
+        candidate_id: str | None = None,
+        graph_run_id: str | None = None,
+        node_id: str | None = None,
+        attempt_id: str | None = None,
+        require_current_source: bool = False,
+    ) -> int:
+        """Record dependency consumption using the caller's active transaction."""
+        clean_source = self._optional_runtime_text(source_turn_id, "source_turn_id")
+        if clean_source is None:
+            raise ValueError("source_turn_id must not be empty")
+        if not isinstance(require_current_source, bool):
+            raise ValueError("require_current_source must be a boolean")
+        clean_consumer = self._optional_runtime_text(consumer_turn_id, "consumer_turn_id")
+        clean_repository = self._optional_runtime_text(repository, "repository")
+        clean_work_item_id = self._optional_runtime_text(work_item_id, "work_item_id")
+        clean_work_item_revision = self._optional_work_item_revision(work_item_revision)
+        if (clean_work_item_id is None) != (clean_work_item_revision is None):
+            raise ValueError("work_item_id and work_item_revision must be provided together")
+        clean_candidate = self._optional_runtime_text(candidate_id, "candidate_id")
+        clean_graph_run = self._optional_runtime_text(graph_run_id, "graph_run_id")
+        clean_node = self._optional_runtime_text(node_id, "node_id")
+        clean_attempt = self._optional_runtime_text(attempt_id, "attempt_id")
+
+        source = conn.execute(
+            "SELECT turn_id, task_packet_json FROM turns WHERE turn_id = ?",
+            (clean_source,),
+        ).fetchone()
+        if source is None:
+            raise RuntimeError(
+                "dependency consumption requires an existing captured source Peer turn: "
+                f"unknown source_turn_id={clean_source!r}"
+            )
+
+        if require_current_source:
+            disposition = conn.execute(
+                "SELECT action FROM lead_dispositions WHERE turn_id = ?",
+                (clean_source,),
+            ).fetchone()
+            if disposition is None or disposition["action"] != "accept":
+                raise RuntimeError(
+                    "TaskGraph dependency source lacks an explicit ACCEPT disposition: "
+                    f"source_turn_id={clean_source!r}"
+                )
+
+            source_packet = json.loads(source["task_packet_json"])
+            source_work_item_id, source_revision = _work_item_ref_from_payload(
+                source_packet
+            )
+            if source_work_item_id is not None and source_revision is not None:
+                latest = conn.execute(
+                    "SELECT work_item_revision FROM slp_events "
+                    "WHERE event_type = 'work_item.revision_changed' "
+                    "AND work_item_id = ? ORDER BY seq DESC LIMIT 1",
+                    (source_work_item_id,),
+                ).fetchone()
+                if latest is not None:
+                    current_revision = int(latest["work_item_revision"])
+                    if current_revision > source_revision:
+                        reconciliation = conn.execute(
+                            "SELECT work_item_revision, payload_json FROM slp_events "
+                            "WHERE event_type = 'candidate.reconciled' "
+                            "AND turn_id = ? AND work_item_id = ? "
+                            "ORDER BY seq DESC LIMIT 1",
+                            (clean_source, source_work_item_id),
+                        ).fetchone()
+                        is_current = False
+                        if reconciliation is not None:
+                            payload = json.loads(reconciliation["payload_json"])
+                            is_current = (
+                                payload.get("resolution") == "revalidated"
+                                and int(reconciliation["work_item_revision"])
+                                == current_revision
+                            )
+                        if not is_current:
+                            raise RuntimeError(
+                                "TaskGraph dependency source is stale for the current "
+                                "Work Item revision: "
+                                f"source_turn_id={clean_source!r}, "
+                                f"captured_revision={source_revision}, "
+                                f"current_revision={current_revision}"
+                            )
+
+        return self._insert_slp_event(
+            conn,
+            event_type="dependency.consumed",
+            turn_id=clean_consumer,
+            repository=clean_repository,
+            graph_run_id=clean_graph_run,
+            node_id=clean_node,
+            attempt_id=clean_attempt,
+            work_item_id=clean_work_item_id,
+            work_item_revision=clean_work_item_revision,
+            candidate_id=clean_candidate,
+            payload={"source_turn_id": clean_source},
+        )
+
+    def record_dependency_consumed(
+        self,
+        *,
+        source_turn_id: str,
+        consumer_turn_id: str | None = None,
+        repository: str | None = None,
+        work_item_id: str | None = None,
+        work_item_revision: int | None = None,
+        candidate_id: str | None = None,
+        graph_run_id: str | None = None,
+        node_id: str | None = None,
+        attempt_id: str | None = None,
+        require_current_source: bool = False,
+    ) -> int:
+        with self._connect() as conn:
+            if require_current_source:
+                # Hold the writer reservation across validation and insertion so a
+                # material Work Item revision cannot race this exact consumption.
+                conn.execute("BEGIN IMMEDIATE")
+            return self.record_dependency_consumed_in_transaction(
+                conn,
+                source_turn_id=source_turn_id,
+                consumer_turn_id=consumer_turn_id,
+                repository=repository,
+                work_item_id=work_item_id,
+                work_item_revision=work_item_revision,
+                candidate_id=candidate_id,
+                graph_run_id=graph_run_id,
+                node_id=node_id,
+                attempt_id=attempt_id,
+                require_current_source=require_current_source,
+            )
+
+    def record_peer_signal(
+        self,
+        *,
+        turn_id: str,
+        signal: str,
+        work_item_id: str | None = None,
+        work_item_revision: int | None = None,
+        details: str | None = None,
+    ) -> int:
+        clean_turn = self._optional_runtime_text(turn_id, "turn_id")
+        if clean_turn is None:
+            raise ValueError("turn_id must not be empty")
+        if not isinstance(signal, str) or signal.strip() not in PEER_SIGNAL_TYPES:
+            raise ValueError(f"unsupported Peer signal: {signal!r}")
+        clean_signal = signal.strip()
+        clean_work_item_id = self._optional_runtime_text(work_item_id, "work_item_id")
+        clean_work_item_revision = self._optional_work_item_revision(work_item_revision)
+        if (clean_work_item_id is None) != (clean_work_item_revision is None):
+            raise ValueError("work_item_id and work_item_revision must be provided together")
+        clean_details = self._optional_runtime_text(details, "details")
+        with self._connect() as conn:
+            turn = conn.execute(
+                "SELECT session_id, repository, route, task_packet_json FROM turns WHERE turn_id = ?",
+                (clean_turn,),
+            ).fetchone()
+            if turn is None:
+                raise RuntimeError(
+                    "Peer signal requires an existing captured Peer turn: "
+                    f"unknown turn_id={clean_turn!r}"
+                )
+            packet_payload = json.loads(turn["task_packet_json"])
+            inferred_id, inferred_revision = _work_item_ref_from_payload(packet_payload)
+            if clean_work_item_id is None:
+                clean_work_item_id = inferred_id
+                clean_work_item_revision = inferred_revision
+            elif (
+                clean_work_item_id != inferred_id
+                or clean_work_item_revision != inferred_revision
+            ):
+                raise RuntimeError(
+                    "explicit Work Item locator does not match the captured Peer turn: "
+                    f"turn_id={clean_turn!r}, "
+                    f"captured={inferred_id!r}@{inferred_revision!r}, "
+                    f"provided={clean_work_item_id!r}@{clean_work_item_revision!r}"
+                )
+            payload: dict[str, Any] = {"signal": clean_signal}
+            if clean_details is not None:
+                payload["details"] = clean_details
+            return self._insert_slp_event(
+                conn,
+                event_type="peer.signal",
+                turn_id=clean_turn,
+                session_id=turn["session_id"],
+                repository=turn["repository"],
+                route=turn["route"],
+                work_item_id=clean_work_item_id,
+                work_item_revision=clean_work_item_revision,
+                payload=payload,
+            )
+
+    def record_peer_signal_resolution(
+        self,
+        *,
+        turn_id: str,
+        signal: str,
+        reason: str,
+        work_item_id: str | None = None,
+        work_item_revision: int | None = None,
+    ) -> int:
+        clean_turn = self._optional_runtime_text(turn_id, "turn_id")
+        if clean_turn is None:
+            raise ValueError("turn_id must not be empty")
+        if not isinstance(signal, str):
+            raise ValueError("signal must be a string")
+        clean_signal = signal.strip()
+        if clean_signal not in {"REOPEN_REQUEST", "DEPENDENCY_REQUEST", "BLOCKED"}:
+            raise ValueError(f"unsupported Peer signal resolution: {signal!r}")
+        clean_reason = self._optional_runtime_text(reason, "reason")
+        if clean_reason is None:
+            raise ValueError("reason must not be empty")
+        clean_work_item_id = self._optional_runtime_text(work_item_id, "work_item_id")
+        clean_work_item_revision = self._optional_work_item_revision(work_item_revision)
+        if (clean_work_item_id is None) != (clean_work_item_revision is None):
+            raise ValueError("work_item_id and work_item_revision must be provided together")
+
+        with self._connect() as conn:
+            turn = conn.execute(
+                "SELECT session_id, repository, route, task_packet_json FROM turns "
+                "WHERE turn_id = ?",
+                (clean_turn,),
+            ).fetchone()
+            signal_rows = conn.execute(
+                "SELECT session_id, repository, route, work_item_id, "
+                "work_item_revision, payload_json FROM slp_events "
+                "WHERE event_type = 'peer.signal' AND turn_id = ? ORDER BY seq",
+                (clean_turn,),
+            ).fetchall()
+            accepted_signals = (
+                {"BLOCKED", "runtime_blocked"}
+                if clean_signal == "BLOCKED"
+                else {clean_signal}
+            )
+            matching_signal = next(
+                (
+                    row
+                    for row in reversed(signal_rows)
+                    if json.loads(row["payload_json"]).get("signal")
+                    in accepted_signals
+                ),
+                None,
+            )
+            if matching_signal is None:
+                raise RuntimeError(
+                    "Peer signal resolution requires a matching prior explicit Peer signal: "
+                    f"turn_id={clean_turn!r}, signal={clean_signal!r}"
+                )
+
+            if turn is not None:
+                packet_payload = json.loads(turn["task_packet_json"])
+                inferred_id, inferred_revision = _work_item_ref_from_payload(
+                    packet_payload
+                )
+                session_id = turn["session_id"]
+                repository = turn["repository"]
+                route = turn["route"]
+            else:
+                # Runtime-blocked delegations intentionally return before a turns row
+                # exists. Their durable peer.signal event is therefore the canonical
+                # locator for explicit abandonment/resolution.
+                inferred_id = matching_signal["work_item_id"]
+                inferred_revision = matching_signal["work_item_revision"]
+                session_id = matching_signal["session_id"]
+                repository = matching_signal["repository"]
+                route = matching_signal["route"]
+
+            if clean_work_item_id is None:
+                clean_work_item_id = inferred_id
+                clean_work_item_revision = inferred_revision
+            elif (
+                clean_work_item_id != inferred_id
+                or clean_work_item_revision != inferred_revision
+            ):
+                raise RuntimeError(
+                    "explicit Work Item locator does not match the durable Peer signal: "
+                    f"turn_id={clean_turn!r}, "
+                    f"captured={inferred_id!r}@{inferred_revision!r}, "
+                    f"provided={clean_work_item_id!r}@{clean_work_item_revision!r}"
+                )
+            return self._insert_slp_event(
+                conn,
+                event_type="peer.signal_resolved",
+                turn_id=clean_turn,
+                session_id=session_id,
+                repository=repository,
+                route=route,
+                work_item_id=clean_work_item_id,
+                work_item_revision=clean_work_item_revision,
+                payload={"signal": clean_signal, "reason": clean_reason},
+            )
+
+    def assert_turn_current_for_acceptance_in_transaction(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        turn_id: str,
+    ) -> None:
+        clean_turn = self._optional_runtime_text(turn_id, "turn_id")
+        if clean_turn is None:
+            raise ValueError("turn_id must not be empty")
+        turn = conn.execute(
+            "SELECT task_packet_json FROM turns WHERE turn_id = ?",
+            (clean_turn,),
+        ).fetchone()
+        if turn is None:
+            raise RuntimeError(
+                "candidate acceptance requires an existing captured Peer turn: "
+                f"unknown turn_id={clean_turn!r}"
+            )
+        packet = json.loads(turn["task_packet_json"])
+        work_item_id, captured_revision = _work_item_ref_from_payload(packet)
+        if work_item_id is None or captured_revision is None:
+            return
+
+        latest = conn.execute(
+            "SELECT work_item_revision FROM slp_events "
+            "WHERE event_type = 'work_item.revision_changed' "
+            "AND work_item_id = ? ORDER BY seq DESC LIMIT 1",
+            (work_item_id,),
+        ).fetchone()
+        if latest is None:
+            return
+        current_revision = int(latest["work_item_revision"])
+        if current_revision <= captured_revision:
+            return
+
+        reconciliation = conn.execute(
+            "SELECT work_item_revision, payload_json FROM slp_events "
+            "WHERE event_type = 'candidate.reconciled' "
+            "AND turn_id = ? AND work_item_id = ? "
+            "AND work_item_revision = ? ORDER BY seq DESC LIMIT 1",
+            (clean_turn, work_item_id, current_revision),
+        ).fetchone()
+        if reconciliation is not None:
+            payload = json.loads(reconciliation["payload_json"])
+            if payload.get("resolution") == "revalidated":
+                return
+
+        raise RuntimeError(
+            "candidate acceptance requires current-revision evidence: "
+            f"turn_id={clean_turn!r}, captured_revision={captured_revision}, "
+            f"current_revision={current_revision}"
+        )
+
+    def record_candidate_reconciliation(
+        self,
+        *,
+        stale_turn_id: str,
+        resolution: str,
+        reason: str,
+        work_item_id: str,
+        work_item_revision: int,
+        replacement_turn_id: str | None = None,
+    ) -> int:
+        clean_stale = self._optional_runtime_text(stale_turn_id, "stale_turn_id")
+        if clean_stale is None:
+            raise ValueError("stale_turn_id must not be empty")
+        if not isinstance(resolution, str):
+            raise ValueError("resolution must be a string")
+        clean_resolution = resolution.strip().lower()
+        if clean_resolution not in CANDIDATE_RECONCILIATION_ACTIONS:
+            raise ValueError(f"unsupported candidate reconciliation: {resolution!r}")
+        clean_reason = self._optional_runtime_text(reason, "reason")
+        if clean_reason is None:
+            raise ValueError("reason must not be empty")
+        clean_work_item_id = self._optional_runtime_text(work_item_id, "work_item_id")
+        if clean_work_item_id is None:
+            raise ValueError("work_item_id must not be empty")
+        clean_revision = self._optional_work_item_revision(work_item_revision)
+        if clean_revision is None:
+            raise ValueError("work_item_revision is required")
+        clean_replacement = self._optional_runtime_text(
+            replacement_turn_id, "replacement_turn_id"
+        )
+
+        with self._connect() as conn:
+            # Reconciliation is a state transition for one captured candidate.
+            # Serialize all validation plus append so concurrent terminal /
+            # revalidation calls cannot both observe an empty predecessor set.
+            conn.execute("BEGIN IMMEDIATE")
+            stale = conn.execute(
+                "SELECT turn_id, session_id, repository, route, task_packet_json "
+                "FROM turns WHERE turn_id = ?",
+                (clean_stale,),
+            ).fetchone()
+            if stale is None:
+                raise RuntimeError(
+                    "candidate reconciliation requires an existing captured stale Peer turn: "
+                    f"unknown stale_turn_id={clean_stale!r}"
+                )
+            stale_packet = json.loads(stale["task_packet_json"])
+            stale_work_item_id, stale_revision = _work_item_ref_from_payload(stale_packet)
+            if stale_work_item_id is not None and stale_work_item_id != clean_work_item_id:
+                raise RuntimeError(
+                    "candidate reconciliation Work Item does not match stale Peer turn"
+                )
+            if stale_revision is not None and clean_revision <= stale_revision:
+                raise RuntimeError(
+                    "candidate reconciliation requires a newer material Work Item revision"
+                )
+
+            current = conn.execute(
+                "SELECT work_item_revision FROM slp_events "
+                "WHERE event_type = 'work_item.revision_changed' AND work_item_id = ? "
+                "ORDER BY seq DESC LIMIT 1",
+                (clean_work_item_id,),
+            ).fetchone()
+            if current is None:
+                raise RuntimeError(
+                    "candidate reconciliation requires a recorded current Work Item revision"
+                )
+            current_revision = int(current["work_item_revision"])
+            if clean_revision != current_revision:
+                raise RuntimeError(
+                    "candidate reconciliation must target the latest recorded Work Item "
+                    "revision: "
+                    f"current={current_revision}, provided={clean_revision}"
+                )
+
+            terminal_rows = conn.execute(
+                "SELECT seq, work_item_revision, payload_json FROM slp_events "
+                "WHERE event_type = 'candidate.reconciled' "
+                "AND turn_id = ? AND work_item_id = ? ORDER BY seq DESC",
+                (clean_stale, clean_work_item_id),
+            ).fetchall()
+            for terminal in terminal_rows:
+                terminal_payload = json.loads(terminal["payload_json"])
+                terminal_resolution = terminal_payload.get("resolution")
+                if terminal_resolution not in {"superseded", "abandoned"}:
+                    continue
+                terminal_replacement = terminal_payload.get("replacement_turn_id")
+                if (
+                    clean_resolution == terminal_resolution
+                    and clean_replacement == terminal_replacement
+                ):
+                    # Terminal retirement is candidate-wide, not revision-local.
+                    # Repeating the same semantic retirement after another Work Item
+                    # revision is an idempotent retry of the existing terminal fact.
+                    return int(terminal["seq"])
+                raise RuntimeError(
+                    "candidate already has a terminal reconciliation and cannot be "
+                    "reopened or changed at a later Work Item revision: "
+                    f"existing={terminal_resolution!r}, attempted={clean_resolution!r}"
+                )
+
+            existing = conn.execute(
+                "SELECT seq, payload_json FROM slp_events "
+                "WHERE event_type = 'candidate.reconciled' "
+                "AND turn_id = ? AND work_item_id = ? "
+                "AND work_item_revision = ? ORDER BY seq DESC LIMIT 1",
+                (clean_stale, clean_work_item_id, clean_revision),
+            ).fetchone()
+            if existing is not None:
+                existing_payload = json.loads(existing["payload_json"])
+                existing_resolution = existing_payload.get("resolution")
+                existing_replacement = existing_payload.get("replacement_turn_id")
+                if (
+                    existing_resolution == clean_resolution
+                    and existing_replacement == clean_replacement
+                ):
+                    return int(existing["seq"])
+                raise RuntimeError(
+                    "candidate reconciliation is immutable for one stale turn and "
+                    "Work Item revision: "
+                    f"existing={existing_resolution!r}, attempted={clean_resolution!r}"
+                )
+
+            if clean_replacement is not None:
+                replacement = conn.execute(
+                    "SELECT task_packet_json FROM turns WHERE turn_id = ?",
+                    (clean_replacement,),
+                ).fetchone()
+                if replacement is None:
+                    raise RuntimeError(
+                        "candidate reconciliation replacement_turn_id must reference "
+                        "an existing captured Peer turn"
+                    )
+                replacement_packet = json.loads(replacement["task_packet_json"])
+                replacement_work_item_id, replacement_revision = _work_item_ref_from_payload(
+                    replacement_packet
+                )
+                if (
+                    replacement_work_item_id != clean_work_item_id
+                    or replacement_revision != clean_revision
+                ):
+                    raise RuntimeError(
+                        "replacement Peer turn must match the reconciled Work Item "
+                        "and exact current revision"
+                    )
+
+            payload: dict[str, Any] = {
+                "stale_turn_id": clean_stale,
+                "resolution": clean_resolution,
+                "reason": clean_reason,
+            }
+            if clean_replacement is not None:
+                payload["replacement_turn_id"] = clean_replacement
+            return self._insert_slp_event(
+                conn,
+                event_type="candidate.reconciled",
+                turn_id=clean_stale,
+                session_id=stale["session_id"],
+                repository=stale["repository"],
+                route=stale["route"],
+                work_item_id=clean_work_item_id,
+                work_item_revision=clean_revision,
+                payload=payload,
+            )
+
+    @staticmethod
+    def _active_write_scope_claims_in_transaction(
+        conn: sqlite3.Connection,
+        *,
+        repository: str,
+    ) -> dict[str, dict[str, Any]]:
+        rows = conn.execute(
+            "SELECT seq, event_type, turn_id, work_item_id, work_item_revision, "
+            "payload_json FROM slp_events "
+            "WHERE repository = ? "
+            "AND event_type IN ('write_scope.claimed', 'write_scope.released') "
+            "ORDER BY seq",
+            (repository,),
+        ).fetchall()
+        active: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            payload = json.loads(row["payload_json"])
+            claim_id = payload.get("claim_id")
+            if not isinstance(claim_id, str) or not claim_id.strip():
+                continue
+            claim_id = claim_id.strip()
+            if row["event_type"] == "write_scope.claimed":
+                active[claim_id] = {
+                    "claim_id": claim_id,
+                    "turn_id": row["turn_id"],
+                    "work_item_id": row["work_item_id"],
+                    "work_item_revision": row["work_item_revision"],
+                    "owner": payload.get("owner"),
+                    "scope": payload.get("scope"),
+                    "claimed_event_seq": int(row["seq"]),
+                }
+            else:
+                active.pop(claim_id, None)
+        return active
+
+    def list_active_write_scope_claims(
+        self,
+        *,
+        repository: str,
+    ) -> list[dict[str, Any]]:
+        clean_repository = self._optional_runtime_text(repository, "repository")
+        if clean_repository is None:
+            raise ValueError("repository is required")
+        with self._connect() as conn:
+            active = self._active_write_scope_claims_in_transaction(
+                conn,
+                repository=clean_repository,
+            )
+        return sorted(active.values(), key=lambda item: item["claimed_event_seq"])
+
+    def record_write_scope_claim(
+        self,
+        *,
+        claim_id: str,
+        repository: str,
+        owner: str,
+        scope: list[str],
+        turn_id: str | None = None,
+        work_item_id: str | None = None,
+        work_item_revision: int | None = None,
+        require_repository_clear: bool = False,
+    ) -> int:
+        clean_claim = self._optional_runtime_text(claim_id, "claim_id")
+        clean_repository = self._optional_runtime_text(repository, "repository")
+        clean_owner = self._optional_runtime_text(owner, "owner")
+        clean_turn = self._optional_runtime_text(turn_id, "turn_id")
+        clean_work_item_id = self._optional_runtime_text(work_item_id, "work_item_id")
+        clean_work_item_revision = self._optional_work_item_revision(work_item_revision)
+        if clean_claim is None or clean_repository is None or clean_owner is None:
+            raise ValueError("claim_id, repository and owner are required")
+        if not isinstance(require_repository_clear, bool):
+            raise ValueError("require_repository_clear must be a boolean")
+        if (clean_work_item_id is None) != (clean_work_item_revision is None):
+            raise ValueError("work_item_id and work_item_revision must be provided together")
+        if not isinstance(scope, list) or not scope:
+            raise ValueError("scope must contain at least one path/scope entry")
+        clean_scope: list[str] = []
+        for item in scope:
+            if not isinstance(item, str) or not item.strip():
+                raise ValueError("scope entries must be non-empty strings")
+            clean_scope.append(item.strip())
+
+        with self._connect() as conn:
+            if require_repository_clear:
+                conn.execute("BEGIN IMMEDIATE")
+                active = self._active_write_scope_claims_in_transaction(
+                    conn,
+                    repository=clean_repository,
+                )
+                if active:
+                    claims = ", ".join(sorted(active))
+                    raise RuntimeError(
+                        "repository has an active durable write-scope claim from a "
+                        "previous or concurrent delegation; resolve/release it before "
+                        f"dispatching another writer: repository={clean_repository!r}, "
+                        f"claim_ids={claims}"
+                    )
+            return self._insert_slp_event(
+                conn,
+                event_type="write_scope.claimed",
+                turn_id=clean_turn,
+                repository=clean_repository,
+                work_item_id=clean_work_item_id,
+                work_item_revision=clean_work_item_revision,
+                payload={
+                    "claim_id": clean_claim,
+                    "owner": clean_owner,
+                    "scope": clean_scope,
+                },
+            )
+
+    def record_write_scope_release(
+        self,
+        *,
+        claim_id: str,
+        repository: str,
+        turn_id: str | None = None,
+        work_item_id: str | None = None,
+        work_item_revision: int | None = None,
+    ) -> int:
+        clean_claim = self._optional_runtime_text(claim_id, "claim_id")
+        clean_repository = self._optional_runtime_text(repository, "repository")
+        clean_turn = self._optional_runtime_text(turn_id, "turn_id")
+        clean_work_item_id = self._optional_runtime_text(work_item_id, "work_item_id")
+        clean_work_item_revision = self._optional_work_item_revision(work_item_revision)
+        if clean_claim is None or clean_repository is None:
+            raise ValueError("claim_id and repository are required")
+        if (clean_work_item_id is None) != (clean_work_item_revision is None):
+            raise ValueError("work_item_id and work_item_revision must be provided together")
+        return self.record_slp_event(
+            event_type="write_scope.released",
+            turn_id=clean_turn,
+            repository=clean_repository,
+            work_item_id=clean_work_item_id,
+            work_item_revision=clean_work_item_revision,
+            payload={"claim_id": clean_claim},
+        )
+
+    def record_write_scope_recovery_release(
+        self,
+        *,
+        claim_id: str,
+        repository: str,
+        reason: str,
+    ) -> int:
+        """Explicitly release one verified-abandoned durable repository claim."""
+        clean_claim = self._optional_runtime_text(claim_id, "claim_id")
+        clean_repository = self._optional_runtime_text(repository, "repository")
+        clean_reason = self._optional_runtime_text(reason, "reason")
+        if clean_claim is None or clean_repository is None or clean_reason is None:
+            raise ValueError("claim_id, repository and reason are required")
+
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            active = self._active_write_scope_claims_in_transaction(
+                conn,
+                repository=clean_repository,
+            )
+            claim = active.get(clean_claim)
+            if claim is None:
+                raise RuntimeError(
+                    "write-scope recovery requires an active durable claim in the "
+                    f"specified repository: claim_id={clean_claim!r}, "
+                    f"repository={clean_repository!r}"
+                )
+            return self._insert_slp_event(
+                conn,
+                event_type="write_scope.released",
+                turn_id=claim.get("turn_id"),
+                repository=clean_repository,
+                work_item_id=claim.get("work_item_id"),
+                work_item_revision=claim.get("work_item_revision"),
+                payload={
+                    "claim_id": clean_claim,
+                    "reason": clean_reason,
+                    "recovery": True,
+                },
+            )
+
+    def record_dependency_consumption_resolution(
+        self,
+        *,
+        consumption_event_seq: int,
+        reason: str,
+    ) -> int:
+        """Record explicit remediation of one historical consume-before-ACCEPT event."""
+        if (
+            isinstance(consumption_event_seq, bool)
+            or not isinstance(consumption_event_seq, int)
+            or consumption_event_seq <= 0
+        ):
+            raise ValueError("consumption_event_seq must be a positive integer")
+        clean_reason = self._optional_runtime_text(reason, "reason")
+        if clean_reason is None:
+            raise ValueError("reason must not be empty")
+
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            consumed = conn.execute(
+                "SELECT * FROM slp_events WHERE seq = ?",
+                (consumption_event_seq,),
+            ).fetchone()
+            if consumed is None or consumed["event_type"] != "dependency.consumed":
+                raise RuntimeError(
+                    "dependency consumption resolution requires an exact "
+                    "dependency.consumed event sequence"
+                )
+            consumed_payload = json.loads(consumed["payload_json"])
+            source_turn_id = consumed_payload.get("source_turn_id")
+            if not isinstance(source_turn_id, str) or not source_turn_id.strip():
+                source_turn_id = None
+
+            prior_rows = conn.execute(
+                "SELECT seq, payload_json FROM slp_events "
+                "WHERE event_type = 'dependency.consumption_resolved' "
+                "ORDER BY seq DESC"
+            ).fetchall()
+            for prior in prior_rows:
+                payload = json.loads(prior["payload_json"])
+                if payload.get("consumption_event_seq") != consumption_event_seq:
+                    continue
+                if payload.get("reason") == clean_reason:
+                    return int(prior["seq"])
+                raise RuntimeError(
+                    "dependency consumption event already has a different explicit "
+                    "resolution"
+                )
+
+            return self._insert_slp_event(
+                conn,
+                event_type="dependency.consumption_resolved",
+                turn_id=source_turn_id,
+                repository=consumed["repository"],
+                graph_run_id=consumed["graph_run_id"],
+                node_id=consumed["node_id"],
+                attempt_id=consumed["attempt_id"],
+                work_item_id=consumed["work_item_id"],
+                work_item_revision=consumed["work_item_revision"],
+                candidate_id=consumed["candidate_id"],
+                payload={
+                    "consumption_event_seq": consumption_event_seq,
+                    "source_turn_id": source_turn_id,
+                    "reason": clean_reason,
+                },
+            )
+
+    def list_slp_events(
+        self, *, after_seq: int = 0, limit: int = 100
+    ) -> list[dict[str, Any]]:
+        if isinstance(after_seq, bool) or not isinstance(after_seq, int) or after_seq < 0:
+            raise ValueError("after_seq must be a non-negative integer")
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 1000:
+            raise ValueError("limit must be an integer between 1 and 1000")
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM slp_events WHERE seq > ? ORDER BY seq ASC LIMIT ?",
+                (after_seq, limit),
+            ).fetchall()
+        result: list[dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            item["payload"] = json.loads(item.pop("payload_json"))
+            result.append(item)
+        return result
+
+    def record_lead_disposition_in_transaction(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        turn_id: str,
+        action: str,
+        reason: str,
+        work_item_id: str | None = None,
+        work_item_revision: int | None = None,
+        candidate_id: str | None = None,
+        owner: str | None = None,
+        return_checkpoint: str | None = None,
+        graph_run_id: str | None = None,
+        node_id: str | None = None,
+        attempt_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Record one exact Lead disposition using the caller's active SQLite transaction."""
+        clean_turn_id = self._optional_runtime_text(turn_id, "turn_id")
+        if clean_turn_id is None:
+            raise ValueError("turn_id must not be empty")
+        if not isinstance(action, str):
+            raise ValueError("action must be a string")
+        clean_action = action.strip().lower()
+        if clean_action not in LEAD_DISPOSITION_ACTIONS:
+            raise ValueError(f"unsupported Lead disposition action: {action!r}")
+        if not isinstance(reason, str) or not reason.strip():
+            raise ValueError("reason must not be empty")
+        clean_reason = reason.strip()
+        clean_work_item_id = self._optional_runtime_text(work_item_id, "work_item_id")
+        clean_work_item_revision = self._optional_work_item_revision(work_item_revision)
+        if (clean_work_item_id is None) != (clean_work_item_revision is None):
+            raise ValueError("work_item_id and work_item_revision must be provided together")
+        clean_candidate_id = self._optional_runtime_text(candidate_id, "candidate_id")
+        clean_owner = self._optional_runtime_text(owner, "owner")
+        clean_return_checkpoint = self._optional_runtime_text(
+            return_checkpoint,
+            "return_checkpoint",
+        )
+        if clean_action == "defer":
+            if clean_owner is None or clean_return_checkpoint is None:
+                raise ValueError(
+                    "defer disposition requires owner and return_checkpoint"
+                )
+        elif clean_owner is not None or clean_return_checkpoint is not None:
+            raise ValueError(
+                "owner and return_checkpoint are only valid for defer disposition"
+            )
+        clean_graph_run_id = self._optional_runtime_text(graph_run_id, "graph_run_id")
+        clean_node_id = self._optional_runtime_text(node_id, "node_id")
+        clean_attempt_id = self._optional_runtime_text(attempt_id, "attempt_id")
+
+        turn = conn.execute(
+            "SELECT turn_id, session_id, repository, route, task_packet_json "
+            "FROM turns WHERE turn_id = ?",
+            (clean_turn_id,),
+        ).fetchone()
+        if turn is None:
+            raise RuntimeError(
+                "Lead disposition requires an existing captured Peer turn: "
+                f"unknown turn_id={clean_turn_id!r}"
+            )
+        packet_payload = json.loads(turn["task_packet_json"])
+        inferred_id, inferred_revision = _work_item_ref_from_payload(packet_payload)
+        if clean_work_item_id is None:
+            clean_work_item_id = inferred_id
+            clean_work_item_revision = inferred_revision
+        elif (
+            clean_work_item_id != inferred_id
+            or clean_work_item_revision != inferred_revision
+        ):
+            raise RuntimeError(
+                "explicit Work Item locator does not match the captured Peer turn: "
+                f"turn_id={clean_turn_id!r}, "
+                f"captured={inferred_id!r}@{inferred_revision!r}, "
+                f"provided={clean_work_item_id!r}@{clean_work_item_revision!r}"
+            )
+
+        existing = conn.execute(
+            "SELECT * FROM lead_dispositions WHERE turn_id = ?",
+            (clean_turn_id,),
+        ).fetchone()
+        if existing is not None:
+            same = (
+                existing["action"] == clean_action
+                and existing["reason"] == clean_reason
+                and existing["work_item_id"] == clean_work_item_id
+                and existing["work_item_revision"] == clean_work_item_revision
+                and existing["candidate_id"] == clean_candidate_id
+                and existing["owner"] == clean_owner
+                and existing["return_checkpoint"] == clean_return_checkpoint
+                and existing["graph_run_id"] == clean_graph_run_id
+                and existing["node_id"] == clean_node_id
+                and existing["attempt_id"] == clean_attempt_id
+            )
+            if not same:
+                raise RuntimeError(
+                    "Peer turn already has a different Lead disposition; "
+                    "a single actionable Peer response may not be dispositioned twice"
+                )
+            result = dict(existing)
+            result["idempotent"] = True
+            return result
+
+        if clean_action == "accept":
+            self.assert_turn_current_for_acceptance_in_transaction(
+                conn,
+                turn_id=clean_turn_id,
+            )
+
+        disposition_id = str(uuid.uuid4())
+        now = time.time_ns()
+        disposition_payload: dict[str, Any] = {
+            "disposition_id": disposition_id,
+            "action": clean_action,
+        }
+        if clean_action == "defer":
+            assert clean_owner is not None
+            assert clean_return_checkpoint is not None
+            disposition_payload["owner"] = clean_owner
+            disposition_payload["return_checkpoint"] = clean_return_checkpoint
+
+        event_seq = self._insert_slp_event(
+            conn,
+            event_type="lead.disposition",
+            turn_id=clean_turn_id,
+            session_id=turn["session_id"],
+            repository=turn["repository"],
+            route=turn["route"],
+            graph_run_id=clean_graph_run_id,
+            node_id=clean_node_id,
+            attempt_id=clean_attempt_id,
+            work_item_id=clean_work_item_id,
+            work_item_revision=clean_work_item_revision,
+            candidate_id=clean_candidate_id,
+            payload=disposition_payload,
+            created_at_ns=now,
+        )
+        conn.execute(
+            "INSERT INTO lead_dispositions("
+            "disposition_id, event_seq, turn_id, action, work_item_id, "
+            "work_item_revision, candidate_id, reason, owner, return_checkpoint, "
+            "graph_run_id, node_id, attempt_id, created_at_ns"
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                disposition_id,
+                event_seq,
+                clean_turn_id,
+                clean_action,
+                clean_work_item_id,
+                clean_work_item_revision,
+                clean_candidate_id,
+                clean_reason,
+                clean_owner,
+                clean_return_checkpoint,
+                clean_graph_run_id,
+                clean_node_id,
+                clean_attempt_id,
+                now,
+            ),
+        )
+        if clean_action == "accept":
+            self._insert_slp_event(
+                conn,
+                event_type="candidate.accepted",
+                turn_id=clean_turn_id,
+                session_id=turn["session_id"],
+                repository=turn["repository"],
+                route=turn["route"],
+                graph_run_id=clean_graph_run_id,
+                node_id=clean_node_id,
+                attempt_id=clean_attempt_id,
+                work_item_id=clean_work_item_id,
+                work_item_revision=clean_work_item_revision,
+                candidate_id=clean_candidate_id,
+                payload={"disposition_id": disposition_id},
+                created_at_ns=now,
+            )
+        row = conn.execute(
+            "SELECT * FROM lead_dispositions WHERE disposition_id = ?",
+            (disposition_id,),
+        ).fetchone()
+        if row is None:
+            raise RuntimeError("Lead disposition was not persisted")
+        result = dict(row)
+        result["idempotent"] = False
+        return result
+
+    def record_lead_disposition(
+        self,
+        *,
+        turn_id: str,
+        action: str,
+        reason: str,
+        work_item_id: str | None = None,
+        work_item_revision: int | None = None,
+        candidate_id: str | None = None,
+        owner: str | None = None,
+        return_checkpoint: str | None = None,
+        graph_run_id: str | None = None,
+        node_id: str | None = None,
+        attempt_id: str | None = None,
+    ) -> dict[str, Any]:
+        with self._connect() as conn:
+            # Direct dispositions need the same revision-race protection as TaskGraph
+            # decisions. Hold the writer reservation across freshness validation and
+            # disposition/candidate.accepted insertion.
+            conn.execute("BEGIN IMMEDIATE")
+            return self.record_lead_disposition_in_transaction(
+                conn,
+                turn_id=turn_id,
+                action=action,
+                reason=reason,
+                work_item_id=work_item_id,
+                work_item_revision=work_item_revision,
+                candidate_id=candidate_id,
+                owner=owner,
+                return_checkpoint=return_checkpoint,
+                graph_run_id=graph_run_id,
+                node_id=node_id,
+                attempt_id=attempt_id,
+            )
+
+    def get_lead_disposition(self, turn_id: str) -> dict[str, Any] | None:
+        clean_turn_id = self._optional_runtime_text(turn_id, "turn_id")
+        if clean_turn_id is None:
+            raise ValueError("turn_id must not be empty")
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM lead_dispositions WHERE turn_id = ?",
+                (clean_turn_id,),
+            ).fetchone()
+        return dict(row) if row is not None else None
 
     def get_session(self, session_id: str) -> dict[str, Any] | None:
         with self._connect() as conn:
@@ -680,6 +2187,7 @@ class SessionStore:
             raise ValueError("agent_response must not be empty")
         now = time.time_ns()
         packet_json = packet.to_json()
+        work_item_id, work_item_revision = task_packet_work_item_ref(packet)
         with self._connect() as conn:
             row = conn.execute(
                 "SELECT repository, agent FROM sessions WHERE session_id = ?",
@@ -714,6 +2222,18 @@ class SessionStore:
                     agent_response,
                     now,
                 ),
+            )
+            self._insert_slp_event(
+                conn,
+                event_type="peer.response",
+                turn_id=turn_id,
+                session_id=session_id,
+                repository=repository,
+                route=route,
+                work_item_id=work_item_id,
+                work_item_revision=work_item_revision,
+                payload={"runtime_state": state},
+                created_at_ns=now,
             )
 
     def record_capture_review(
@@ -785,6 +2305,16 @@ class SessionStore:
                         int(event.get("captured_at_ns") or 0),
                     ),
                 )
+            self._insert_slp_event(
+                conn,
+                event_type="peer.capture_ambiguous",
+                capture_review_id=capture_review_id,
+                session_id=session_id,
+                repository=repository,
+                route=route,
+                payload={"candidate_count": len(distinct_responses)},
+                created_at_ns=now,
+            )
 
     def get_capture_review(self, capture_review_id: str) -> dict[str, Any] | None:
         with self._connect() as conn:

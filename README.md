@@ -2,12 +2,31 @@
 
 Harness cho multi-repository QiQi workspace với các thành phần chính:
 
-- `workspace-template/`: orchestration/control plane + `qiqi_delegate`;
-- `repo-template/`: execution-agent policy cho từng Git root;
+- `workspace-template/`: SLP control plane — Supervisor policy + QiQi Lead orchestration + `qiqi_delegate`;
+- `repo-template/`: SLP Peer execution policy cho từng Git root;
 - `work-item-template/`: workspace-scoped filesystem-native Work Item lifecycle skill/templates;
 - `knowledge-template/`: user-scoped Shared Knowledge MCP cho reusable durable knowledge;
 - `migrations/`: upgrade definitions cho workspace/repo đã cài harness.
 
+## SLP architecture
+
+```text
+                 Human
+                   |
+        +----------+----------+
+        |                     |
+   Supervisor              Lead (QiQi)
+   governance                 |
+                              +-- Peer A
+                              +-- Peer B
+                              +-- Peer C
+```
+
+Supervisor là oversight plane, không phải technical Lead thứ hai. QiQi giữ vai trò Lead và là canonical Work Item writer/cross-repo orchestrator. Repository child agents là Peers với bounded ownership và independent technical judgment.
+
+Shared contract: `workspace-template/docs/WORKSPACE_PROTOCOL.md`. Supervisor instructions: `workspace-template/instructions/supervisor.md`.
+
+Delegation chỉ được coi là đóng khi có đủ `Lead brief -> actual Peer response -> explicit Lead disposition`; runtime `DONE` hoặc passing tests chỉ là evidence, không tự đồng nghĩa acceptance.
 ## Sources of truth
 
 ```text

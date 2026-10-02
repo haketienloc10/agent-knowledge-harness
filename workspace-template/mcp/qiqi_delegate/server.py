@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import functools
 import hashlib
 import json
@@ -15,7 +16,7 @@ import tempfile
 import time
 import uuid
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, Callable, Literal
 
 import yaml
 from mcp.server import MCPServer
@@ -30,6 +31,7 @@ from core import (
     new_turn_id,
     render_task_prompt,
     resolve_capture_events,
+    task_packet_work_item_ref,
 )
 
 _workspace_root_env = os.environ.get("QIQI_WORKSPACE_ROOT")
@@ -101,6 +103,9 @@ RepositoryName = Annotated[
         )
     ),
 ]
+LeadDispositionAction = Literal["accept", "reject", "repair", "defer", "resolve"]
+CandidateReconciliation = Literal["superseded", "abandoned", "revalidated"]
+PeerSignal = Literal["REOPEN_REQUEST", "DEPENDENCY_REQUEST", "BLOCKED"]
 
 
 mcp = MCPServer(
@@ -135,8 +140,13 @@ mcp = MCPServer(
         "explicitly reviewed. Codex "
         "trusts only the exact QiQi session hook by matching its computed trusted_hash; global "
         "hook-trust bypass is forbidden. Settled/failed/blocked are runtime lifecycle states, "
-        "not semantic completion. Runtime session ownership is persisted in MCP-owned SQLite "
-        "state, not in a Markdown result artifact."
+        "not semantic completion. Direct actionable Peer turns must be closed with the "
+        "record_lead_disposition tool; tracked Work Item revisions must be mirrored with "
+        "record_work_item_revision after material mutation, and direct dependency consumption "
+        "must be recorded with record_dependency_consumed. TaskGraph submit_decisions and "
+        "dependency execution bridge into the same runtime stream. Runtime session ownership and "
+        "SLP semantic transitions are persisted in the same MCP-owned SQLite state, not in "
+        "Markdown result artifacts."
     ),
 )
 
@@ -145,6 +155,45 @@ _managed_herdr_server: asyncio.subprocess.Process | None = None
 _state_lock = asyncio.Lock()
 _active_repositories: set[Path] = set()
 _active_sessions: set[str] = set()
+
+_repo_dispatch_boundary_hook: contextvars.ContextVar[
+    Callable[[Any], None] | None
+] = contextvars.ContextVar("repo_dispatch_boundary_hook", default=None)
+
+
+def _set_repo_dispatch_boundary_hook(hook: Callable[[Any], None]):
+    return _repo_dispatch_boundary_hook.set(hook)
+
+
+def _reset_repo_dispatch_boundary_hook(token: contextvars.Token) -> None:
+    _repo_dispatch_boundary_hook.reset(token)
+
+
+def _record_peer_dispatch(
+    *,
+    turn_id: str,
+    repository: str,
+    route: str,
+    work_item_id: str | None,
+    work_item_revision: int | None,
+) -> int:
+    """Atomically persist dispatch plus any context-local dependency evidence."""
+    with _store._connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        seq = _store._insert_slp_event(
+            conn,
+            event_type="peer.dispatched",
+            turn_id=turn_id,
+            repository=repository,
+            route=route,
+            work_item_id=work_item_id,
+            work_item_revision=work_item_revision,
+        )
+        dispatch_hook = _repo_dispatch_boundary_hook.get()
+        if dispatch_hook is not None:
+            dispatch_hook(conn)
+        return seq
+
 _store = SessionStore(STATE_DB)
 
 
@@ -808,10 +857,7 @@ async def _create_herdr_workspace(repo: Path, label: str) -> tuple[str, str]:
 
 
 async def _close_herdr_workspace(workspace_id: str) -> None:
-    try:
-        await _run_herdr("workspace", "close", workspace_id)
-    except Exception:
-        pass
+    await _run_herdr("workspace", "close", workspace_id)
 
 
 def _agent_from_payload(payload: dict[str, Any], context: str) -> dict[str, Any]:
@@ -1134,6 +1180,238 @@ def _prepare_resume(repository: str, agent_name: str, session_id: str) -> None:
 
 @mcp.tool()
 @_public_tool_errors
+async def record_lead_disposition(
+    turn_id: str,
+    action: LeadDispositionAction,
+    reason: str,
+    work_item_id: str | None = None,
+    work_item_revision: int | None = None,
+    candidate_id: str | None = None,
+    owner: str | None = None,
+    return_checkpoint: str | None = None,
+) -> dict[str, Any]:
+    """Record QiQi's explicit semantic disposition for one captured Peer turn.
+
+    This is runtime communication-loop state, not a replacement for the canonical Work
+    Item. The exact Peer response remains only in turns.agent_response. For tracked work,
+    work_item_id/work_item_revision may be supplied explicitly only when they exactly match
+    the canonical Work Item locator already present in the captured TaskPacket; omitted values
+    are derived from that same locator. A defer disposition additionally requires a non-empty
+    owner and return_checkpoint so the deferred loop remains durably actionable. Repeating
+    the exact same disposition is idempotent; attempting a different second disposition for
+    the same Peer turn fails closed.
+    """
+    return _store.record_lead_disposition(
+        turn_id=turn_id,
+        action=action,
+        reason=reason,
+        work_item_id=work_item_id,
+        work_item_revision=work_item_revision,
+        candidate_id=candidate_id,
+        owner=owner,
+        return_checkpoint=return_checkpoint,
+    )
+
+
+@mcp.tool()
+@_public_tool_errors
+async def record_work_item_revision(
+    work_item_id: str,
+    work_item_revision: int,
+    reason: str | None = None,
+) -> dict[str, Any]:
+    """Record a canonical tracked Work Item revision in SLP runtime state.
+
+    QiQi remains the canonical filesystem Work Item writer. Call this immediately after a
+    material Work Item revision change so stale-candidate supervision does not depend on a
+    later delegation observing the new revision. Repeating the current revision is idempotent;
+    revision rollback fails closed.
+    """
+    return _store.record_work_item_revision(
+        work_item_id=work_item_id,
+        work_item_revision=work_item_revision,
+        reason=reason,
+    )
+
+
+@mcp.tool()
+@_public_tool_errors
+async def record_peer_signal(
+    turn_id: str,
+    signal: PeerSignal,
+    details: str | None = None,
+    work_item_id: str | None = None,
+    work_item_revision: int | None = None,
+) -> dict[str, Any]:
+    """Record an explicit actionable Peer signal already observed in a captured response."""
+    seq = _store.record_peer_signal(
+        turn_id=turn_id,
+        signal=signal,
+        details=details,
+        work_item_id=work_item_id,
+        work_item_revision=work_item_revision,
+    )
+    return {"event_seq": seq, "turn_id": turn_id, "signal": signal}
+
+
+@mcp.tool()
+@_public_tool_errors
+async def record_peer_signal_resolution(
+    turn_id: str,
+    signal: PeerSignal,
+    reason: str,
+    work_item_id: str | None = None,
+    work_item_revision: int | None = None,
+) -> dict[str, Any]:
+    """Record Lead evidence that one previously deferred explicit Peer signal is resolved.
+
+    This does not rewrite the historical Lead disposition for the Peer response. It closes
+    the exact R4 signal loop with separate semantic evidence after the blocker/dependency/
+    reopen condition has actually been reconciled.
+    """
+    seq = _store.record_peer_signal_resolution(
+        turn_id=turn_id,
+        signal=signal,
+        reason=reason,
+        work_item_id=work_item_id,
+        work_item_revision=work_item_revision,
+    )
+    return {
+        "event_seq": seq,
+        "turn_id": turn_id,
+        "signal": signal,
+    }
+
+
+@mcp.tool()
+@_public_tool_errors
+async def record_candidate_reconciliation(
+    stale_turn_id: str,
+    resolution: CandidateReconciliation,
+    reason: str,
+    work_item_id: str,
+    work_item_revision: int,
+    replacement_turn_id: str | None = None,
+) -> dict[str, Any]:
+    """Record Lead reconciliation of one stale candidate against a newer Work Item revision.
+
+    This is explicit candidate-level semantic evidence for R5 closure. It does not rewrite
+    the historical Lead disposition on the stale turn. replacement_turn_id, when present,
+    must identify the captured current-revision Peer turn that supersedes or revalidates it.
+    """
+    seq = _store.record_candidate_reconciliation(
+        stale_turn_id=stale_turn_id,
+        resolution=resolution,
+        reason=reason,
+        work_item_id=work_item_id,
+        work_item_revision=work_item_revision,
+        replacement_turn_id=replacement_turn_id,
+    )
+    return {
+        "event_seq": seq,
+        "stale_turn_id": stale_turn_id,
+        "resolution": resolution,
+        "replacement_turn_id": replacement_turn_id,
+    }
+
+
+@mcp.tool()
+@_public_tool_errors
+async def record_dependency_consumed(
+    source_turn_id: str,
+    repository: RepositoryName | None = None,
+    consumer_turn_id: str | None = None,
+    work_item_id: str | None = None,
+    work_item_revision: int | None = None,
+    candidate_id: str | None = None,
+) -> dict[str, Any]:
+    """Record direct-delegation consumption of an upstream Peer candidate.
+
+    TaskGraph dependencies are emitted automatically when downstream nodes execute. Use this
+    tool only for direct orchestration where QiQi intentionally consumes an upstream turn as
+    a downstream premise.
+    """
+    if repository is not None:
+        repository = repository.strip()
+        if not repository:
+            repository = None
+        else:
+            _resolve_repo(repository)
+    seq = _store.record_dependency_consumed(
+        source_turn_id=source_turn_id,
+        consumer_turn_id=consumer_turn_id,
+        repository=repository,
+        work_item_id=work_item_id,
+        work_item_revision=work_item_revision,
+        candidate_id=candidate_id,
+    )
+    return {
+        "event_seq": seq,
+        "source_turn_id": source_turn_id,
+        "consumer_turn_id": consumer_turn_id,
+    }
+
+
+@mcp.tool()
+@_public_tool_errors
+async def release_write_scope_claim(
+    claim_id: str,
+    repository: RepositoryName,
+    reason: str,
+) -> dict[str, Any]:
+    """Explicitly release one verified-abandoned durable repository write claim.
+
+    Use this only after the prior delegation process/session is known to be terminated
+    or intentionally abandoned. The runtime never auto-releases a durable claim solely
+    because a new process cannot observe its original owner.
+    """
+    repository = repository.strip()
+    if not repository:
+        raise ValueError("repository must not be empty")
+    repo = _resolve_repo(repository)
+    async with _state_lock:
+        if repo in _active_repositories:
+            raise RuntimeError(
+                "cannot recovery-release a write-scope claim while this process has "
+                f"an active delegation for repository={repository!r}"
+            )
+        seq = _store.record_write_scope_recovery_release(
+            claim_id=claim_id,
+            repository=repository,
+            reason=reason,
+        )
+    return {
+        "event_seq": seq,
+        "claim_id": claim_id,
+        "repository": repository,
+        "released": True,
+    }
+
+
+@mcp.tool()
+@_public_tool_errors
+async def record_dependency_consumption_resolution(
+    consumption_event_seq: int,
+    reason: str,
+) -> dict[str, Any]:
+    """Record explicit remediation of one historical consume-before-ACCEPT violation.
+
+    consumption_event_seq is the exact dependency.consumed event identified by the
+    Supervisor R2 finding. This closes the case without rewriting the historical fact
+    that downstream consumption happened before acceptance.
+    """
+    seq = _store.record_dependency_consumption_resolution(
+        consumption_event_seq=consumption_event_seq,
+        reason=reason,
+    )
+    return {
+        "event_seq": seq,
+        "consumption_event_seq": consumption_event_seq,
+        "resolved": True,
+    }
+
+@mcp.tool()
+@_public_tool_errors
 async def get_turn_capture_review(capture_review_id: str) -> dict[str, Any]:
     """Hydrate raw Stop candidates for one previously ambiguous delegated turn."""
     capture_review_id = capture_review_id.strip()
@@ -1224,12 +1502,57 @@ async def delegate_repo_task(
     if session_id:
         _prepare_resume(repository, agent_name, session_id)
 
+    qiqi_turn_id = new_turn_id()
+    work_item_id, work_item_revision = task_packet_work_item_ref(packet)
+    if work_item_id is not None and work_item_revision is not None:
+        _store.record_work_item_revision(
+            work_item_id=work_item_id,
+            work_item_revision=work_item_revision,
+            reason="observed in delegated TaskPacket",
+        )
+
     await _ensure_herdr_server()
     await _require_current_integration(adapter)
     await _claim_resources(repo, session_id)
 
     workspace_id: str | None = None
-    qiqi_turn_id = new_turn_id()
+    result_payload: dict[str, Any] | None = None
+    write_claim_id = f"repo:{repository}:turn:{qiqi_turn_id}"
+    write_claim_recorded = False
+    try:
+        _store.record_write_scope_claim(
+            claim_id=write_claim_id,
+            repository=repository,
+            owner=qiqi_turn_id,
+            scope=["*"],
+            turn_id=qiqi_turn_id,
+            work_item_id=work_item_id,
+            work_item_revision=work_item_revision,
+            require_repository_clear=True,
+        )
+        write_claim_recorded = True
+        # Commit the durable dispatch marker and any TaskGraph dependency-consumption
+        # evidence in one transaction at the actual dispatch boundary.
+        _record_peer_dispatch(
+            turn_id=qiqi_turn_id,
+            repository=repository,
+            route=route,
+            work_item_id=work_item_id,
+            work_item_revision=work_item_revision,
+        )
+    except Exception:
+        try:
+            if write_claim_recorded:
+                _store.record_write_scope_release(
+                    claim_id=write_claim_id,
+                    repository=repository,
+                    turn_id=qiqi_turn_id,
+                    work_item_id=work_item_id,
+                    work_item_revision=work_item_revision,
+                )
+        finally:
+            await _release_resources(repo, session_id)
+        raise
     try:
         with tempfile.TemporaryDirectory(prefix="qiqi-handoff-") as temp_dir:
             sink = Path(temp_dir).resolve()
@@ -1264,13 +1587,24 @@ async def delegate_repo_task(
             _store.register_session(native_session_id, repository, agent_name)
 
             if status == "blocked":
-                return {
+                _store.record_slp_event(
+                    event_type="peer.signal",
+                    turn_id=qiqi_turn_id,
+                    session_id=native_session_id,
+                    repository=repository,
+                    route=route,
+                    work_item_id=work_item_id,
+                    work_item_revision=work_item_revision,
+                    payload={"signal": "runtime_blocked"},
+                )
+                result_payload = {
                     "session_id": native_session_id,
                     "turn_id": qiqi_turn_id,
                     "state": "blocked",
                     "agent_response": None,
                     "blocker_type": "agent_blocked",
                 }
+                return result_payload
 
             try:
                 event = await _wait_for_result_capture(
@@ -1298,7 +1632,7 @@ async def delegate_repo_task(
                     route=route,
                     events=capture_events,
                 )
-                return {
+                result_payload = {
                     "session_id": native_session_id,
                     "turn_id": qiqi_turn_id,
                     "state": "capture_ambiguous",
@@ -1306,6 +1640,7 @@ async def delegate_repo_task(
                     "capture_review_id": qiqi_turn_id,
                     "candidate_count": int(event.get("candidate_count") or 0),
                 }
+                return result_payload
 
             response = event["agent_response"]
             _store.record_turn(
@@ -1319,16 +1654,85 @@ async def delegate_repo_task(
                 packet=packet,
                 agent_response=response,
             )
-            return {
+            result_payload = {
                 "session_id": native_session_id,
                 "turn_id": qiqi_turn_id,
                 "state": state,
                 "agent_response": response,
             }
+            return result_payload
     finally:
+        close_error: Exception | None = None
         if workspace_id:
-            await _close_herdr_workspace(workspace_id)
-        await _release_resources(repo, session_id)
+            try:
+                await _close_herdr_workspace(workspace_id)
+            except Exception as exc:
+                close_error = exc
+
+        release_error: Exception | None = None
+        try:
+            if close_error is None:
+                try:
+                    _store.record_write_scope_release(
+                        claim_id=write_claim_id,
+                        repository=repository,
+                        turn_id=qiqi_turn_id,
+                        work_item_id=work_item_id,
+                        work_item_revision=work_item_revision,
+                    )
+                except Exception as exc:
+                    release_error = exc
+        finally:
+            # The in-process ownership guard may be released because the durable
+            # claim remains authoritative whenever shutdown or durable release was
+            # not confirmed. A later delegation therefore still fails closed until
+            # explicit recovery clears that claim.
+            await _release_resources(repo, session_id)
+
+        cleanup_error = close_error or release_error
+        if cleanup_error is not None:
+            if close_error is not None:
+                cleanup_state = "workspace_close_unconfirmed"
+                cleanup_message = (
+                    "failed to confirm delegated Herdr workspace shutdown"
+                )
+                recovery_action = (
+                    "verify the delegated Peer is terminated or intentionally "
+                    "abandoned, then call release_write_scope_claim with the "
+                    "returned write_claim_id and write_claim_repository"
+                )
+            else:
+                cleanup_state = "write_claim_release_unconfirmed"
+                cleanup_message = (
+                    "delegated Herdr workspace shutdown succeeded but durable "
+                    "write-scope release could not be confirmed"
+                )
+                recovery_action = (
+                    "workspace shutdown is confirmed; call release_write_scope_claim "
+                    "with the returned write_claim_id and write_claim_repository to "
+                    "repair the durable ownership ledger"
+                )
+
+            if result_payload is not None:
+                # Do not discard an already-captured semantic result merely because
+                # post-capture cleanup persistence failed. The durable claim remains
+                # authoritative until explicit recovery and the exact candidate stays
+                # available to callers for disposition.
+                result_payload.update(
+                    {
+                        "cleanup_state": cleanup_state,
+                        "cleanup_error": cleanup_message,
+                        "write_claim_id": write_claim_id,
+                        "write_claim_repository": repository,
+                        "workspace_id": workspace_id,
+                        "recovery_action": recovery_action,
+                    }
+                )
+            else:
+                raise RuntimeError(
+                    f"{cleanup_message}; durable write-scope claim "
+                    f"{write_claim_id!r} was retained for explicit recovery"
+                ) from cleanup_error
 
 
 if __name__ == "__main__":

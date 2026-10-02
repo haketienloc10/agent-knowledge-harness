@@ -51,18 +51,44 @@ class TaskPacketTests(unittest.TestCase):
             known_unknowns=["Deployment date is unknown"],
         )
 
-    def test_prompt_contains_only_task_specific_semantics(self):
+    def test_prompt_contains_task_semantics_and_repository_boundary(self):
         prompt = render_task_prompt(self.packet())
         self.assertIn("Update the consumer", prompt)
         self.assertIn("legacy_id must remain for two releases", prompt)
         self.assertIn("Provenance: customer compatibility decision", prompt)
         self.assertIn("Claims to investigate", prompt)
         self.assertIn("Do not remove legacy_id", prompt)
+        self.assertIn("Repository execution boundary", prompt)
+        self.assertIn("Do not read or write sibling repositories", prompt)
+        self.assertIn("evidence attribution, not filesystem authorization", prompt)
+        self.assertIn("accepted upstream semantics as execution premises", prompt)
+        self.assertIn("return DEPENDENCY_REQUEST", prompt)
+        self.assertIn("Do not read or modify .qiqi/state", prompt)
         self.assertNotIn("Original user request", prompt)
         self.assertNotIn("Required verification", prompt)
         self.assertNotIn("Context boundary", prompt)
         self.assertNotIn("Handoff contract", prompt)
         self.assertNotIn("qiqi-semantic-handoff", prompt)
+
+    def test_trusted_fact_provenance_does_not_authorize_sibling_repo_reads(self):
+        packet = build_task_packet(
+            objective="Consume the accepted producer schema.",
+            scope=["Consumer schema handling"],
+            context={
+                "trusted_facts": [
+                    {
+                        "fact": "schema_version=2; fee_rate=0.12",
+                        "source": "pricing-core/CONTRACT.md accepted candidate sha256:abc",
+                    }
+                ]
+            },
+            acceptance_criteria=["Consumer expects schema_version=2"],
+        )
+        prompt = render_task_prompt(packet)
+        self.assertIn("schema_version=2; fee_rate=0.12", prompt)
+        self.assertIn("pricing-core/CONTRACT.md accepted candidate sha256:abc", prompt)
+        self.assertIn("not filesystem authorization", prompt)
+        self.assertIn("instead of crossing the repository boundary", prompt)
 
     def test_optional_empty_sections_are_omitted(self):
         packet = build_task_packet(

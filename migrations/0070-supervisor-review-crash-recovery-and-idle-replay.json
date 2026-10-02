@@ -1,0 +1,26 @@
+{
+  "version": 70,
+  "from_ref": "b683763c15e604ef0c41b9ceaae7305e9356d402",
+  "to_ref": "e52204bbffcb62bcf8f98351cfc877ca6fcf5699",
+  "description": "fix ninth Codex review of autonomous Supervisor governance: retain provisional control-plane topology until cleanup succeeds, close stale topology in its persisted Herdr session before replacement, enforce durable repository write claims atomically across process restarts, emit periodic SQLite replay wakeups while the Herdr event socket is idle, deliver successful findings before surfacing unrelated review failures, and permit explicit semantic closure of runtime-blocked turns that have no captured response row",
+  "workspace": {
+    "merge": [],
+    "replace": [
+      "workspace-template/mcp/qiqi_delegate/core.py",
+      "workspace-template/mcp/qiqi_delegate/server.py",
+      "workspace-template/mcp/qiqi_delegate/supervisor_broker.py",
+      "workspace-template/mcp/qiqi_delegate/supervisor_control.py",
+      "workspace-template/mcp/qiqi_delegate/tests/test_phase4_integration.py",
+      "workspace-template/mcp/qiqi_delegate/tests/test_supervisor_broker.py",
+      "workspace-template/mcp/qiqi_delegate/tests/test_supervisor_control.py"
+    ],
+    "delete": [],
+    "manual_review": []
+  },
+  "repo": {
+    "merge": [],
+    "replace": [],
+    "delete": [],
+    "manual_review": []
+  }
+}

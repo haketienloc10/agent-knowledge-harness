@@ -1,0 +1,29 @@
+{
+  "version": 68,
+  "from_ref": "7e5bb0f371fd2065b4d3cc6a33478d1f4f3a7a16",
+  "to_ref": "da1463d3a7c1e8401dcdd486f7d7ec7a60c4eeee",
+  "description": "fix seventh Codex review of autonomous Supervisor governance: recreate persisted same-pane agents that never regain prompt readiness, bound every Herdr control-plane CLI command, require exact ACCEPT evidence before TaskGraph dependency consumption including legacy satisfied runs, fully replay broker event batches before Supervisor review, retry transient SQLite database failures with best-effort health persistence, serialize --once behind the same per-database broker lock, and require durable owner plus return_checkpoint metadata for direct defer dispositions",
+  "workspace": {
+    "merge": [],
+    "replace": [
+      "workspace-template/mcp/qiqi_delegate/core.py",
+      "workspace-template/mcp/qiqi_delegate/server.py",
+      "workspace-template/mcp/qiqi_delegate/supervisor_broker.py",
+      "workspace-template/mcp/qiqi_delegate/supervisor_control.py",
+      "workspace-template/mcp/qiqi_delegate/task_graph_mcp.py",
+      "workspace-template/mcp/qiqi_delegate/tests/test_phase4_integration.py",
+      "workspace-template/mcp/qiqi_delegate/tests/test_supervisor_broker.py",
+      "workspace-template/mcp/qiqi_delegate/tests/test_supervisor_control.py",
+      "workspace-template/mcp/qiqi_delegate/tests/test_task_graph_mcp.py",
+      "workspace-template/mcp/qiqi_delegate/tests/test_slp_runtime.py"
+    ],
+    "delete": [],
+    "manual_review": []
+  },
+  "repo": {
+    "merge": [],
+    "replace": [],
+    "delete": [],
+    "manual_review": []
+  }
+}

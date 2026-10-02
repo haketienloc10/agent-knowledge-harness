@@ -1,0 +1,25 @@
+{
+  "version": 67,
+  "from_ref": "5475a5f41bb64fc412bf27eec7eeb2f2ed1cfe06",
+  "to_ref": "7e5bb0f371fd2065b4d3cc6a33478d1f4f3a7a16",
+  "description": "fix sixth Codex review of autonomous Supervisor governance: commit legacy semantic backfill before broker-owned transactions, bound Herdr snapshot/subscription handshakes, validate Peer signal and signal-resolution Work Item provenance against the captured turn, require candidate reconciliation to target the exact recorded current revision with an exact tracked replacement locator, and prevent TaskGraph downstream dispatch from consuming an accepted source that became stale after a material Work Item revision",
+  "workspace": {
+    "merge": [],
+    "replace": [
+      "workspace-template/mcp/qiqi_delegate/core.py",
+      "workspace-template/mcp/qiqi_delegate/supervisor_broker.py",
+      "workspace-template/mcp/qiqi_delegate/task_graph_mcp.py",
+      "workspace-template/mcp/qiqi_delegate/tests/test_phase4_integration.py",
+      "workspace-template/mcp/qiqi_delegate/tests/test_supervisor_broker.py",
+      "workspace-template/mcp/qiqi_delegate/tests/test_task_graph_mcp.py"
+    ],
+    "delete": [],
+    "manual_review": []
+  },
+  "repo": {
+    "merge": [],
+    "replace": [],
+    "delete": [],
+    "manual_review": []
+  }
+}
