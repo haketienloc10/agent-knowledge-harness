@@ -5,10 +5,12 @@ Repo này ship template/policy/runtime, không chứa task thật của một wo
 ## Current architecture
 
 ```text
-workspace-template/   QiQi orchestration + qiqi_delegate
-repo-template/        child execution policy
-work-item-template/   filesystem Work Item lifecycle skill/templates
-knowledge-template/   reusable Shared Knowledge MCP
+workspace-template/    QiQi orchestration + qiqi_delegate
+repo-template/         child execution policy
+work-item-template/    filesystem Work Item lifecycle skill/templates
+knowledge-template/    reusable Shared Knowledge MCP
+user-rules-template/   user-scope response/orchestration rules
+writing-template/      user-scope writing skills
 ```
 
 Current truth boundaries:
@@ -41,6 +43,16 @@ Child không sửa sibling repo, `.qiqi/state` hoặc canonical Work Item. QiQi 
 ## Shared Knowledge
 
 Chỉ verified reusable invariant/contract/behavior mới persist Knowledge. Task-specific mutable state, routine completion và working hypothesis ở Work Item/repo execution layer.
+
+## User-scope templates
+
+`user-rules-template/` và `writing-template/` cài policy/skill vào user home. Chúng không materialize vào workspace hoặc repo con, nên thay đổi chỉ ở hai template này không cần workspace/repo migration.
+
+Giữ boundary rõ:
+
+- response/orchestration policy nằm ở `user-rules-template/`;
+- cách viết nằm ở `writing-template/skills/`;
+- không nhét visualization/UI workflow vào writing skill nếu chỉ cần rule chọn modality ở tầng response.
 
 ## Validation
 
