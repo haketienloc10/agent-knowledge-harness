@@ -543,11 +543,16 @@ class TaskGraphMcpTests(unittest.IsolatedAsyncioTestCase):
             "TaskGraph dependency source is stale for the current Work Item revision",
             error_text(blocked),
         )
-        self.assertEqual(delegate.await_count, 1)
-        self.assertNotIn(
-            "dependency.consumed",
-            [event["event_type"] for event in self.slp_store.list_slp_events()],
-        )
+        self.assertEqual(delegate.await_count, 2)
+        event_types = [
+            event["event_type"] for event in self.slp_store.list_slp_events()
+        ]
+        self.assertNotIn("dependency.consumed", event_types)
+        self.assertNotIn("qiqi-turn-backend", [
+            event["turn_id"]
+            for event in self.slp_store.list_slp_events()
+            if event["event_type"] == "peer.dispatched"
+        ])
 
     async def test_get_node_review_rejects_stale_review_locator(self) -> None:
         delegate = AsyncMock(
