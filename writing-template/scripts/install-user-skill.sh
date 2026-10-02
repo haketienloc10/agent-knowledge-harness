@@ -400,6 +400,8 @@ def build_state(client, raw_root):
         "installed": False,
         "installed_fingerprint": None,
         "rollback_failed": False,
+        "rollback_current_parent": None,
+        "rollback_current_target": None,
     }
 
 
@@ -522,7 +524,7 @@ def commit_one(state):
         assert_stage_unchanged(state)
 
         if state["original_exists"]:
-            os.rename(state["target"], state["backup_target"])
+            rename_noreplace(state["target"], state["backup_target"])
             state["moved_aside"] = True
             state["backup_fingerprint"] = tree_fingerprint(
                 state["backup_target"]
@@ -574,23 +576,72 @@ def target_matches_installed(state):
     )
 
 
+def remove_installed_for_rollback(state, errors, retained_backups):
+    client = state["client"]
+    target = state["target"]
+
+    if not state["installed"]:
+        return True
+    if not os.path.lexists(target):
+        state["installed"] = False
+        return True
+
+    parent = create_tracked_dir(
+        state, "rollback_current_parent", f".{name}.rollback-current."
+    )
+    quarantine = os.path.join(parent, name)
+    state["rollback_current_target"] = quarantine
+
+    # Move the exact current object away atomically before deciding whether it
+    # is still our installed copy. This avoids check-then-rmtree races.
+    rename_noreplace(target, quarantine)
+
+    matches_installed = (
+        os.path.isdir(quarantine)
+        and not os.path.islink(quarantine)
+        and state["installed_fingerprint"] is not None
+        and tree_fingerprint(quarantine) == state["installed_fingerprint"]
+    )
+    if matches_installed:
+        shutil.rmtree(quarantine)
+        os.rmdir(parent)
+        state["rollback_current_parent"] = None
+        state["rollback_current_target"] = None
+        state["installed"] = False
+        return True
+
+    # Another process changed the installed target. Put that exact current
+    # object back rather than deleting or overwriting it.
+    try:
+        rename_noreplace(quarantine, target)
+        os.rmdir(parent)
+        state["rollback_current_parent"] = None
+        state["rollback_current_target"] = None
+        errors.append(
+            f"{client}: installed target changed after commit; "
+            "restored the externally changed current target"
+        )
+    except BaseException as restore_exc:
+        retained_backups.add(parent)
+        errors.append(
+            f"{client}: installed target changed after commit and could not "
+            f"be restored ({restore_exc}); current object retained at {quarantine}"
+        )
+
+    state["rollback_failed"] = True
+    return False
+
+
 def rollback_one(state, errors, retained_backups):
     client = state["client"]
     target = state["target"]
 
-    if state["installed"]:
-        if os.path.lexists(target):
-            if target_matches_installed(state):
-                shutil.rmtree(target)
-                state["installed"] = False
-            else:
-                errors.append(
-                    f"{client}: installed target changed after commit; "
-                    f"left current target untouched"
-                )
-                state["rollback_failed"] = True
-        else:
-            state["installed"] = False
+    if not remove_installed_for_rollback(
+        state, errors, retained_backups
+    ):
+        if state["backup_parent"] and os.path.isdir(state["backup_parent"]):
+            retained_backups.add(state["backup_parent"])
+        return
 
     if state["moved_aside"]:
         backup = state["backup_target"]
@@ -620,7 +671,7 @@ def rollback_one(state, errors, retained_backups):
             state["rollback_failed"] = True
             return
 
-        os.rename(backup, target)
+        rename_noreplace(backup, target)
         state["moved_aside"] = False
 
     if (
@@ -728,8 +779,9 @@ def run():
         reject_overlaps(states)
         ensure_roots(states)
 
-        # Both clients stage from the same immutable snapshot, so an editor or
-        # checkout changing the repository source cannot split installed content.
+        # Both clients stage from the same verified snapshot. Each staged copy
+        # must match its content fingerprint, so a repository source change
+        # cannot split installed content between clients.
         for state in states:
             stage_skill(
                 state, source_snapshot, source_snapshot_fingerprint
@@ -742,8 +794,18 @@ def run():
         for state in states:
             commit_one(state)
 
-        # Both targets now contain the staged skill. From this point onward,
-        # interruption must not roll back a successfully committed install.
+        # Verify both published targets before discarding rollback material.
+        # A concurrent edit after one client commits therefore turns the whole
+        # operation into a rollback attempt instead of a false success.
+        for state in states:
+            if not target_matches_installed(state):
+                raise RuntimeError(
+                    f"{state['client']} installed skill changed before "
+                    "transaction completion"
+                )
+
+        # Both targets now contain the verified staged skill. From this point
+        # onward, interruption must not roll back a successful install.
         transaction_complete = True
 
         # Block managed signals while deleting rollback material. If a signal
