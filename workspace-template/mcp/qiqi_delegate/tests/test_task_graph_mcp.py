@@ -476,6 +476,75 @@ class TaskGraphMcpTests(unittest.IsolatedAsyncioTestCase):
             session_id=None,
         )
 
+    async def test_accept_rejects_captured_turn_stale_at_review_time(self) -> None:
+        payload = graph_payload()
+        payload["nodes"][0]["task_packet"]["context"] = {
+            "trusted_facts": [
+                {
+                    "fact": (
+                        "work_item_path=/tmp/work-items/e2e-review-stale; "
+                        "id=e2e:review-stale; revision=1"
+                    ),
+                    "source": "canonical Work Item locator",
+                }
+            ]
+        }
+        delegate = self.recording_delegate(
+            {
+                "session_id": "native-session-contracts",
+                "turn_id": "qiqi-turn-contracts",
+                "state": "settled",
+                "agent_response": "revision 1 candidate awaiting Lead review",
+            }
+        )
+
+        with patch("task_graph_mcp.delegate_repo_task", delegate):
+            async with Client(mcp) as client:
+                started = (
+                    await client.call_tool("start_graph", {"graph": payload})
+                ).structured_content
+                reviewable = (
+                    await client.call_tool(
+                        "delegate_next",
+                        {"graph_run_id": started["graph_run_id"]},
+                    )
+                ).structured_content
+
+                self.slp_store.record_work_item_revision(
+                    work_item_id="e2e:review-stale",
+                    work_item_revision=2,
+                    reason="requirements changed while candidate awaited review",
+                )
+
+                rejected = await client.call_tool(
+                    "submit_decisions",
+                    {
+                        "graph_run_id": started["graph_run_id"],
+                        "decisions": [{"node_id": "contracts", "action": "accept"}],
+                        "expected_revision": reviewable["revision"],
+                    },
+                )
+                current = (
+                    await client.call_tool(
+                        "get_graph",
+                        {"graph_run_id": started["graph_run_id"]},
+                    )
+                ).structured_content
+
+        self.assertTrue(rejected.is_error)
+        self.assertIn(
+            "candidate acceptance requires current-revision evidence",
+            error_text(rejected),
+        )
+        self.assertEqual(current["graph_state"], "awaiting_review")
+        self.assertIsNone(
+            self.slp_store.get_lead_disposition("qiqi-turn-contracts")
+        )
+        event_types = [
+            event["event_type"] for event in self.slp_store.list_slp_events()
+        ]
+        self.assertNotIn("candidate.accepted", event_types)
+
     async def test_dependency_dispatch_rejects_stale_accepted_source(self) -> None:
         payload = graph_payload()
         payload["nodes"][0]["task_packet"]["context"] = {
