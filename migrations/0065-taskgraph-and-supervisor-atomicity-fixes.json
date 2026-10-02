@@ -1,5 +1,5 @@
 {
-  "version": 64,
+  "version": 65,
   "from_ref": "fd51fd47819b8a6f68a6bc3342920ac27e538ff7",
   "to_ref": "b7a63ee1bf9d7e1cc03f20b7c9801be20dc67a63",
   "description": "fix fourth Codex review of autonomous Supervisor/TaskGraph durability: atomically commit TaskGraph graph-state decisions and exact Lead dispositions in one SQLite transaction, reject TaskGraph ACCEPT when the current attempt has no canonical captured Peer turn, clean up partially created Herdr control-plane workspaces before retry, and enforce one long-lived Supervisor runtime per exact state database with a process-lifetime POSIX file lock",

@@ -1,5 +1,5 @@
 {
-  "version": 67,
+  "version": 68,
   "from_ref": "7e5bb0f371fd2065b4d3cc6a33478d1f4f3a7a16",
   "to_ref": "da1463d3a7c1e8401dcdd486f7d7ec7a60c4eeee",
   "description": "fix seventh Codex review of autonomous Supervisor governance: recreate persisted same-pane agents that never regain prompt readiness, bound every Herdr control-plane CLI command, require exact ACCEPT evidence before TaskGraph dependency consumption including legacy satisfied runs, fully replay broker event batches before Supervisor review, retry transient SQLite database failures with best-effort health persistence, serialize --once behind the same per-database broker lock, and require durable owner plus return_checkpoint metadata for direct defer dispositions",

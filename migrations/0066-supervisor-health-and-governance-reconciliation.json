@@ -1,5 +1,5 @@
 {
-  "version": 65,
+  "version": 66,
   "from_ref": "b7a63ee1bf9d7e1cc03f20b7c9801be20dc67a63",
   "to_ref": "5475a5f41bb64fc412bf27eec7eeb2f2ed1cfe06",
   "description": "fix fifth Codex review of autonomous Supervisor governance: persist broker retrying/healthy state and surface retry failures to stderr, require TaskGraph replan/block owner plus return checkpoint and persist them in the exact defer disposition, reject explicit Work Item disposition locators that disagree with the captured TaskPacket, idempotently backfill legacy turns into peer.response semantic events, and make --supervise-once fully drain all bounded broker/review/delivery batches before exiting",
