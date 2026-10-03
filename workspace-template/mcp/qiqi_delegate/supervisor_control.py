@@ -198,7 +198,10 @@ Không thêm field `action`, `decision`, `disposition`, `implementation`,
 `delegation`, `command`, `patch`, Work Item mutation hoặc tool call.
 """
 
-SUPERVISOR_INSTRUCTION_FINGERPRINT = hashlib.sha256(\n    SUPERVISOR_AGENTS.encode("utf-8")\n).hexdigest()\n
+SUPERVISOR_INSTRUCTION_FINGERPRINT = hashlib.sha256(
+    SUPERVISOR_AGENTS.encode("utf-8")
+).hexdigest()
+
 
 def _required_text(value: Any, label: str) -> str:
     if not isinstance(value, str) or not value.strip():
