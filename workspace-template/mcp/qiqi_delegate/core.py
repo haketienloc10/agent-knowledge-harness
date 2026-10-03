@@ -791,6 +791,7 @@ class SessionStore:
                 herdr_session TEXT NOT NULL DEFAULT '',
                 lead_model TEXT NOT NULL DEFAULT '',
                 supervisor_model TEXT NOT NULL DEFAULT '',
+                supervisor_instruction_fingerprint TEXT NOT NULL DEFAULT '',
                 supervisor_home TEXT NOT NULL,
                 supervisor_capture_dir TEXT NOT NULL,
                 supervisor_capture_nonce TEXT NOT NULL,
@@ -856,6 +857,7 @@ class SessionStore:
             "herdr_session": "TEXT NOT NULL DEFAULT ''",
             "lead_model": "TEXT NOT NULL DEFAULT ''",
             "supervisor_model": "TEXT NOT NULL DEFAULT ''",
+            "supervisor_instruction_fingerprint": "TEXT NOT NULL DEFAULT ''",
         }
         for column, definition in supervisor_control_additions.items():
             if column not in supervisor_control_columns:
