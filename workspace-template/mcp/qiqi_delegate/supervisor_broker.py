@@ -259,18 +259,9 @@ class HerdrLifecycleSubscriber:
             + (f"; {detail}" if isinstance(detail, str) and detail else "")
         )
 
-    async def stream_once(
-        self,
-        *,
-        yield_ready: bool = False,
-    ) -> AsyncIterator[dict[str, Any]]:
-        if os.name == "nt":
-            raise HerdrSubscriptionError(
-                "Phase 2 raw Herdr subscriber currently requires a Unix-domain socket"
-            )
+    async def _snapshot_pane_ids(self) -> list[str]:
         reader, writer = await asyncio.open_unix_connection(str(self.socket_path))
         snapshot_id = f"slp_snapshot_{uuid.uuid4().hex}"
-        subscribe_id = f"slp_subscribe_{uuid.uuid4().hex}"
         try:
             await self._send(
                 writer,
@@ -285,8 +276,31 @@ class HerdrLifecycleSubscriber:
                 raise HerdrSubscriptionError(
                     "Herdr session.snapshot returned an unexpected request id"
                 )
-            pane_ids = sorted(_collect_pane_ids(snapshot.get("result")))
+            return sorted(_collect_pane_ids(snapshot.get("result")))
+        finally:
+            writer.close()
+            try:
+                await writer.wait_closed()
+            except (ConnectionError, OSError):
+                pass
 
+    async def stream_once(
+        self,
+        *,
+        yield_ready: bool = False,
+    ) -> AsyncIterator[dict[str, Any]]:
+        if os.name == "nt":
+            raise HerdrSubscriptionError(
+                "Phase 2 raw Herdr subscriber currently requires a Unix-domain socket"
+            )
+
+        # Herdr's raw socket accepts one initial request per connection. Snapshot is
+        # a one-shot request, while events.subscribe owns its connection for the
+        # lifetime of the subscription.
+        pane_ids = await self._snapshot_pane_ids()
+        reader, writer = await asyncio.open_unix_connection(str(self.socket_path))
+        subscribe_id = f"slp_subscribe_{uuid.uuid4().hex}"
+        try:
             subscriptions = [
                 {"type": event_type} for event_type in HERDR_GLOBAL_SUBSCRIPTIONS
             ]
@@ -350,8 +364,8 @@ class HerdrLifecycleSubscriber:
                     "pane_agent_detected",
                     "pane.agent_detected",
                 }:
-                    # Reconnect so the next subscription includes the new pane's
-                    # agent-status stream. Durable SLP replay makes this lossless.
+                    # Reconnect so the next snapshot refresh includes the new pane and
+                    # the next subscription covers its agent-status stream.
                     return
         finally:
             writer.close()

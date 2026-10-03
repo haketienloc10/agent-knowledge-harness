@@ -839,40 +839,60 @@ class SuperviseOnceTests(unittest.TestCase):
 
 @unittest.skipIf(os.name == "nt", "Unix-domain Herdr socket test")
 class HerdrLifecycleSubscriberTests(unittest.IsolatedAsyncioTestCase):
+    @staticmethod
+    async def _close_writer(writer: asyncio.StreamWriter) -> None:
+        writer.close()
+        try:
+            await writer.wait_closed()
+        except (ConnectionError, OSError):
+            pass
+
     async def test_idle_subscription_emits_periodic_sqlite_wakeup(self) -> None:
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
         socket_path = Path(temp.name) / "herdr.sock"
         completed = asyncio.Event()
+        seen_methods: list[str] = []
 
         async def handler(
             reader: asyncio.StreamReader,
             writer: asyncio.StreamWriter,
         ) -> None:
+            request = json.loads((await reader.readline()).decode("utf-8"))
+            method = request["method"]
+            seen_methods.append(method)
             try:
-                snapshot = json.loads((await reader.readline()).decode("utf-8"))
-                writer.write(
-                    (
-                        json.dumps({"id": snapshot["id"], "result": {"workspaces": []}})
-                        + "\n"
-                    ).encode("utf-8")
-                )
-                await writer.drain()
-                subscribe = json.loads((await reader.readline()).decode("utf-8"))
-                writer.write(
-                    (
-                        json.dumps(
-                            {"id": subscribe["id"], "result": {"type": "subscription_started"}}
-                        )
-                        + "\n"
-                    ).encode("utf-8")
-                )
-                await writer.drain()
-                await reader.read()
+                if method == "session.snapshot":
+                    writer.write(
+                        (
+                            json.dumps(
+                                {"id": request["id"], "result": {"workspaces": []}}
+                            )
+                            + "\n"
+                        ).encode("utf-8")
+                    )
+                    await writer.drain()
+                    return
+                if method == "events.subscribe":
+                    writer.write(
+                        (
+                            json.dumps(
+                                {
+                                    "id": request["id"],
+                                    "result": {"type": "subscription_started"},
+                                }
+                            )
+                            + "\n"
+                        ).encode("utf-8")
+                    )
+                    await writer.drain()
+                    await reader.read()
+                    return
+                self.fail(f"unexpected Herdr method: {method}")
             finally:
-                writer.close()
-                await writer.wait_closed()
-                completed.set()
+                await self._close_writer(writer)
+                if method == "events.subscribe":
+                    completed.set()
 
         server = await asyncio.start_unix_server(handler, path=str(socket_path))
         async with server:
@@ -888,71 +908,82 @@ class HerdrLifecycleSubscriberTests(unittest.IsolatedAsyncioTestCase):
             await stream.aclose()
             await asyncio.wait_for(completed.wait(), timeout=2)
 
-    async def test_subscriber_uses_snapshot_and_events_only_not_terminal_reads(self) -> None:
+        self.assertEqual(
+            seen_methods,
+            ["session.snapshot", "events.subscribe"],
+        )
+
+    async def test_subscriber_uses_separate_snapshot_and_event_connections(self) -> None:
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
         socket_path = Path(temp.name) / "herdr.sock"
         seen: list[dict] = []
         completed = asyncio.Event()
+        connection_count = 0
 
         async def handler(
             reader: asyncio.StreamReader,
             writer: asyncio.StreamWriter,
         ) -> None:
+            nonlocal connection_count
+            connection_count += 1
+            request = json.loads((await reader.readline()).decode("utf-8"))
+            seen.append(request)
+            method = request["method"]
             try:
-                snapshot = json.loads((await reader.readline()).decode("utf-8"))
-                seen.append(snapshot)
-                writer.write(
-                    (
-                        json.dumps(
-                            {
-                                "id": snapshot["id"],
-                                "result": {
-                                    "type": "session_snapshot",
-                                    "workspaces": [
-                                        {
-                                            "workspace_id": "w1",
-                                            "panes": [{"pane_id": "w1:p1"}],
-                                        }
-                                    ],
-                                },
-                            }
-                        )
-                        + "\n"
-                    ).encode("utf-8")
-                )
-                await writer.drain()
-
-                subscribe = json.loads((await reader.readline()).decode("utf-8"))
-                seen.append(subscribe)
-                writer.write(
-                    (
-                        json.dumps(
-                            {
-                                "id": subscribe["id"],
-                                "result": {"type": "subscription_started"},
-                            }
-                        )
-                        + "\n"
-                    ).encode("utf-8")
-                )
-                writer.write(
-                    (
-                        json.dumps(
-                            {
-                                "event": "workspace_created",
-                                "data": {"workspace_id": "w2"},
-                            }
-                        )
-                        + "\n"
-                    ).encode("utf-8")
-                )
-                await writer.drain()
-                await reader.read()
+                if method == "session.snapshot":
+                    writer.write(
+                        (
+                            json.dumps(
+                                {
+                                    "id": request["id"],
+                                    "result": {
+                                        "type": "session_snapshot",
+                                        "workspaces": [
+                                            {
+                                                "workspace_id": "w1",
+                                                "panes": [{"pane_id": "w1:p1"}],
+                                            }
+                                        ],
+                                    },
+                                }
+                            )
+                            + "\n"
+                        ).encode("utf-8")
+                    )
+                    await writer.drain()
+                    return
+                if method == "events.subscribe":
+                    writer.write(
+                        (
+                            json.dumps(
+                                {
+                                    "id": request["id"],
+                                    "result": {"type": "subscription_started"},
+                                }
+                            )
+                            + "\n"
+                        ).encode("utf-8")
+                    )
+                    writer.write(
+                        (
+                            json.dumps(
+                                {
+                                    "event": "workspace_created",
+                                    "data": {"workspace_id": "w2"},
+                                }
+                            )
+                            + "\n"
+                        ).encode("utf-8")
+                    )
+                    await writer.drain()
+                    await reader.read()
+                    return
+                self.fail(f"unexpected Herdr method: {method}")
             finally:
-                writer.close()
-                await writer.wait_closed()
-                completed.set()
+                await self._close_writer(writer)
+                if method == "events.subscribe":
+                    completed.set()
 
         server = await asyncio.start_unix_server(handler, path=str(socket_path))
         async with server:
@@ -965,10 +996,11 @@ class HerdrLifecycleSubscriberTests(unittest.IsolatedAsyncioTestCase):
             await stream.aclose()
             await asyncio.wait_for(completed.wait(), timeout=2)
 
-        self.assertEqual([item["method"] for item in seen], [
-            "session.snapshot",
-            "events.subscribe",
-        ])
+        self.assertEqual(connection_count, 2)
+        self.assertEqual(
+            [item["method"] for item in seen],
+            ["session.snapshot", "events.subscribe"],
+        )
         encoded = json.dumps(seen)
         self.assertNotIn("pane.read", encoded)
         self.assertNotIn("agent.read", encoded)
@@ -992,44 +1024,52 @@ class HerdrLifecycleSubscriberTests(unittest.IsolatedAsyncioTestCase):
             reader: asyncio.StreamReader,
             writer: asyncio.StreamWriter,
         ) -> None:
-            snapshot = json.loads((await reader.readline()).decode("utf-8"))
-            writer.write(
-                (
-                    json.dumps({"id": snapshot["id"], "result": {"workspaces": []}})
-                    + "\n"
-                ).encode("utf-8")
-            )
-            await writer.drain()
-            subscribe = json.loads((await reader.readline()).decode("utf-8"))
-            writer.write(
-                (
-                    json.dumps(
-                        {
-                            "id": subscribe["id"],
-                            "result": {"type": "subscription_started"},
-                        }
+            request = json.loads((await reader.readline()).decode("utf-8"))
+            method = request["method"]
+            try:
+                if method == "session.snapshot":
+                    writer.write(
+                        (
+                            json.dumps(
+                                {"id": request["id"], "result": {"workspaces": []}}
+                            )
+                            + "\n"
+                        ).encode("utf-8")
                     )
-                    + "\n"
-                ).encode("utf-8")
-            )
-            await writer.drain()
-            acknowledged.set()
-            await release_event.wait()
-            writer.write(
-                (
-                    json.dumps(
-                        {
-                            "event": "workspace_created",
-                            "data": {"workspace_id": "w-after-ready"},
-                        }
+                    await writer.drain()
+                    return
+                if method == "events.subscribe":
+                    writer.write(
+                        (
+                            json.dumps(
+                                {
+                                    "id": request["id"],
+                                    "result": {"type": "subscription_started"},
+                                }
+                            )
+                            + "\n"
+                        ).encode("utf-8")
                     )
-                    + "\n"
-                ).encode("utf-8")
-            )
-            await writer.drain()
-            await reader.read()
-            writer.close()
-            await writer.wait_closed()
+                    await writer.drain()
+                    acknowledged.set()
+                    await release_event.wait()
+                    writer.write(
+                        (
+                            json.dumps(
+                                {
+                                    "event": "workspace_created",
+                                    "data": {"workspace_id": "w-after-ready"},
+                                }
+                            )
+                            + "\n"
+                        ).encode("utf-8")
+                    )
+                    await writer.drain()
+                    await reader.read()
+                    return
+                self.fail(f"unexpected Herdr method: {method}")
+            finally:
+                await self._close_writer(writer)
 
         server = await asyncio.start_unix_server(handler, path=str(socket_path))
         async with server:
@@ -1054,11 +1094,11 @@ class HerdrLifecycleSubscriberTests(unittest.IsolatedAsyncioTestCase):
             writer: asyncio.StreamWriter,
         ) -> None:
             try:
-                await reader.readline()
+                request = json.loads((await reader.readline()).decode("utf-8"))
+                self.assertEqual(request["method"], "session.snapshot")
                 await reader.read()
             finally:
-                writer.close()
-                await writer.wait_closed()
+                await self._close_writer(writer)
                 completed.set()
 
         server = await asyncio.start_unix_server(handler, path=str(socket_path))
@@ -1085,21 +1125,28 @@ class HerdrLifecycleSubscriberTests(unittest.IsolatedAsyncioTestCase):
             reader: asyncio.StreamReader,
             writer: asyncio.StreamWriter,
         ) -> None:
+            request = json.loads((await reader.readline()).decode("utf-8"))
+            method = request["method"]
             try:
-                snapshot = json.loads((await reader.readline()).decode("utf-8"))
-                writer.write(
-                    (
-                        json.dumps({"id": snapshot["id"], "result": {"workspaces": []}})
-                        + "\n"
-                    ).encode("utf-8")
-                )
-                await writer.drain()
-                await reader.readline()
-                await reader.read()
+                if method == "session.snapshot":
+                    writer.write(
+                        (
+                            json.dumps(
+                                {"id": request["id"], "result": {"workspaces": []}}
+                            )
+                            + "\n"
+                        ).encode("utf-8")
+                    )
+                    await writer.drain()
+                    return
+                if method == "events.subscribe":
+                    await reader.read()
+                    return
+                self.fail(f"unexpected Herdr method: {method}")
             finally:
-                writer.close()
-                await writer.wait_closed()
-                completed.set()
+                await self._close_writer(writer)
+                if method == "events.subscribe":
+                    completed.set()
 
         server = await asyncio.start_unix_server(handler, path=str(socket_path))
         async with server:
@@ -1124,43 +1171,53 @@ class HerdrLifecycleSubscriberTests(unittest.IsolatedAsyncioTestCase):
             reader: asyncio.StreamReader,
             writer: asyncio.StreamWriter,
         ) -> None:
-            snapshot = json.loads((await reader.readline()).decode("utf-8"))
-            writer.write(
-                (
-                    json.dumps({"id": snapshot["id"], "result": {"workspaces": []}})
-                    + "\n"
-                ).encode("utf-8")
-            )
-            await writer.drain()
-            subscribe = json.loads((await reader.readline()).decode("utf-8"))
-            writer.write(
-                (
-                    json.dumps(
-                        {
-                            "id": subscribe["id"],
-                            "result": {"type": "subscription_started"},
-                        }
+            request = json.loads((await reader.readline()).decode("utf-8"))
+            method = request["method"]
+            try:
+                if method == "session.snapshot":
+                    writer.write(
+                        (
+                            json.dumps(
+                                {"id": request["id"], "result": {"workspaces": []}}
+                            )
+                            + "\n"
+                        ).encode("utf-8")
                     )
-                    + "\n"
-                ).encode("utf-8")
-            )
-            writer.write(
-                (
-                    json.dumps(
-                        {
-                            "id": subscribe["id"],
-                            "error": {
-                                "code": "events_lost",
-                                "message": "retained lifecycle history was exceeded",
-                            },
-                        }
+                    await writer.drain()
+                    return
+                if method == "events.subscribe":
+                    writer.write(
+                        (
+                            json.dumps(
+                                {
+                                    "id": request["id"],
+                                    "result": {"type": "subscription_started"},
+                                }
+                            )
+                            + "\n"
+                        ).encode("utf-8")
                     )
-                    + "\n"
-                ).encode("utf-8")
-            )
-            await writer.drain()
-            writer.close()
-            await writer.wait_closed()
+                    writer.write(
+                        (
+                            json.dumps(
+                                {
+                                    "id": request["id"],
+                                    "error": {
+                                        "code": "events_lost",
+                                        "message": (
+                                            "retained lifecycle history was exceeded"
+                                        ),
+                                    },
+                                }
+                            )
+                            + "\n"
+                        ).encode("utf-8")
+                    )
+                    await writer.drain()
+                    return
+                self.fail(f"unexpected Herdr method: {method}")
+            finally:
+                await self._close_writer(writer)
 
         server = await asyncio.start_unix_server(handler, path=str(socket_path))
         async with server:
@@ -1178,7 +1235,6 @@ class HerdrLifecycleSubscriberTests(unittest.IsolatedAsyncioTestCase):
             path,
             Path("/tmp/home/.config/herdr/sessions/qiqi-delegate/herdr.sock"),
         )
-
 
 if __name__ == "__main__":
     unittest.main()
