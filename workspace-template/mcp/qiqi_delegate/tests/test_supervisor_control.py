@@ -17,11 +17,13 @@ from supervisor_control import (  # noqa: E402
     DEFAULT_MODEL,
     HerdrAgentNotReadyError,
     HerdrControlPlane,
+    SUPERVISOR_AGENTS,
     SupervisorControlStore,
     build_audit_packet,
     default_supervisor_home,
     parse_supervisor_finding,
     render_lead_finding,
+    render_supervisor_prompt,
 )
 
 
@@ -199,25 +201,78 @@ class SupervisorFindingContractTests(unittest.TestCase):
             },
         )
 
+    def test_supervisor_agents_requires_ste_lite_vietnamese_human_output(self) -> None:
+        self.assertIn("Viết nội dung dành cho Lead bằng tiếng Việt.", SUPERVISOR_AGENTS)
+        self.assertIn("## Quy tắc ngôn ngữ STE-lite", SUPERVISOR_AGENTS)
+        self.assertIn("Giữ nguyên technical name và identifier.", SUPERVISOR_AGENTS)
+        self.assertIn("`observation`", SUPERVISOR_AGENTS)
+        self.assertIn("`evidence`", SUPERVISOR_AGENTS)
+        self.assertIn("`open_question_for_lead`", SUPERVISOR_AGENTS)
+        self.assertIn(
+            "Lead sẽ ghi nhận disposition nào cho Peer response của turn <turn_id>?",
+            SUPERVISOR_AGENTS,
+        )
+        self.assertIn('"status": "issue" | "no_issue"', SUPERVISOR_AGENTS)
+
+    def test_render_supervisor_prompt_repeats_vietnamese_output_contract(self) -> None:
+        packet = build_audit_packet(
+            {
+                "case_id": "case-vi",
+                "rule": "R1",
+                "turn_id": "turn-vi",
+                "work_item_id": "e2e:vi",
+                "work_item_revision": 1,
+                "candidate_id": None,
+                "details": {"turn_id": "turn-vi"},
+            }
+        )
+
+        prompt = render_supervisor_prompt(packet)
+
+        self.assertIn(
+            "Viết observation, từng evidence item và open_question_for_lead bằng tiếng Việt",
+            prompt,
+        )
+        self.assertIn("theo STE-lite", prompt)
+        self.assertIn(
+            "Giữ nguyên JSON field, enum, rule id, technical name và identifier.",
+            prompt,
+        )
+        self.assertIn(
+            "open_question_for_lead phải là đúng một câu hỏi tiếng Việt",
+            prompt,
+        )
+        packet_json = prompt.split("AuditPacket:\n", 1)[1]
+        self.assertEqual(json.loads(packet_json), packet)
+        self.assertIn(
+            "An actual Peer response exists for the exact turn",
+            packet["rule_contract"]["predicate"],
+        )
+
     def test_finding_schema_accepts_governance_only_issue(self) -> None:
         finding = parse_supervisor_finding(
             json.dumps(
                 {
                     "case_id": "case-1",
                     "status": "issue",
-                    "observation": "A Peer response exists without a recorded disposition.",
+                    "observation": (
+                        "Đã có Peer response cho turn turn-1. "
+                        "Lead chưa ghi nhận disposition cho turn này."
+                    ),
                     "evidence": [
-                        "peer_response_locator.turn_id=turn-1",
-                        "disposition_state.recorded=false",
+                        "peer_response_locator.turn_id có giá trị turn-1.",
+                        "disposition_state.recorded là false.",
                     ],
                     "open_question_for_lead": (
-                        "What Lead disposition closes this response before dependent work proceeds?"
+                        "Lead sẽ ghi nhận disposition nào cho Peer response của turn turn-1?"
                     ),
-                }
+                },
+                ensure_ascii=False,
             ),
             expected_case_id="case-1",
         )
         self.assertEqual(finding["status"], "issue")
+        self.assertIn("Lead sẽ ghi nhận disposition nào", finding["open_question_for_lead"])
 
     def test_finding_schema_accepts_no_issue_without_lead_question(self) -> None:
         finding = parse_supervisor_finding(
