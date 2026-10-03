@@ -1,0 +1,21 @@
+{
+  "version": 78,
+  "from_ref": "4180df9682db664e7b9bac99d09f7c5ab8ab6bb8",
+  "to_ref": "60dcf5eb4e772eb6faee3c486ff8bcd30f8d051e",
+  "description": "fix the autonomous Supervisor Herdr lifecycle subscriber for the current one-initial-request-per-socket protocol: fetch session.snapshot on a one-shot connection, open events.subscribe on a separate long-lived connection, and update regression coverage so fake Herdr sockets enforce the same connection boundary as production",
+  "workspace": {
+    "merge": [],
+    "replace": [
+      "workspace-template/mcp/qiqi_delegate/supervisor_broker.py",
+      "workspace-template/mcp/qiqi_delegate/tests/test_supervisor_broker.py"
+    ],
+    "delete": [],
+    "manual_review": []
+  },
+  "repo": {
+    "merge": [],
+    "replace": [],
+    "delete": [],
+    "manual_review": []
+  }
+}
