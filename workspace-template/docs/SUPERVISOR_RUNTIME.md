@@ -55,13 +55,24 @@ cursor and the supervision floor. Therefore an established workspace can enable 
 retroactively auditing hundreds or thousands of historical Peer turns. A workspace that starts the
 broker before any work naturally gets floor `0` and supervises all subsequent events.
 
-When an older workspace upgrades to the floor-aware schema, existing broker state is baselined at
-the current semantic tail. Any already-open R5 case whose source `peer.response` is at or below
-that floor is administratively closed before further review/delivery. The semantic ledger and
-historical turns are preserved; only continuous governance scope changes.
+When an older workspace upgrades to the floor-aware schema, the broker owns the baseline transition.
+Before advancing the cursor it rebuilds the durable `write_scope_claims` projection from all
+claim/release events through the new floor, so an unreleased pre-floor writer still constrains later
+R3 overlap checks. If an existing broker cursor is behind the new floor, the broker also replays only
+closure-bearing transitions in that gap (for example Lead disposition, candidate reconciliation,
+dependency-consumption resolution, write-scope release, Peer-signal resolution, and a Peer response
+that resolves a runtime-blocked R4 case). It does not open new historical cases while performing this
+repair. Only after that reconciliation does it advance `last_processed_seq` to the floor.
 
-The floor never moves during ordinary broker restart. `last_processed_seq` remains the moving
-replay cursor, while `supervision_floor_seq` remains the epoch boundary.
+Any already-open R5 case whose source `peer.response` is at or below that floor is administratively
+closed before further review/delivery. The semantic ledger and historical turns are preserved; only
+continuous governance scope changes.
+
+The same reconciliation path repairs a pre-release broker row whose `supervision_floor_seq` is
+present but NULL: projection state is rebuilt, pending closure semantics are applied, and both floor
+and cursor are advanced atomically to the current tail. The floor never moves during ordinary broker
+restart. `last_processed_seq` remains the moving replay cursor, while `supervision_floor_seq`
+remains the epoch boundary.
 
 ## Durable semantic loop
 
