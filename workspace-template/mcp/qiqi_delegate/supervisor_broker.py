@@ -1094,17 +1094,61 @@ class SupervisorBroker:
             if reconciled:
                 continue
 
-            # One unresolved stale candidate needs one active R5 case. A later Work
-            # Item revision must not create another Supervisor review for the same
-            # turn until the existing case has been reconciled/closed.
+            # One unresolved stale candidate needs one active R5 case. If a
+            # newer material revision arrives before review, refresh the existing
+            # unreviewed case in place so its AuditPacket/Lead locator points at the
+            # latest canonical revision. Once a finding exists, preserve that audit
+            # history by closing the superseded case and opening one fresh case for
+            # the newer revision instead of mutating already-reviewed evidence.
             active_case = conn.execute(
-                "SELECT case_id FROM supervisor_cases "
-                "WHERE rule = 'R5' AND turn_id = ? AND work_item_id = ? "
-                "AND status != 'CLOSED' ORDER BY opened_event_seq DESC LIMIT 1",
+                "SELECT c.*, f.case_id AS finding_case_id "
+                "FROM supervisor_cases c "
+                "LEFT JOIN supervisor_findings f ON f.case_id = c.case_id "
+                "WHERE c.rule = 'R5' AND c.turn_id = ? AND c.work_item_id = ? "
+                "AND c.status != 'CLOSED' "
+                "ORDER BY c.opened_event_seq DESC LIMIT 1",
                 (turn_id, work_item_id),
             ).fetchone()
             if active_case is not None:
-                continue
+                active_revision = active_case["work_item_revision"]
+                if (
+                    isinstance(active_revision, int)
+                    and not isinstance(active_revision, bool)
+                    and active_revision >= current_revision
+                ):
+                    continue
+
+                if (
+                    active_case["status"] == "OPEN"
+                    and active_case["finding_case_id"] is None
+                ):
+                    active_details = json.loads(active_case["details_json"])
+                    active_details["current_revision"] = current_revision
+                    conn.execute(
+                        "UPDATE supervisor_cases SET work_item_revision = ?, "
+                        "details_json = ?, updated_at_ns = ? "
+                        "WHERE case_id = ? AND status = 'OPEN'",
+                        (
+                            current_revision,
+                            json.dumps(
+                                active_details,
+                                ensure_ascii=False,
+                                separators=(",", ":"),
+                                sort_keys=True,
+                                allow_nan=False,
+                            ),
+                            time.time_ns(),
+                            active_case["case_id"],
+                        ),
+                    )
+                    continue
+
+                conn.execute(
+                    "UPDATE supervisor_cases SET status = 'CLOSED', "
+                    "closed_event_seq = ?, updated_at_ns = ? "
+                    "WHERE case_id = ? AND status != 'CLOSED'",
+                    (int(event["seq"]), time.time_ns(), active_case["case_id"]),
+                )
 
             opened += int(
                 self._open_case(
