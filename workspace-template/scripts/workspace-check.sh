@@ -113,8 +113,14 @@ grep -Fq '_RULE_CONTRACTS' "$supervisor_control" || \
   fail 'Supervisor AuditPacket must define deterministic R1-R5 rule contracts'
 grep -Fq '"version": 2' "$supervisor_control" || \
   fail 'Supervisor AuditPacket contract version must include explicit rule semantics'
-grep -Fq 'rule_contract is the normative meaning' "$supervisor_control" || \
+grep -Fq '`AuditPacket.rule_contract` là định nghĩa chuẩn' "$supervisor_control" || \
   fail 'Supervisor prompt must treat rule_contract as normative'
+grep -Fq '## Quy tắc ngôn ngữ STE-lite' "$supervisor_control" || \
+  fail 'Supervisor persistent instructions must require STE-lite Vietnamese findings'
+grep -Fq 'Viết observation, từng evidence item và open_question_for_lead bằng tiếng Việt' "$supervisor_control" || \
+  fail 'Supervisor per-case prompt must repeat the Vietnamese human-facing output contract'
+grep -Fq 'Giữ nguyên JSON field, enum, rule id, technical name và identifier.' "$supervisor_control" || \
+  fail 'Supervisor Vietnamese prompt must preserve the machine contract and technical names'
 grep -Fq '_agent_matches_pane' "$supervisor_control" || \
   fail 'Supervisor control plane must validate named-agent pane identity'
 grep -Fq '_drain_durable' "$supervisor_broker" || \
@@ -173,6 +179,8 @@ for pattern in \
   'write_scope.claimed/released' \
   'autonomous E2E-08 state-machine integration test' \
   'normative `rule_contract`' \
+  'STE-lite' \
+  'Human-facing' \
   'supervision_floor_seq' \
   'R1: actual Peer response exists without an explicit Lead disposition' \
   'bash scripts/e2e-autonomous-supervisor.sh <repository-name>'; do
