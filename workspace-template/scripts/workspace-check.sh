@@ -121,6 +121,12 @@ grep -Fq 'Viết observation, từng evidence item và open_question_for_lead b�
   fail 'Supervisor per-case prompt must repeat the Vietnamese human-facing output contract'
 grep -Fq 'Giữ nguyên JSON field, enum, rule id, technical name và identifier.' "$supervisor_control" || \
   fail 'Supervisor Vietnamese prompt must preserve the machine contract and technical names'
+grep -Fq 'SUPERVISOR_INSTRUCTION_FINGERPRINT = hashlib.sha256' "$supervisor_control" || \
+  fail 'Supervisor persistent instructions must have a deterministic identity fingerprint'
+grep -Fq 'state.get("supervisor_instruction_fingerprint")' "$supervisor_control" || \
+  fail 'Supervisor control-plane reuse must reject stale instruction identity'
+grep -Fq 'supervisor_instruction_fingerprint TEXT NOT NULL DEFAULT' "$mcp_project/core.py" || \
+  fail 'Supervisor control-plane schema must persist instruction identity'
 grep -Fq '_agent_matches_pane' "$supervisor_control" || \
   fail 'Supervisor control plane must validate named-agent pane identity'
 grep -Fq '_drain_durable' "$supervisor_broker" || \
