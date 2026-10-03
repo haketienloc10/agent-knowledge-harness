@@ -434,6 +434,161 @@ class SupervisorBrokerTests(unittest.TestCase):
         )
         self.assertTrue(all(case["status"] == "OPEN" for case in cases))
 
+    def test_first_broker_enable_baselines_existing_semantic_history(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            db_path = Path(temp) / "qiqi_delegate.sqlite3"
+            store = SessionStore(db_path)
+            packet = self.packet(work_item_id="e2e:legacy", revision=1)
+            store.record_turn(
+                turn_id="turn-before-supervisor",
+                session_id="session-before-supervisor",
+                repository="repo-a",
+                agent="claude",
+                route="claude-balanced",
+                state="settled",
+                native_turn_id=None,
+                packet=packet,
+                agent_response="historical candidate",
+            )
+
+            broker = SupervisorBroker(db_path)
+            floor = broker.supervision_floor_seq()
+            replay = broker.process_pending()
+
+        self.assertGreater(floor, 0)
+        self.assertEqual(replay["processed"], 0)
+        self.assertEqual(broker.last_processed_seq(), floor)
+
+    def test_r5_supervision_floor_excludes_pre_epoch_turns(self) -> None:
+        self.record_turn(
+            "turn-pre-floor",
+            work_item_id="e2e:floor",
+            revision=1,
+        )
+        with sqlite3.connect(self.db_path) as conn:
+            floor = conn.execute(
+                "SELECT COALESCE(MAX(seq), 0) FROM slp_events"
+            ).fetchone()[0]
+            conn.execute(
+                "UPDATE supervisor_broker_state "
+                "SET last_processed_seq = ?, supervision_floor_seq = ? "
+                "WHERE broker_id = 'slp-supervisor'",
+                (floor, floor),
+            )
+
+        self.record_turn(
+            "turn-post-floor",
+            work_item_id="e2e:floor",
+            revision=2,
+        )
+        self.store.record_slp_event(
+            event_type="work_item.revision_changed",
+            work_item_id="e2e:floor",
+            work_item_revision=3,
+            payload={"reason": "material requirement change"},
+        )
+        self.broker.process_pending()
+
+        cases = self.cases("R5")
+        self.assertEqual(len(cases), 1)
+        self.assertEqual(cases[0]["turn_id"], "turn-post-floor")
+        self.assertEqual(cases[0]["details"]["stale_revision"], 2)
+
+    def test_r5_later_revision_does_not_duplicate_active_stale_turn(self) -> None:
+        self.record_turn(
+            "turn-stale-once",
+            work_item_id="e2e:no-r5-loop",
+            revision=1,
+        )
+        self.broker.process_pending()
+        self.store.record_slp_event(
+            event_type="work_item.revision_changed",
+            work_item_id="e2e:no-r5-loop",
+            work_item_revision=2,
+            payload={},
+        )
+        self.broker.process_pending()
+        self.store.record_slp_event(
+            event_type="work_item.revision_changed",
+            work_item_id="e2e:no-r5-loop",
+            work_item_revision=3,
+            payload={},
+        )
+        self.broker.process_pending()
+
+        cases = self.cases("R5")
+        self.assertEqual(len(cases), 1)
+        self.assertEqual(cases[0]["turn_id"], "turn-stale-once")
+        self.assertEqual(cases[0]["status"], "OPEN")
+
+    def test_r5_can_reopen_after_revalidation_then_later_revision(self) -> None:
+        self.record_turn(
+            "turn-revalidated",
+            work_item_id="e2e:r5-reopen",
+            revision=1,
+        )
+        self.broker.process_pending()
+        self.store.record_slp_event(
+            event_type="work_item.revision_changed",
+            work_item_id="e2e:r5-reopen",
+            work_item_revision=2,
+            payload={},
+        )
+        self.broker.process_pending()
+        self.store.record_candidate_reconciliation(
+            stale_turn_id="turn-revalidated",
+            resolution="revalidated",
+            reason="candidate remains valid for revision 2",
+            work_item_id="e2e:r5-reopen",
+            work_item_revision=2,
+        )
+        self.broker.process_pending()
+        self.store.record_slp_event(
+            event_type="work_item.revision_changed",
+            work_item_id="e2e:r5-reopen",
+            work_item_revision=3,
+            payload={},
+        )
+        self.broker.process_pending()
+
+        cases = self.cases("R5")
+        self.assertEqual(len(cases), 2)
+        self.assertEqual(
+            [case["status"] for case in cases],
+            ["CLOSED", "OPEN"],
+        )
+
+    def test_pre_floor_r5_backlog_is_closed_before_review(self) -> None:
+        self.record_turn(
+            "turn-pre-floor-open",
+            work_item_id="e2e:floor-close",
+            revision=1,
+        )
+        self.broker.process_pending()
+        self.store.record_slp_event(
+            event_type="work_item.revision_changed",
+            work_item_id="e2e:floor-close",
+            work_item_revision=2,
+            payload={},
+        )
+        self.broker.process_pending()
+        self.assertEqual(self.cases("R5")[0]["status"], "OPEN")
+
+        with sqlite3.connect(self.db_path) as conn:
+            floor = conn.execute(
+                "SELECT COALESCE(MAX(seq), 0) FROM slp_events"
+            ).fetchone()[0]
+            conn.execute(
+                "UPDATE supervisor_broker_state SET supervision_floor_seq = ? "
+                "WHERE broker_id = 'slp-supervisor'",
+                (floor,),
+            )
+
+        self.broker.mark_healthy()
+        case = self.cases("R5")[0]
+        self.assertEqual(case["status"], "CLOSED")
+        self.assertEqual(case["closed_event_seq"], floor)
+
     def test_r5_requirement_change_after_accept_still_opens_stale_candidate_case(self) -> None:
         self.record_turn(
             "turn-accepted-stale",
