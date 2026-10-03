@@ -18,6 +18,7 @@ from supervisor_control import (  # noqa: E402
     HerdrAgentNotReadyError,
     HerdrControlPlane,
     SUPERVISOR_AGENTS,
+    SUPERVISOR_INSTRUCTION_FINGERPRINT,
     SupervisorControlStore,
     build_audit_packet,
     default_supervisor_home,
@@ -1224,6 +1225,50 @@ class HerdrControlPlaneTopologyTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn(("workspace", "close", "w-old"), control.commands)
             self.assertTrue(
                 any(command[:3] == ("agent", "start", "lead") for command in control.commands)
+            )
+            self.assertTrue(
+                any(
+                    command[:3] == ("agent", "start", "supervisor")
+                    for command in control.commands
+                )
+            )
+
+    async def test_instruction_identity_change_recreates_control_room(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            workspace = root / "workspace"
+            workspace.mkdir()
+            state_db = workspace / ".qiqi" / "state" / "qiqi_delegate.sqlite3"
+            supervisor_home = root / "isolated-supervisor"
+            control = _RecordingHerdrControlPlane(
+                workspace_root=workspace,
+                state_db=state_db,
+                supervisor_home=supervisor_home,
+            )
+            control.agent_names.update({"lead", "supervisor"})
+            control.store.save_control_plane(
+                workspace_id="w-old",
+                lead_pane_id="w-old:p1",
+                supervisor_pane_id="w-old:p2",
+                herdr_session=control.session,
+                lead_model=DEFAULT_MODEL,
+                supervisor_model=DEFAULT_MODEL,
+                supervisor_instruction_fingerprint="legacy-instruction-contract",
+                supervisor_home=supervisor_home,
+                supervisor_capture_dir=supervisor_home / "captures",
+                supervisor_capture_nonce="old-nonce",
+            )
+
+            state = await control.ensure_started()
+
+            self.assertEqual(
+                state["supervisor_instruction_fingerprint"],
+                SUPERVISOR_INSTRUCTION_FINGERPRINT,
+            )
+            self.assertIn(("workspace", "close", "w-old"), control.commands)
+            self.assertEqual(
+                (supervisor_home / "AGENTS.md").read_text(encoding="utf-8"),
+                SUPERVISOR_AGENTS,
             )
             self.assertTrue(
                 any(
