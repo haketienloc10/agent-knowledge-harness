@@ -748,6 +748,8 @@ class SessionStore:
                 broker_id TEXT PRIMARY KEY,
                 last_processed_seq INTEGER NOT NULL DEFAULT 0
                     CHECK (last_processed_seq >= 0),
+                supervision_floor_seq INTEGER NOT NULL DEFAULT 0
+                    CHECK (supervision_floor_seq >= 0),
                 health_status TEXT NOT NULL DEFAULT 'healthy'
                     CHECK (health_status IN ('healthy', 'retrying')),
                 last_error TEXT,
@@ -865,6 +867,17 @@ class SessionStore:
             row["name"] if isinstance(row, sqlite3.Row) else row[1]
             for row in conn.execute("PRAGMA table_info(supervisor_broker_state)").fetchall()
         }
+        # supervision_floor_seq is an immutable epoch boundary. Existing
+        # broker rows keep this column NULL until SupervisorBroker can reconcile
+        # pending semantic closures and derived projections before advancing its
+        # replay cursor. The schema layer must not skip semantic transitions.
+        if "supervision_floor_seq" not in broker_state_columns:
+            conn.execute(
+                "ALTER TABLE supervisor_broker_state "
+                "ADD COLUMN supervision_floor_seq INTEGER"
+            )
+            broker_state_columns.add("supervision_floor_seq")
+
         broker_state_additions = {
             "health_status": "TEXT NOT NULL DEFAULT 'healthy'",
             "last_error": "TEXT",
@@ -878,8 +891,9 @@ class SessionStore:
 
         # Workspaces created before the semantic ledger may already contain canonical
         # captured Peer turns. Backfill exactly one peer.response event per missing turn
-        # so R1/R5 supervision applies after upgrade. The NOT EXISTS predicate makes
-        # this safe to run on every schema ensure/restart.
+        # for durable provenance. The supervision epoch is initialized after this
+        # backfill so legacy rows remain historical instead of becoming new audit work.
+        # The NOT EXISTS predicate makes this safe to run on every schema ensure/restart.
         legacy_turns = conn.execute(
             "SELECT t.* FROM turns t "
             "WHERE NOT EXISTS ("

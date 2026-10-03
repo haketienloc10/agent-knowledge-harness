@@ -381,6 +381,11 @@ class SupervisorBroker:
     def __init__(self, path: Path, *, broker_id: str = BROKER_ID):
         self.path = path
         self.broker_id = _required_text(broker_id, "broker_id")
+        # Establish the supervision epoch at broker construction time. A broker
+        # enabled on an established workspace starts from the current durable tail;
+        # a broker created before any work naturally starts from seq 0.
+        with self._connect() as conn:
+            self._ensure_state(conn)
 
     def _connect(self) -> sqlite3.Connection:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -393,13 +398,225 @@ class SupervisorBroker:
 
     def _ensure_state(self, conn: sqlite3.Connection) -> None:
         now = time.time_ns()
-        conn.execute(
+        latest_row = conn.execute(
+            "SELECT COALESCE(MAX(seq), 0) AS max_seq FROM slp_events"
+        ).fetchone()
+        latest_seq = int(latest_row["max_seq"])
+        inserted = conn.execute(
             "INSERT OR IGNORE INTO supervisor_broker_state("
-            "broker_id, last_processed_seq, health_status, last_error, "
-            "last_error_at_ns, updated_at_ns"
-            ") VALUES (?, 0, 'healthy', NULL, NULL, ?)",
-            (self.broker_id, now),
+            "broker_id, last_processed_seq, supervision_floor_seq, health_status, "
+            "last_error, last_error_at_ns, updated_at_ns"
+            ") VALUES (?, ?, ?, 'healthy', NULL, NULL, ?)",
+            (self.broker_id, latest_seq, latest_seq, now),
+        ).rowcount == 1
+        state = conn.execute(
+            "SELECT last_processed_seq, supervision_floor_seq "
+            "FROM supervisor_broker_state WHERE broker_id = ?",
+            (self.broker_id,),
+        ).fetchone()
+        if state is None:
+            raise RuntimeError("Supervisor broker state was not persisted")
+
+        floor_value = state["supervision_floor_seq"]
+        if inserted:
+            # First enablement intentionally skips historical audit work, but derived
+            # runtime projections that constrain future work still need the exact
+            # state at the epoch boundary.
+            self._rebuild_write_scope_projection(conn, floor_seq=latest_seq)
+        elif floor_value is None:
+            # Upgrade/pre-release repair: preserve closure semantics for already-open
+            # cases before skipping the remaining historical ledger, and reconstruct
+            # active ownership so future R3 checks include pre-floor writers.
+            previous_cursor = int(state["last_processed_seq"])
+            self._rebuild_write_scope_projection(conn, floor_seq=latest_seq)
+            self._reconcile_pre_floor_transitions(
+                conn,
+                after_seq=previous_cursor,
+                floor_seq=latest_seq,
+            )
+            conn.execute(
+                "UPDATE supervisor_broker_state SET supervision_floor_seq = ?, "
+                "last_processed_seq = CASE "
+                "WHEN last_processed_seq < ? THEN ? ELSE last_processed_seq END, "
+                "updated_at_ns = ? WHERE broker_id = ?",
+                (latest_seq, latest_seq, latest_seq, now, self.broker_id),
+            )
+
+        self._close_pre_floor_r5_cases(conn)
+
+    def _supervision_floor_seq(self, conn: sqlite3.Connection) -> int:
+        row = conn.execute(
+            "SELECT supervision_floor_seq FROM supervisor_broker_state "
+            "WHERE broker_id = ?",
+            (self.broker_id,),
+        ).fetchone()
+        if row is None:
+            raise RuntimeError("Supervisor broker state was not persisted")
+        value = row["supervision_floor_seq"]
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise RuntimeError("Supervisor supervision floor is invalid")
+        return value
+
+    def supervision_floor_seq(self) -> int:
+        with self._connect() as conn:
+            self._ensure_state(conn)
+            return self._supervision_floor_seq(conn)
+
+    def _close_pre_floor_r5_cases(self, conn: sqlite3.Connection) -> int:
+        floor_seq = self._supervision_floor_seq(conn)
+        if floor_seq <= 0:
+            return 0
+        now = time.time_ns()
+        cursor = conn.execute(
+            "UPDATE supervisor_cases "
+            "SET status = 'CLOSED', closed_event_seq = COALESCE(closed_event_seq, ?), "
+            "updated_at_ns = ? "
+            "WHERE rule = 'R5' AND status != 'CLOSED' "
+            "AND EXISTS ("
+            "SELECT 1 FROM slp_events e "
+            "WHERE e.event_type = 'peer.response' "
+            "AND e.turn_id = supervisor_cases.turn_id "
+            "AND e.seq <= ?"
+            ")",
+            (floor_seq, now, floor_seq),
         )
+        return int(cursor.rowcount)
+
+    def _rebuild_write_scope_projection(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        floor_seq: int,
+    ) -> None:
+        if isinstance(floor_seq, bool) or not isinstance(floor_seq, int) or floor_seq < 0:
+            raise ValueError("floor_seq must be a non-negative integer")
+
+        conn.execute("DELETE FROM write_scope_claims")
+        rows = conn.execute(
+            "SELECT seq, event_type, repository, payload_json, created_at_ns "
+            "FROM slp_events WHERE seq <= ? "
+            "AND event_type IN ('write_scope.claimed', 'write_scope.released') "
+            "ORDER BY seq ASC",
+            (floor_seq,),
+        ).fetchall()
+        for row in rows:
+            payload = json.loads(row["payload_json"])
+            event_type = row["event_type"]
+            if event_type == "write_scope.claimed":
+                claim_id = payload.get("claim_id")
+                owner = payload.get("owner")
+                scope = self._scope_payload(payload)
+                repository = row["repository"]
+                if (
+                    not isinstance(claim_id, str)
+                    or not claim_id.strip()
+                    or not isinstance(owner, str)
+                    or not owner.strip()
+                    or scope is None
+                    or not isinstance(repository, str)
+                    or not repository
+                ):
+                    continue
+                created_at_ns = int(row["created_at_ns"])
+                conn.execute(
+                    "INSERT OR IGNORE INTO write_scope_claims("
+                    "claim_id, claimed_event_seq, released_event_seq, repository, "
+                    "owner, scope_json, active, created_at_ns, updated_at_ns"
+                    ") VALUES (?, ?, NULL, ?, ?, ?, 1, ?, ?)",
+                    (
+                        claim_id.strip(),
+                        int(row["seq"]),
+                        repository,
+                        owner.strip(),
+                        json.dumps(
+                            scope,
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                        ),
+                        created_at_ns,
+                        created_at_ns,
+                    ),
+                )
+                continue
+
+            claim_id = payload.get("claim_id")
+            if not isinstance(claim_id, str) or not claim_id.strip():
+                continue
+            conn.execute(
+                "UPDATE write_scope_claims SET active = 0, released_event_seq = ?, "
+                "updated_at_ns = ? WHERE claim_id = ? AND active = 1",
+                (
+                    int(row["seq"]),
+                    int(row["created_at_ns"]),
+                    claim_id.strip(),
+                ),
+            )
+
+    def _close_runtime_blocked_from_peer_response(
+        self,
+        conn: sqlite3.Connection,
+        event: dict[str, Any],
+    ) -> int:
+        session_id = event.get("session_id")
+        if not isinstance(session_id, str) or not session_id:
+            return 0
+        return self._close_cases(
+            conn,
+            event_seq=int(event["seq"]),
+            predicate=lambda case: (
+                case["rule"] == "R4"
+                and case["details"].get("runtime_blocked") is True
+                and case["details"].get("session_id") == session_id
+            ),
+        )
+
+    def _reconcile_pre_floor_transitions(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        after_seq: int,
+        floor_seq: int,
+    ) -> int:
+        if (
+            isinstance(after_seq, bool)
+            or not isinstance(after_seq, int)
+            or after_seq < 0
+            or isinstance(floor_seq, bool)
+            or not isinstance(floor_seq, int)
+            or floor_seq < after_seq
+        ):
+            raise ValueError("invalid pre-floor reconciliation range")
+
+        rows = conn.execute(
+            "SELECT * FROM slp_events WHERE seq > ? AND seq <= ? "
+            "ORDER BY seq ASC",
+            (after_seq, floor_seq),
+        ).fetchall()
+        closed = 0
+        for row in rows:
+            event = dict(row)
+            event["payload"] = json.loads(event.pop("payload_json"))
+            event_type = event["event_type"]
+            if event_type == "peer.response":
+                closed += self._close_runtime_blocked_from_peer_response(conn, event)
+            elif event_type == "lead.disposition":
+                _, event_closed = self._process_lead_disposition(conn, event)
+                closed += event_closed
+            elif event_type == "candidate.reconciled":
+                _, event_closed = self._process_candidate_reconciled(conn, event)
+                closed += event_closed
+            elif event_type == "dependency.consumption_resolved":
+                _, event_closed = self._process_dependency_consumption_resolved(
+                    conn, event
+                )
+                closed += event_closed
+            elif event_type == "write_scope.released":
+                _, event_closed = self._process_write_scope_release(conn, event)
+                closed += event_closed
+            elif event_type == "peer.signal_resolved":
+                _, event_closed = self._process_peer_signal_resolved(conn, event)
+                closed += event_closed
+        return closed
 
     def mark_retrying(self, error: BaseException) -> None:
         message = f"{type(error).__name__}: {error}"
@@ -650,17 +867,7 @@ class SupervisorBroker:
                     )
                 )
 
-        session_id = event.get("session_id")
-        if isinstance(session_id, str) and session_id:
-            closed += self._close_cases(
-                conn,
-                event_seq=int(event["seq"]),
-                predicate=lambda case: (
-                    case["rule"] == "R4"
-                    and case["details"].get("runtime_blocked") is True
-                    and case["details"].get("session_id") == session_id
-                ),
-            )
+        closed += self._close_runtime_blocked_from_peer_response(conn, event)
 
         work_item_id = event.get("work_item_id")
         revision = event.get("work_item_revision")
@@ -992,12 +1199,18 @@ class SupervisorBroker:
             or not isinstance(current_revision, int)
         ):
             return 0, 0
+        supervision_floor_seq = self._supervision_floor_seq(conn)
         stale_rows = conn.execute(
             "SELECT * FROM slp_events "
             "WHERE event_type = 'peer.response' AND work_item_id = ? "
-            "AND seq < ? AND work_item_revision < ? "
+            "AND seq > ? AND seq < ? AND work_item_revision < ? "
             "ORDER BY seq ASC",
-            (work_item_id, int(event["seq"]), current_revision),
+            (
+                work_item_id,
+                supervision_floor_seq,
+                int(event["seq"]),
+                current_revision,
+            ),
         ).fetchall()
         opened = 0
         for stale in stale_rows:
@@ -1030,6 +1243,62 @@ class SupervisorBroker:
                 break
             if reconciled:
                 continue
+
+            # One unresolved stale candidate needs one active R5 case. If a
+            # newer material revision arrives before review, refresh the existing
+            # unreviewed case in place so its AuditPacket/Lead locator points at the
+            # latest canonical revision. Once a finding exists, preserve that audit
+            # history by closing the superseded case and opening one fresh case for
+            # the newer revision instead of mutating already-reviewed evidence.
+            active_case = conn.execute(
+                "SELECT c.*, f.case_id AS finding_case_id "
+                "FROM supervisor_cases c "
+                "LEFT JOIN supervisor_findings f ON f.case_id = c.case_id "
+                "WHERE c.rule = 'R5' AND c.turn_id = ? AND c.work_item_id = ? "
+                "AND c.status != 'CLOSED' "
+                "ORDER BY c.opened_event_seq DESC LIMIT 1",
+                (turn_id, work_item_id),
+            ).fetchone()
+            if active_case is not None:
+                active_revision = active_case["work_item_revision"]
+                if (
+                    isinstance(active_revision, int)
+                    and not isinstance(active_revision, bool)
+                    and active_revision >= current_revision
+                ):
+                    continue
+
+                if (
+                    active_case["status"] == "OPEN"
+                    and active_case["finding_case_id"] is None
+                ):
+                    active_details = json.loads(active_case["details_json"])
+                    active_details["current_revision"] = current_revision
+                    conn.execute(
+                        "UPDATE supervisor_cases SET work_item_revision = ?, "
+                        "details_json = ?, updated_at_ns = ? "
+                        "WHERE case_id = ? AND status = 'OPEN'",
+                        (
+                            current_revision,
+                            json.dumps(
+                                active_details,
+                                ensure_ascii=False,
+                                separators=(",", ":"),
+                                sort_keys=True,
+                                allow_nan=False,
+                            ),
+                            time.time_ns(),
+                            active_case["case_id"],
+                        ),
+                    )
+                    continue
+
+                conn.execute(
+                    "UPDATE supervisor_cases SET status = 'CLOSED', "
+                    "closed_event_seq = ?, updated_at_ns = ? "
+                    "WHERE case_id = ? AND status != 'CLOSED'",
+                    (int(event["seq"]), time.time_ns(), active_case["case_id"]),
+                )
 
             opened += int(
                 self._open_case(

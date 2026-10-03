@@ -131,6 +131,20 @@ grep -Fq '"subscription_started"' "$supervisor_broker" || \
   fail 'Supervisor broker must wait for Herdr subscription acknowledgement'
 grep -Fq 'candidate.reconciled' "$supervisor_broker" || \
   fail 'Supervisor broker must close R5 only from explicit stale-candidate evidence'
+grep -Fq 'supervision_floor_seq' "$mcp_project/core.py" || \
+  fail 'Supervisor broker state must persist an immutable supervision history floor'
+grep -Fq '_rebuild_write_scope_projection' "$supervisor_broker" || \
+  fail 'Supervisor epoch bootstrap must rebuild active write-scope projection state'
+grep -Fq '_reconcile_pre_floor_transitions' "$supervisor_broker" || \
+  fail 'Supervisor epoch bootstrap must reconcile queued closure transitions before advancing the cursor'
+grep -Fq 'AND seq > ? AND seq < ? AND work_item_revision < ?' "$supervisor_broker" || \
+  fail 'R5 stale-candidate scans must exclude pre-supervision Peer history'
+grep -Fq "WHERE c.rule = 'R5' AND c.turn_id = ? AND c.work_item_id = ?" "$supervisor_broker" || \
+  fail 'R5 must coalesce later revisions onto one active stale-turn case'
+grep -Fq 'active_details["current_revision"] = current_revision' "$supervisor_broker" || \
+  fail 'R5 unreviewed coalescing must refresh the case to the latest Work Item revision'
+grep -Fq 'finding_case_id' "$supervisor_broker" || \
+  fail 'R5 revision refresh must preserve reviewed finding history by superseding reviewed cases'
 for rule in R1 R2 R3 R4 R5; do
   grep -Fq "\"$rule\":" "$supervisor_control" || \
     fail "Supervisor AuditPacket missing deterministic rule contract: $rule"
@@ -159,6 +173,7 @@ for pattern in \
   'write_scope.claimed/released' \
   'autonomous E2E-08 state-machine integration test' \
   'normative `rule_contract`' \
+  'supervision_floor_seq' \
   'R1: actual Peer response exists without an explicit Lead disposition' \
   'bash scripts/e2e-autonomous-supervisor.sh <repository-name>'; do
   grep -Fq -- "$pattern" "$supervisor_runtime_doc" || \

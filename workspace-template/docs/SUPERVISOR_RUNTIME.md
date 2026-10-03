@@ -45,6 +45,35 @@ Herdr events                        transient wakeup/lifecycle transport only
 Herdr lifecycle/status events are never used to infer technical acceptance, Work Item state,
 Peer response semantics, or case closure.
 
+## Supervision epoch
+
+`supervisor_broker_state.supervision_floor_seq` is a durable, immutable lower bound for semantic
+history owned by continuous Supervisor governance.
+
+On first broker enablement, the broker records the current `slp_events` tail as both the initial
+cursor and the supervision floor. Therefore an established workspace can enable SLP without
+retroactively auditing hundreds or thousands of historical Peer turns. A workspace that starts the
+broker before any work naturally gets floor `0` and supervises all subsequent events.
+
+When an older workspace upgrades to the floor-aware schema, the broker owns the baseline transition.
+Before advancing the cursor it rebuilds the durable `write_scope_claims` projection from all
+claim/release events through the new floor, so an unreleased pre-floor writer still constrains later
+R3 overlap checks. If an existing broker cursor is behind the new floor, the broker also replays only
+closure-bearing transitions in that gap (for example Lead disposition, candidate reconciliation,
+dependency-consumption resolution, write-scope release, Peer-signal resolution, and a Peer response
+that resolves a runtime-blocked R4 case). It does not open new historical cases while performing this
+repair. Only after that reconciliation does it advance `last_processed_seq` to the floor.
+
+Any already-open R5 case whose source `peer.response` is at or below that floor is administratively
+closed before further review/delivery. The semantic ledger and historical turns are preserved; only
+continuous governance scope changes.
+
+The same reconciliation path repairs a pre-release broker row whose `supervision_floor_seq` is
+present but NULL: projection state is rebuilt, pending closure semantics are applied, and both floor
+and cursor are advanced atomically to the current tail. The floor never moves during ordinary broker
+restart. `last_processed_seq` remains the moving replay cursor, while `supervision_floor_seq`
+remains the epoch boundary.
+
 ## Durable semantic loop
 
 ```text
@@ -89,8 +118,14 @@ Rule ids are not opaque to the Supervisor. The packet carries the deterministic 
 - R3: active writable ownership claims overlap in the same repository; the packet includes bounded
   exact overlap pairs so the Supervisor can evaluate the normative predicate without repo access;
 - R4: REOPEN_REQUEST / DEPENDENCY_REQUEST / BLOCKED remains unresolved;
-- R5: every unreconciled Peer response belonging to an older material Work Item revision gets its
-  own stale-candidate case; a terminal superseded/abandoned reconciliation is not reopened.
+- R5: every unreconciled Peer response after the durable `supervision_floor_seq` that belongs to
+  an older material Work Item revision gets a stale-candidate case. One unresolved stale turn has
+  at most one active R5 case. If a newer material revision arrives before review, the same case is
+  refreshed to the latest revision. If a finding already exists, that reviewed case is closed as
+  superseded and one fresh case is opened for the newer revision, preserving prior audit/delivery
+  history without presenting a stale locator. After explicit reconciliation, a still-live candidate
+  may become stale again on a later material revision. A terminal superseded/abandoned
+  reconciliation is not reopened.
 
 Supervisor evaluates the bounded packet against that exact contract. It must not reinterpret a
 rule from perceived severity, implementation quality, or technical outcome. A prior disposition
@@ -184,13 +219,19 @@ The runtime now emits/records the semantic inputs consumed by the deterministic 
   passed with a disposition must exactly match the canonical locator captured in that turn's
   TaskPacket or the write fails closed;
 - pre-semantic-ledger workspaces are upgraded idempotently: any canonical row already present in
-  `turns` but missing its `peer.response` ledger event is backfilled exactly once, preserving
-  legacy candidates for R1/R5 governance;
+  `turns` but missing its `peer.response` ledger event is backfilled exactly once for durable
+  historical provenance. First Supervisor enablement baselines at the current semantic tail, so
+  those pre-epoch rows are not retroactively replayed as new R1/R5 governance work;
 - TaskGraph `replan` / `block` decisions require explicit `owner` and
   `return_checkpoint`; both are persisted in the exact Lead disposition reason;
 - R5 stale candidates do not close merely because another current-revision Peer response appears.
-  Lead records exact stale-candidate reconciliation with `record_candidate_reconciliation`, which
-  emits `candidate.reconciled` without rewriting the stale turn's historical disposition.
+  R5 only considers Peer responses strictly after `supervision_floor_seq`. A later Work Item
+  revision refreshes an unreviewed active R5 case to the newest revision; if that case already has
+  a finding, it is closed as superseded and replaced by one new active case so historical finding
+  evidence is retained while current review/delivery locators remain canonical. Lead records exact
+  stale-candidate reconciliation with
+  `record_candidate_reconciliation`, which emits `candidate.reconciled` without rewriting the
+  stale turn's historical disposition.
 
 The current `["*"]` claim mirrors the actual qiqi_delegate same-repository serialization
 boundary. It is intentionally conservative and does not replace Lead's finer-grained write-scope

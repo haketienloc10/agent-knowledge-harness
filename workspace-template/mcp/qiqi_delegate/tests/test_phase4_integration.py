@@ -718,11 +718,14 @@ class Phase4SemanticStoreTests(unittest.TestCase):
                     ),
                 )
 
-            # The first broker connection performs the legacy backfill and then starts
-            # its own explicit BEGIN IMMEDIATE transaction. This is the upgrade path that
-            # previously failed with "cannot start a transaction within a transaction".
-            broker_result = SupervisorBroker(db_path).process_pending()
-            self.assertEqual(broker_result["processed"], 1)
+            # The first broker connection performs the legacy backfill, establishes
+            # the supervision epoch at the resulting semantic tail, and then starts
+            # its own explicit transaction. Historical turns remain in the ledger but
+            # are not replayed as newly supervised work.
+            broker = SupervisorBroker(db_path)
+            self.assertEqual(broker.supervision_floor_seq(), 1)
+            broker_result = broker.process_pending()
+            self.assertEqual(broker_result["processed"], 0)
 
             upgraded = SessionStore(db_path)
             first = upgraded.list_slp_events()
