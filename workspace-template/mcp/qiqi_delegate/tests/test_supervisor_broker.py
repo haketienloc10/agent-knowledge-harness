@@ -629,17 +629,21 @@ class SupervisorBrokerTests(unittest.TestCase):
             )
             self.assertEqual(open_case["status"], "OPEN")
 
-            disposition_seq = store.record_lead_disposition(
+            disposition = store.record_lead_disposition(
                 turn_id="turn-queued-closure",
                 action="accept",
                 reason="accepted before epoch upgrade completed",
                 work_item_id="e2e:queued-closure",
                 work_item_revision=1,
             )
+            disposition_seq = int(disposition["event_seq"])
             with sqlite3.connect(db_path) as conn:
                 old_cursor = conn.execute(
                     "SELECT last_processed_seq FROM supervisor_broker_state "
                     "WHERE broker_id = 'slp-supervisor'"
+                ).fetchone()[0]
+                latest_seq = conn.execute(
+                    "SELECT COALESCE(MAX(seq), 0) FROM slp_events"
                 ).fetchone()[0]
                 self.assertLess(old_cursor, disposition_seq)
                 conn.executescript(
@@ -673,8 +677,8 @@ class SupervisorBrokerTests(unittest.TestCase):
             replay = upgraded.process_pending()
 
         r1_case = next(case for case in cases if case["rule"] == "R1")
-        self.assertEqual(floor, disposition_seq)
-        self.assertEqual(cursor, disposition_seq)
+        self.assertEqual(floor, latest_seq)
+        self.assertEqual(cursor, latest_seq)
         self.assertEqual(r1_case["status"], "CLOSED")
         self.assertEqual(r1_case["closed_event_seq"], disposition_seq)
         self.assertEqual(replay["processed"], 0)
