@@ -161,8 +161,13 @@ finding values are written in Vietnamese using the repository's STE-lite princip
   `disposition`, `turn`, `revision`, or rule ids.
 
 The per-case prompt repeats this language contract so a persistent Supervisor cannot silently fall
-back to English after later turns or schema-retry prompts. `_RULE_CONTRACTS` remain unchanged as
-the normative deterministic machine semantics; STE-lite controls only human-facing finding text.
+back to English after later turns or schema-retry prompts. Persistent control-plane state also stores
+a SHA-256 fingerprint of `SUPERVISOR_AGENTS`. If that fingerprint changes, `ensure_started()`
+treats the existing `slp-control` topology as stale, closes it, rewrites the isolated
+`AGENTS.md`, and starts fresh Lead/Supervisor agents before reuse. Existing workspaces gain the
+fingerprint column with an empty default, so the first run after this upgrade recreates the old
+Supervisor instead of retaining stale instructions. `_RULE_CONTRACTS` remain unchanged as the
+normative deterministic machine semantics; STE-lite controls only human-facing finding text.
 
 Runtime validation rejects extra fields, including action/decision/delegation/patch/tool-call
 fields. Supervisor output is persisted as structured governance evidence, not as technical
