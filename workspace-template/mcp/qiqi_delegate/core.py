@@ -867,14 +867,11 @@ class SessionStore:
             row["name"] if isinstance(row, sqlite3.Row) else row[1]
             for row in conn.execute("PRAGMA table_info(supervisor_broker_state)").fetchall()
         }
-        # supervision_floor_seq is an immutable epoch boundary. For an
-        # existing broker-state table, defer initialization until after legacy turns
-        # have been backfilled into slp_events so the entire pre-upgrade history is
-        # covered by the baseline.
-        initialize_supervision_floor = (
-            "supervision_floor_seq" not in broker_state_columns
-        )
-        if initialize_supervision_floor:
+        # supervision_floor_seq is an immutable epoch boundary. Existing
+        # broker rows keep this column NULL until SupervisorBroker can reconcile
+        # pending semantic closures and derived projections before advancing its
+        # replay cursor. The schema layer must not skip semantic transitions.
+        if "supervision_floor_seq" not in broker_state_columns:
             conn.execute(
                 "ALTER TABLE supervisor_broker_state "
                 "ADD COLUMN supervision_floor_seq INTEGER"
@@ -924,19 +921,6 @@ class SessionStore:
                 work_item_revision=work_item_revision,
                 payload={"backfilled_from": "turns"},
                 created_at_ns=int(turn["created_at_ns"]),
-            )
-
-        if initialize_supervision_floor:
-            latest_seq_row = conn.execute(
-                "SELECT COALESCE(MAX(seq), 0) AS max_seq FROM slp_events"
-            ).fetchone()
-            latest_seq = int(latest_seq_row["max_seq"])
-            conn.execute(
-                "UPDATE supervisor_broker_state "
-                "SET supervision_floor_seq = ?, "
-                "last_processed_seq = CASE "
-                "WHEN last_processed_seq < ? THEN ? ELSE last_processed_seq END",
-                (latest_seq, latest_seq, latest_seq),
             )
 
         # Schema ensure may perform DML for legacy semantic backfill. Callers such as
