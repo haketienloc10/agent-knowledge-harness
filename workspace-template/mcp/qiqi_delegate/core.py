@@ -748,6 +748,8 @@ class SessionStore:
                 broker_id TEXT PRIMARY KEY,
                 last_processed_seq INTEGER NOT NULL DEFAULT 0
                     CHECK (last_processed_seq >= 0),
+                supervision_floor_seq INTEGER NOT NULL DEFAULT 0
+                    CHECK (supervision_floor_seq >= 0),
                 health_status TEXT NOT NULL DEFAULT 'healthy'
                     CHECK (health_status IN ('healthy', 'retrying')),
                 last_error TEXT,
@@ -865,6 +867,25 @@ class SessionStore:
             row["name"] if isinstance(row, sqlite3.Row) else row[1]
             for row in conn.execute("PRAGMA table_info(supervisor_broker_state)").fetchall()
         }
+        # supervision_floor_seq is an immutable epoch boundary. Existing
+        # Supervisor-enabled workspaces are baselined at the current semantic-ledger
+        # tail when this column first appears so future R5 revision events cannot
+        # resurrect pre-upgrade Peer history.
+        if "supervision_floor_seq" not in broker_state_columns:
+            conn.execute(
+                "ALTER TABLE supervisor_broker_state "
+                "ADD COLUMN supervision_floor_seq INTEGER"
+            )
+            latest_seq_row = conn.execute(
+                "SELECT COALESCE(MAX(seq), 0) AS max_seq FROM slp_events"
+            ).fetchone()
+            latest_seq = int(latest_seq_row["max_seq"])
+            conn.execute(
+                "UPDATE supervisor_broker_state SET supervision_floor_seq = ?",
+                (latest_seq,),
+            )
+            broker_state_columns.add("supervision_floor_seq")
+
         broker_state_additions = {
             "health_status": "TEXT NOT NULL DEFAULT 'healthy'",
             "last_error": "TEXT",
