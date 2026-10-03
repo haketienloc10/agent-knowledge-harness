@@ -454,10 +454,11 @@ class SupervisorBrokerTests(unittest.TestCase):
             broker = SupervisorBroker(db_path)
             floor = broker.supervision_floor_seq()
             replay = broker.process_pending()
+            last_processed = broker.last_processed_seq()
 
         self.assertGreater(floor, 0)
         self.assertEqual(replay["processed"], 0)
-        self.assertEqual(broker.last_processed_seq(), floor)
+        self.assertEqual(last_processed, floor)
 
     def test_r5_supervision_floor_excludes_pre_epoch_turns(self) -> None:
         self.record_turn(
