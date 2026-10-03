@@ -147,6 +147,28 @@ Supervisor must return exactly:
 
 or `status=no_issue` with `open_question_for_lead=null`.
 
+The machine contract remains stable and English-shaped: JSON field names, status enum values,
+rule ids, technical names, field paths, and runtime locators are not translated. Human-facing
+finding values are written in Vietnamese using the repository's STE-lite principles:
+
+- `observation` is a short factual description of the bounded rule evidence;
+- each `evidence[]` item states one packet fact and preserves exact field paths/identifiers;
+- `open_question_for_lead` is exactly one Vietnamese question for `status=issue`, leaves the
+  technical decision to Lead, and is `null` for `status=no_issue`;
+- wording prioritizes technical correctness, lack of ambiguity, stable terminology, clarity, and
+  brevity;
+- Supervisor does not translate technical names such as `Lead`, `Peer`, `Work Item`,
+  `disposition`, `turn`, `revision`, or rule ids.
+
+The per-case prompt repeats this language contract so a persistent Supervisor cannot silently fall
+back to English after later turns or schema-retry prompts. Persistent control-plane state also stores
+a SHA-256 fingerprint of `SUPERVISOR_AGENTS`. If that fingerprint changes, `ensure_started()`
+treats the existing `slp-control` topology as stale, closes it, rewrites the isolated
+`AGENTS.md`, and starts fresh Lead/Supervisor agents before reuse. Existing workspaces gain the
+fingerprint column with an empty default, so the first run after this upgrade recreates the old
+Supervisor instead of retaining stale instructions. `_RULE_CONTRACTS` remain unchanged as the
+normative deterministic machine semantics; STE-lite controls only human-facing finding text.
+
 Runtime validation rejects extra fields, including action/decision/delegation/patch/tool-call
 fields. Supervisor output is persisted as structured governance evidence, not as technical
 authority.

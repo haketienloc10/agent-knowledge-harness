@@ -1,0 +1,24 @@
+{
+  "version": 80,
+  "from_ref": "1419f36ab15178f57d13c46851da85049ecc0059",
+  "to_ref": "09304ccb9b12785c6a9e61fde7dac5a4485914a9",
+  "description": "make autonomous Supervisor findings Vietnamese by embedding the repository STE-lite writing contract into persistent Supervisor instructions and every per-case/retry prompt while preserving the existing English-shaped machine contract: keep JSON fields, enum values, rule ids, technical names, field paths, runtime locators, and normative _RULE_CONTRACTS unchanged; require observation, evidence items, and open_question_for_lead to be concise Vietnamese human-facing text; persist a SHA-256 fingerprint of SUPERVISOR_AGENTS so upgraded workspaces recreate stale persistent Supervisor sessions and load the new instruction contract; and add regression/docs/workspace checks for the bilingual contract boundary",
+  "workspace": {
+    "merge": [],
+    "replace": [
+      "workspace-template/docs/SUPERVISOR_RUNTIME.md",
+      "workspace-template/mcp/qiqi_delegate/core.py",
+      "workspace-template/mcp/qiqi_delegate/supervisor_control.py",
+      "workspace-template/mcp/qiqi_delegate/tests/test_supervisor_control.py",
+      "workspace-template/scripts/workspace-check.sh"
+    ],
+    "delete": [],
+    "manual_review": []
+  },
+  "repo": {
+    "merge": [],
+    "replace": [],
+    "delete": [],
+    "manual_review": []
+  }
+}
