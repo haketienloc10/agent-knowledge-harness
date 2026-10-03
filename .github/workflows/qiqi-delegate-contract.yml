@@ -10,6 +10,8 @@ on:
       - 'migrations/**'
       - 'scripts/migrate_workspace.py'
       - 'scripts/tests/**'
+      - 'user-rules-template/**'
+      - 'writing-template/**'
   workflow_dispatch:
 
 permissions:
@@ -113,3 +115,248 @@ jobs:
           bash -n work-item-template/scripts/install-workspace-skill.sh
           bash -n work-item-template/scripts/install-user-skill.sh
           bash -n work-item-template/scripts/remove-legacy-user-mcp.sh
+          bash -n user-rules-template/scripts/install-user-rules.sh
+          bash -n writing-template/scripts/install-user-skill.sh
+      - name: Smoke test user-scope installers
+        run: |
+          set -euo pipefail
+          t="$(mktemp -d)"
+          trap 'rm -rf "$t"' EXIT
+
+          export HOME="$t/home"
+          export CODEX_HOME="$t/codex-home"
+          export CLAUDE_CONFIG_DIR="$t/claude-config"
+          mkdir -p "$HOME"
+
+          bash writing-template/scripts/install-user-skill.sh
+          test -f "$CODEX_HOME/skills/ste-vi/SKILL.md"
+          test -f "$CLAUDE_CONFIG_DIR/skills/ste-vi/SKILL.md"
+          test ! -e "$HOME/.claude/skills/ste-vi"
+          bash writing-template/scripts/install-user-skill.sh
+
+          bash user-rules-template/scripts/install-user-rules.sh
+          grep -q '<!-- AKH: response-rules -->' "$CODEX_HOME/AGENTS.md"
+          grep -q '<!-- AKH: response-rules -->' "$CLAUDE_CONFIG_DIR/CLAUDE.md"
+          test ! -e "$HOME/.claude/CLAUDE.md"
+          bash user-rules-template/scripts/install-user-rules.sh
+
+          shared="$t/shared"
+          mkdir -p "$shared"
+          if bash writing-template/scripts/install-user-skill.sh \
+            --codex-root "$shared" \
+            --claude-root "$shared/ste-vi/claude-skills"; then
+            echo 'nested skill roots must be rejected' >&2
+            exit 1
+          fi
+
+          marker_root="$t/marker-root"
+          mkdir -p "$marker_root/ste-vi"
+          ln -s "$t/external-marker" \
+            "$marker_root/ste-vi/.agent-knowledge-harness-managed"
+          : > "$t/external-marker"
+          if bash writing-template/scripts/install-user-skill.sh \
+            --codex-root "$marker_root" \
+            --claude-root "$t/marker-claude"; then
+            echo 'symlinked management marker must be rejected' >&2
+            exit 1
+          fi
+
+          python3 - "$t" <<'PY'
+          from pathlib import Path
+          import sys
+
+          root = Path(sys.argv[1])
+          claude = root / "mixed-claude.md"
+          codex = root / "mixed-codex.md"
+          start = "<!-- AKH: response-rules -->"
+          end = "<!-- /AKH: response-rules -->"
+          claude.write_bytes(
+              b"prefix\n"
+              + start.encode()
+              + b"\nold\n"
+              + end.encode()
+              + b"\r\nsuffix\r\n"
+          )
+          codex.write_bytes(b"\xef\xbb\xbf# Codex\r\n")
+          PY
+
+          bash user-rules-template/scripts/install-user-rules.sh \
+            --claude-file "$t/mixed-claude.md" \
+            --codex-file "$t/mixed-codex.md"
+
+          python3 - "$t" <<'PY'
+          from pathlib import Path
+          import sys
+
+          root = Path(sys.argv[1])
+          claude = (root / "mixed-claude.md").read_bytes()
+          codex = (root / "mixed-codex.md").read_bytes()
+          marker = b"<!-- /AKH: response-rules -->"
+          marker_end = claude.index(marker) + len(marker)
+          assert claude[marker_end:marker_end + 2] == b"\r\n"
+          assert codex.startswith(b"\xef\xbb\xbf")
+          assert b"# Codex\r\n" in codex
+          PY
+
+          # Deterministic TOCTOU regressions. sitecustomize injects the exact
+          # filesystem races without adding test-only hooks to the installer.
+          hookdir="$t/python-hooks"
+          mkdir -p "$hookdir"
+          cat > "$hookdir/sitecustomize.py" <<'PY'
+          import os
+          import tempfile
+
+          _orig_read = os.read
+          _orig_link = os.link
+          _orig_replace = os.replace
+          _orig_unlink = os.unlink
+          _source_race = os.environ.get("AKH_TEST_SOURCE_RACE")
+          _rollback_target = os.environ.get("AKH_TEST_ROLLBACK_TARGET")
+          _fail_link_target = os.environ.get("AKH_TEST_FAIL_LINK_TARGET")
+          _source_fired = False
+          _rollback_fired = False
+          _link_failed = False
+
+          def _same(left, right):
+              return bool(right) and os.path.abspath(left) == os.path.abspath(right)
+
+          def read(fd, count):
+              global _source_fired
+              if _source_race and not _source_fired:
+                  try:
+                      opened = os.readlink(f"/proc/self/fd/{fd}")
+                  except OSError:
+                      opened = ""
+                  if _same(opened, _source_race):
+                      with open(_source_race, "ab") as handle:
+                          handle.write(b"\n# concurrent source writer\n")
+                          handle.flush()
+                          os.fsync(handle.fileno())
+                      _source_fired = True
+              return _orig_read(fd, count)
+
+          def link(src, dst, *args, **kwargs):
+              global _link_failed
+              if (
+                  _fail_link_target
+                  and not _link_failed
+                  and _same(dst, _fail_link_target)
+                  and os.path.basename(src).startswith(".akh-rules.")
+                  and ".backup." not in os.path.basename(src)
+                  and ".rollback." not in os.path.basename(src)
+              ):
+                  _link_failed = True
+                  raise OSError("injected second-client publish failure")
+              return _orig_link(src, dst, *args, **kwargs)
+
+          def _publish_external(path):
+              parent = os.path.dirname(path)
+              fd, temp = tempfile.mkstemp(dir=parent, prefix=".external-writer.")
+              try:
+                  with os.fdopen(fd, "wb") as handle:
+                      handle.write(b"external-writer\n")
+                      handle.flush()
+                      os.fsync(handle.fileno())
+                  _orig_replace(temp, path)
+              finally:
+                  try:
+                      _orig_unlink(temp)
+                  except FileNotFoundError:
+                      pass
+
+          def replace(src, dst):
+              global _rollback_fired
+              if (
+                  _rollback_target
+                  and not _rollback_fired
+                  and _same(src, _rollback_target)
+                  and os.path.basename(dst).startswith(".akh-rules.rollback.")
+              ):
+                  _publish_external(src)
+                  _rollback_fired = True
+              return _orig_replace(src, dst)
+
+          def unlink(path, *args, **kwargs):
+              global _rollback_fired
+              if (
+                  _rollback_target
+                  and not _rollback_fired
+                  and _same(path, _rollback_target)
+              ):
+                  _publish_external(path)
+                  _rollback_fired = True
+              return _orig_unlink(path, *args, **kwargs)
+
+          os.read = read
+          os.link = link
+          os.replace = replace
+          os.unlink = unlink
+          PY
+
+          source_race_template="$t/source-race-template"
+          cp -R user-rules-template "$source_race_template"
+          if PYTHONPATH="$hookdir" \
+            AKH_TEST_SOURCE_RACE="$source_race_template/rules/response-rules.md" \
+            bash "$source_race_template/scripts/install-user-rules.sh" \
+              --claude-file "$t/source-race-claude.md" \
+              --codex-file "$t/source-race-codex.md"; then
+            echo 'source mutation during snapshot must abort installation' >&2
+            exit 1
+          fi
+          test ! -e "$t/source-race-claude.md"
+          test ! -e "$t/source-race-codex.md"
+
+          rollback_template="$t/rollback-template"
+          cp -R user-rules-template "$rollback_template"
+          printf 'claude-original\n' > "$t/rollback-claude.md"
+          printf 'codex-original\n' > "$t/rollback-codex.md"
+          if PYTHONPATH="$hookdir" \
+            AKH_TEST_ROLLBACK_TARGET="$t/rollback-claude.md" \
+            AKH_TEST_FAIL_LINK_TARGET="$t/rollback-codex.md" \
+            bash "$rollback_template/scripts/install-user-rules.sh" \
+              --claude-file "$t/rollback-claude.md" \
+              --codex-file "$t/rollback-codex.md"; then
+            echo 'injected second-client failure must abort transaction' >&2
+            exit 1
+          fi
+          test "$(cat "$t/rollback-claude.md")" = "external-writer"
+          test "$(cat "$t/rollback-codex.md")" = "codex-original"
+
+
+          skill_race_template="$t/skill-race-template"
+          cp -R writing-template "$skill_race_template"
+          python3 - "$skill_race_template/scripts/install-user-skill.sh" <<'PY'
+          from pathlib import Path
+          import sys
+
+          path = Path(sys.argv[1])
+          text = path.read_text(encoding="utf-8")
+          needle = (
+              '        rename_noreplace(state["stage_target"], state["target"])\n'
+          )
+          injected = (
+              '        rename_noreplace(state["stage_target"], state["target"])\n'
+              '        if state["client"] == "Codex":\n'
+              '            with open(\n'
+              '                os.path.join(state["target"], "SKILL.md"),\n'
+              '                "w",\n'
+              '                encoding="utf-8",\n'
+              '            ) as handle:\n'
+              '                handle.write("external-writer-skill\\n")\n'
+          )
+          if text.count(needle) != 1:
+              raise SystemExit("skill race injection anchor mismatch")
+          path.write_text(text.replace(needle, injected), encoding="utf-8")
+          PY
+
+          skill_codex_root="$t/skill-race-codex"
+          skill_claude_root="$t/skill-race-claude"
+          if bash "$skill_race_template/scripts/install-user-skill.sh" \
+            --codex-root "$skill_codex_root" \
+            --claude-root "$skill_claude_root"; then
+            echo 'post-publish external skill rewrite must abort transaction' >&2
+            exit 1
+          fi
+          test -f "$skill_codex_root/ste-vi/SKILL.md"
+          test "$(cat "$skill_codex_root/ste-vi/SKILL.md")" = "external-writer-skill"
+          test ! -e "$skill_claude_root/ste-vi"
