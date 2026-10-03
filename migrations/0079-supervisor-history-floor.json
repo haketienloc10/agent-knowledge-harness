@@ -1,7 +1,7 @@
 {
   "version": 79,
   "from_ref": "01ffe0926714d60df80acd583cb15cf5287fc1c7",
-  "to_ref": "f799e4fe88153e405cbcdcdec39fb37e4dc0ab0c",
+  "to_ref": "2b7048c86988f4d51a34bcbc637b9fea7d60ee28",
   "description": "bound autonomous Supervisor history to a durable supervision epoch: baseline first enablement and existing broker upgrades at the current semantic tail, advance the broker cursor so pre-epoch events are not replayed, close already-open pre-floor R5 backlog, restrict future R5 scans to post-floor Peer responses, refresh unreviewed R5 cases to the latest Work Item revision, and supersede already-reviewed stale-revision cases with one fresh active case so audit history is preserved without stale Lead locators",
   "workspace": {
     "merge": [],
