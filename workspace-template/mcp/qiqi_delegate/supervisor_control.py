@@ -198,6 +198,7 @@ Không thêm field `action`, `decision`, `disposition`, `implementation`,
 `delegation`, `command`, `patch`, Work Item mutation hoặc tool call.
 """
 
+SUPERVISOR_INSTRUCTION_FINGERPRINT = hashlib.sha256(\n    SUPERVISOR_AGENTS.encode("utf-8")\n).hexdigest()\n
 
 def _required_text(value: Any, label: str) -> str:
     if not isinstance(value, str) or not value.strip():
@@ -496,6 +497,7 @@ class SupervisorControlStore:
         supervisor_home: Path,
         supervisor_capture_dir: Path,
         supervisor_capture_nonce: str,
+        supervisor_instruction_fingerprint: str = SUPERVISOR_INSTRUCTION_FINGERPRINT,
     ) -> dict[str, Any]:
         values = {
             "workspace_id": _required_text(workspace_id, "workspace_id"),
@@ -506,6 +508,10 @@ class SupervisorControlStore:
             "herdr_session": _required_text(herdr_session, "herdr_session"),
             "lead_model": _required_text(lead_model, "lead_model"),
             "supervisor_model": _required_text(supervisor_model, "supervisor_model"),
+            "supervisor_instruction_fingerprint": _required_text(
+                supervisor_instruction_fingerprint,
+                "supervisor_instruction_fingerprint",
+            ),
             "supervisor_home": str(supervisor_home.resolve()),
             "supervisor_capture_dir": str(supervisor_capture_dir.resolve()),
             "supervisor_capture_nonce": _required_text(
@@ -518,9 +524,9 @@ class SupervisorControlStore:
                 "INSERT INTO supervisor_control_plane("
                 "control_id, workspace_id, lead_pane_id, supervisor_pane_id, "
                 "lead_agent_name, supervisor_agent_name, herdr_session, lead_model, "
-                "supervisor_model, supervisor_home, supervisor_capture_dir, "
-                "supervisor_capture_nonce, created_at_ns, updated_at_ns"
-                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "supervisor_model, supervisor_instruction_fingerprint, supervisor_home, "
+                "supervisor_capture_dir, supervisor_capture_nonce, created_at_ns, updated_at_ns"
+                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT(control_id) DO UPDATE SET "
                 "workspace_id=excluded.workspace_id, "
                 "lead_pane_id=excluded.lead_pane_id, "
@@ -530,6 +536,8 @@ class SupervisorControlStore:
                 "herdr_session=excluded.herdr_session, "
                 "lead_model=excluded.lead_model, "
                 "supervisor_model=excluded.supervisor_model, "
+                "supervisor_instruction_fingerprint="
+                "excluded.supervisor_instruction_fingerprint, "
                 "supervisor_home=excluded.supervisor_home, "
                 "supervisor_capture_dir=excluded.supervisor_capture_dir, "
                 "supervisor_capture_nonce=excluded.supervisor_capture_nonce, "
@@ -544,6 +552,7 @@ class SupervisorControlStore:
                     values["herdr_session"],
                     values["lead_model"],
                     values["supervisor_model"],
+                    values["supervisor_instruction_fingerprint"],
                     values["supervisor_home"],
                     values["supervisor_capture_dir"],
                     values["supervisor_capture_nonce"],
@@ -1201,6 +1210,8 @@ class HerdrControlPlane:
                 state.get("herdr_session") == self.session
                 and state.get("lead_model") == self.lead_model
                 and state.get("supervisor_model") == self.supervisor_model
+                and state.get("supervisor_instruction_fingerprint")
+                == SUPERVISOR_INSTRUCTION_FINGERPRINT
             )
             if not identity_matches:
                 await self._discard_stale_control_plane(
@@ -1316,6 +1327,7 @@ class HerdrControlPlane:
                 herdr_session=self.session,
                 lead_model=self.lead_model,
                 supervisor_model=self.supervisor_model,
+                supervisor_instruction_fingerprint=SUPERVISOR_INSTRUCTION_FINGERPRINT,
                 supervisor_home=self.supervisor_home,
                 supervisor_capture_dir=capture_dir,
                 supervisor_capture_nonce=nonce,
