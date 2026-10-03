@@ -1,8 +1,8 @@
 {
   "version": 79,
   "from_ref": "01ffe0926714d60df80acd583cb15cf5287fc1c7",
-  "to_ref": "2b7048c86988f4d51a34bcbc637b9fea7d60ee28",
-  "description": "bound autonomous Supervisor history to a durable supervision epoch: baseline first enablement and existing broker upgrades at the current semantic tail, advance the broker cursor so pre-epoch events are not replayed, close already-open pre-floor R5 backlog, restrict future R5 scans to post-floor Peer responses, refresh unreviewed R5 cases to the latest Work Item revision, and supersede already-reviewed stale-revision cases with one fresh active case so audit history is preserved without stale Lead locators",
+  "to_ref": "3e3744de757436e6bcb4a57a1a07329a0b4552aa",
+  "description": "bound autonomous Supervisor history to a durable supervision epoch: baseline first enablement and existing broker upgrades at the current semantic tail without reopening historical audit work, rebuild pre-floor active write-scope claims so future R3 overlap checks retain live ownership, replay queued closure-only transitions before advancing an existing cursor, repair NULL-floor pre-release rows by advancing both floor and cursor, restrict future R5 scans to post-floor Peer responses, refresh unreviewed R5 cases to the latest Work Item revision, and supersede already-reviewed stale-revision cases with one fresh active case so audit history is preserved without stale Lead locators",
   "workspace": {
     "merge": [],
     "replace": [
