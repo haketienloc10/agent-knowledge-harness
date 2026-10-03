@@ -509,6 +509,176 @@ class SupervisorBrokerTests(unittest.TestCase):
         self.assertEqual(cursor, latest)
         self.assertEqual(replay["processed"], 0)
 
+    def test_first_enable_rebuilds_pre_floor_active_claim_for_future_r3(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            db_path = Path(temp) / "qiqi_delegate.sqlite3"
+            store = SessionStore(db_path)
+            old_claim_seq = store.record_slp_event(
+                event_type="write_scope.claimed",
+                repository="repo-a",
+                payload={
+                    "claim_id": "claim-before-supervisor",
+                    "owner": "peer-old",
+                    "scope": ["src"],
+                },
+            )
+
+            broker = SupervisorBroker(db_path)
+            self.assertEqual(broker.supervision_floor_seq(), old_claim_seq)
+            self.assertEqual(broker.last_processed_seq(), old_claim_seq)
+
+            with sqlite3.connect(db_path) as conn:
+                projected = conn.execute(
+                    "SELECT claim_id, active FROM write_scope_claims "
+                    "WHERE claim_id = 'claim-before-supervisor'"
+                ).fetchone()
+            self.assertEqual(projected, ("claim-before-supervisor", 1))
+
+            store.record_slp_event(
+                event_type="write_scope.claimed",
+                repository="repo-a",
+                payload={
+                    "claim_id": "claim-after-supervisor",
+                    "owner": "peer-new",
+                    "scope": ["src/pricing.py"],
+                },
+            )
+            result = broker.process_pending()
+            cases = broker.list_cases()
+
+        self.assertEqual(result["processed"], 1)
+        r3_cases = [case for case in cases if case["rule"] == "R3"]
+        self.assertEqual(len(r3_cases), 1)
+        self.assertEqual(
+            r3_cases[0]["details"]["claim_ids"],
+            ["claim-after-supervisor", "claim-before-supervisor"],
+        )
+
+    def test_null_floor_repair_advances_cursor_without_historical_r1_replay(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            db_path = Path(temp) / "qiqi_delegate.sqlite3"
+            store = SessionStore(db_path)
+            packet = self.packet(work_item_id="e2e:null-floor", revision=1)
+            store.record_turn(
+                turn_id="turn-before-null-floor-repair",
+                session_id="session-before-null-floor-repair",
+                repository="repo-a",
+                agent="claude",
+                route="claude-balanced",
+                state="settled",
+                native_turn_id=None,
+                packet=packet,
+                agent_response="historical candidate",
+            )
+            with sqlite3.connect(db_path) as conn:
+                latest = conn.execute(
+                    "SELECT COALESCE(MAX(seq), 0) FROM slp_events"
+                ).fetchone()[0]
+                conn.executescript(
+                    """
+                    DROP TABLE supervisor_broker_state;
+                    CREATE TABLE supervisor_broker_state (
+                        broker_id TEXT PRIMARY KEY,
+                        last_processed_seq INTEGER NOT NULL DEFAULT 0,
+                        supervision_floor_seq INTEGER,
+                        health_status TEXT NOT NULL DEFAULT 'healthy',
+                        last_error TEXT,
+                        last_error_at_ns INTEGER,
+                        updated_at_ns INTEGER NOT NULL
+                    );
+                    """
+                )
+                conn.execute(
+                    "INSERT INTO supervisor_broker_state("
+                    "broker_id, last_processed_seq, supervision_floor_seq, "
+                    "health_status, last_error, last_error_at_ns, updated_at_ns"
+                    ") VALUES ('slp-supervisor', 0, NULL, 'healthy', NULL, NULL, 1)"
+                )
+
+            broker = SupervisorBroker(db_path)
+            floor = broker.supervision_floor_seq()
+            cursor = broker.last_processed_seq()
+            replay = broker.process_pending()
+            cases = broker.list_cases()
+
+        self.assertEqual(floor, latest)
+        self.assertEqual(cursor, latest)
+        self.assertEqual(replay["processed"], 0)
+        self.assertEqual([case for case in cases if case["rule"] == "R1"], [])
+
+    def test_epoch_upgrade_reconciles_queued_r1_closure_before_advancing_cursor(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            db_path = Path(temp) / "qiqi_delegate.sqlite3"
+            store = SessionStore(db_path)
+            broker = SupervisorBroker(db_path)
+            packet = self.packet(work_item_id="e2e:queued-closure", revision=1)
+            store.record_turn(
+                turn_id="turn-queued-closure",
+                session_id="session-queued-closure",
+                repository="repo-a",
+                agent="claude",
+                route="claude-balanced",
+                state="settled",
+                native_turn_id=None,
+                packet=packet,
+                agent_response="candidate needing disposition",
+            )
+            broker.process_pending()
+            open_case = next(
+                case for case in broker.list_cases() if case["rule"] == "R1"
+            )
+            self.assertEqual(open_case["status"], "OPEN")
+
+            disposition_seq = store.record_lead_disposition(
+                turn_id="turn-queued-closure",
+                action="accept",
+                reason="accepted before epoch upgrade completed",
+                work_item_id="e2e:queued-closure",
+                work_item_revision=1,
+            )
+            with sqlite3.connect(db_path) as conn:
+                old_cursor = conn.execute(
+                    "SELECT last_processed_seq FROM supervisor_broker_state "
+                    "WHERE broker_id = 'slp-supervisor'"
+                ).fetchone()[0]
+                self.assertLess(old_cursor, disposition_seq)
+                conn.executescript(
+                    """
+                    ALTER TABLE supervisor_broker_state RENAME TO supervisor_broker_state_old;
+                    CREATE TABLE supervisor_broker_state (
+                        broker_id TEXT PRIMARY KEY,
+                        last_processed_seq INTEGER NOT NULL DEFAULT 0,
+                        supervision_floor_seq INTEGER,
+                        health_status TEXT NOT NULL DEFAULT 'healthy',
+                        last_error TEXT,
+                        last_error_at_ns INTEGER,
+                        updated_at_ns INTEGER NOT NULL
+                    );
+                    INSERT INTO supervisor_broker_state(
+                        broker_id, last_processed_seq, supervision_floor_seq,
+                        health_status, last_error, last_error_at_ns, updated_at_ns
+                    )
+                    SELECT
+                        broker_id, last_processed_seq, NULL,
+                        health_status, last_error, last_error_at_ns, updated_at_ns
+                    FROM supervisor_broker_state_old;
+                    DROP TABLE supervisor_broker_state_old;
+                    """
+                )
+
+            upgraded = SupervisorBroker(db_path)
+            floor = upgraded.supervision_floor_seq()
+            cursor = upgraded.last_processed_seq()
+            cases = upgraded.list_cases()
+            replay = upgraded.process_pending()
+
+        r1_case = next(case for case in cases if case["rule"] == "R1")
+        self.assertEqual(floor, disposition_seq)
+        self.assertEqual(cursor, disposition_seq)
+        self.assertEqual(r1_case["status"], "CLOSED")
+        self.assertEqual(r1_case["closed_event_seq"], disposition_seq)
+        self.assertEqual(replay["processed"], 0)
+
     def test_r5_supervision_floor_excludes_pre_epoch_turns(self) -> None:
         self.record_turn(
             "turn-pre-floor",
