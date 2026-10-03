@@ -135,8 +135,12 @@ grep -Fq 'supervision_floor_seq' "$mcp_project/core.py" || \
   fail 'Supervisor broker state must persist an immutable supervision history floor'
 grep -Fq 'AND seq > ? AND seq < ? AND work_item_revision < ?' "$supervisor_broker" || \
   fail 'R5 stale-candidate scans must exclude pre-supervision Peer history'
-grep -Fq "WHERE rule = 'R5' AND turn_id = ? AND work_item_id = ?" "$supervisor_broker" || \
+grep -Fq "WHERE c.rule = 'R5' AND c.turn_id = ? AND c.work_item_id = ?" "$supervisor_broker" || \
   fail 'R5 must coalesce later revisions onto one active stale-turn case'
+grep -Fq 'active_details["current_revision"] = current_revision' "$supervisor_broker" || \
+  fail 'R5 unreviewed coalescing must refresh the case to the latest Work Item revision'
+grep -Fq 'finding_case_id' "$supervisor_broker" || \
+  fail 'R5 revision refresh must preserve reviewed finding history by superseding reviewed cases'
 for rule in R1 R2 R3 R4 R5; do
   grep -Fq "\"$rule\":" "$supervisor_control" || \
     fail "Supervisor AuditPacket missing deterministic rule contract: $rule"
