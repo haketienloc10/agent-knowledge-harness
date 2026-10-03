@@ -133,6 +133,10 @@ grep -Fq 'candidate.reconciled' "$supervisor_broker" || \
   fail 'Supervisor broker must close R5 only from explicit stale-candidate evidence'
 grep -Fq 'supervision_floor_seq' "$mcp_project/core.py" || \
   fail 'Supervisor broker state must persist an immutable supervision history floor'
+grep -Fq '_rebuild_write_scope_projection' "$supervisor_broker" || \
+  fail 'Supervisor epoch bootstrap must rebuild active write-scope projection state'
+grep -Fq '_reconcile_pre_floor_transitions' "$supervisor_broker" || \
+  fail 'Supervisor epoch bootstrap must reconcile queued closure transitions before advancing the cursor'
 grep -Fq 'AND seq > ? AND seq < ? AND work_item_revision < ?' "$supervisor_broker" || \
   fail 'R5 stale-candidate scans must exclude pre-supervision Peer history'
 grep -Fq "WHERE c.rule = 'R5' AND c.turn_id = ? AND c.work_item_id = ?" "$supervisor_broker" || \
