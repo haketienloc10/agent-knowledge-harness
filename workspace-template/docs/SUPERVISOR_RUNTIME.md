@@ -109,9 +109,12 @@ Rule ids are not opaque to the Supervisor. The packet carries the deterministic 
 - R4: REOPEN_REQUEST / DEPENDENCY_REQUEST / BLOCKED remains unresolved;
 - R5: every unreconciled Peer response after the durable `supervision_floor_seq` that belongs to
   an older material Work Item revision gets a stale-candidate case. One unresolved stale turn has
-  at most one active R5 case; a later Work Item revision does not duplicate that review. After the
-  case is explicitly reconciled/closed, a still-live candidate may become stale again on a later
-  material revision. A terminal superseded/abandoned reconciliation is not reopened.
+  at most one active R5 case. If a newer material revision arrives before review, the same case is
+  refreshed to the latest revision. If a finding already exists, that reviewed case is closed as
+  superseded and one fresh case is opened for the newer revision, preserving prior audit/delivery
+  history without presenting a stale locator. After explicit reconciliation, a still-live candidate
+  may become stale again on a later material revision. A terminal superseded/abandoned
+  reconciliation is not reopened.
 
 Supervisor evaluates the bounded packet against that exact contract. It must not reinterpret a
 rule from perceived severity, implementation quality, or technical outcome. A prior disposition
@@ -211,9 +214,11 @@ The runtime now emits/records the semantic inputs consumed by the deterministic 
 - TaskGraph `replan` / `block` decisions require explicit `owner` and
   `return_checkpoint`; both are persisted in the exact Lead disposition reason;
 - R5 stale candidates do not close merely because another current-revision Peer response appears.
-  R5 only considers Peer responses strictly after `supervision_floor_seq`, and later Work Item
-  revisions coalesce onto the same active R5 case for an unresolved stale turn instead of opening
-  repeated reviews. Lead records exact stale-candidate reconciliation with
+  R5 only considers Peer responses strictly after `supervision_floor_seq`. A later Work Item
+  revision refreshes an unreviewed active R5 case to the newest revision; if that case already has
+  a finding, it is closed as superseded and replaced by one new active case so historical finding
+  evidence is retained while current review/delivery locators remain canonical. Lead records exact
+  stale-candidate reconciliation with
   `record_candidate_reconciliation`, which emits `candidate.reconciled` without rewriting the
   stale turn's historical disposition.
 
