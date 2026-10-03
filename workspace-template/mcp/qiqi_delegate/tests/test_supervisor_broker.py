@@ -544,7 +544,7 @@ class SupervisorBrokerTests(unittest.TestCase):
         self.assertEqual(cases[0]["turn_id"], "turn-post-floor")
         self.assertEqual(cases[0]["details"]["stale_revision"], 2)
 
-    def test_r5_later_revision_does_not_duplicate_active_stale_turn(self) -> None:
+    def test_r5_later_revision_refreshes_unreviewed_active_case(self) -> None:
         self.record_turn(
             "turn-stale-once",
             work_item_id="e2e:no-r5-loop",
@@ -558,6 +558,8 @@ class SupervisorBrokerTests(unittest.TestCase):
             payload={},
         )
         self.broker.process_pending()
+        first_case = self.cases("R5")[0]
+
         self.store.record_slp_event(
             event_type="work_item.revision_changed",
             work_item_id="e2e:no-r5-loop",
@@ -568,8 +570,73 @@ class SupervisorBrokerTests(unittest.TestCase):
 
         cases = self.cases("R5")
         self.assertEqual(len(cases), 1)
+        self.assertEqual(cases[0]["case_id"], first_case["case_id"])
         self.assertEqual(cases[0]["turn_id"], "turn-stale-once")
         self.assertEqual(cases[0]["status"], "OPEN")
+        self.assertEqual(cases[0]["work_item_revision"], 3)
+        self.assertEqual(cases[0]["details"]["stale_revision"], 1)
+        self.assertEqual(cases[0]["details"]["current_revision"], 3)
+
+    def test_r5_later_revision_supersedes_reviewed_case_without_losing_history(self) -> None:
+        self.record_turn(
+            "turn-reviewed-stale",
+            work_item_id="e2e:r5-reviewed-refresh",
+            revision=1,
+        )
+        self.broker.process_pending()
+        self.store.record_slp_event(
+            event_type="work_item.revision_changed",
+            work_item_id="e2e:r5-reviewed-refresh",
+            work_item_revision=2,
+            payload={},
+        )
+        self.broker.process_pending()
+        first_case = self.cases("R5")[0]
+
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "INSERT INTO supervisor_findings("
+                "case_id, verdict, finding_json, delivered_to_lead_at_ns, "
+                "created_at_ns, updated_at_ns"
+                ") VALUES (?, 'issue', ?, NULL, 1, 1)",
+                (
+                    first_case["case_id"],
+                    json.dumps(
+                        {
+                            "case_id": first_case["case_id"],
+                            "status": "issue",
+                            "observation": "revision 2 stale candidate",
+                            "evidence": ["revision 2"],
+                            "open_question_for_lead": "reconcile?",
+                        }
+                    ),
+                ),
+            )
+
+        revision3_seq = self.store.record_slp_event(
+            event_type="work_item.revision_changed",
+            work_item_id="e2e:r5-reviewed-refresh",
+            work_item_revision=3,
+            payload={},
+        )
+        self.broker.process_pending()
+
+        cases = self.cases("R5")
+        self.assertEqual(len(cases), 2)
+        self.assertEqual(cases[0]["case_id"], first_case["case_id"])
+        self.assertEqual(cases[0]["status"], "CLOSED")
+        self.assertEqual(cases[0]["closed_event_seq"], revision3_seq)
+        self.assertEqual(cases[1]["status"], "OPEN")
+        self.assertEqual(cases[1]["work_item_revision"], 3)
+        self.assertEqual(cases[1]["details"]["current_revision"], 3)
+
+        with sqlite3.connect(self.db_path) as conn:
+            finding_rows = conn.execute(
+                "SELECT case_id, finding_json FROM supervisor_findings "
+                "ORDER BY case_id"
+            ).fetchall()
+        self.assertEqual(len(finding_rows), 1)
+        self.assertEqual(finding_rows[0][0], first_case["case_id"])
 
     def test_r5_can_reopen_after_revalidation_then_later_revision(self) -> None:
         self.record_turn(
