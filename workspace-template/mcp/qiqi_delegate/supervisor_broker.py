@@ -381,6 +381,11 @@ class SupervisorBroker:
     def __init__(self, path: Path, *, broker_id: str = BROKER_ID):
         self.path = path
         self.broker_id = _required_text(broker_id, "broker_id")
+        # Establish the supervision epoch at broker construction time. A broker
+        # enabled on an established workspace starts from the current durable tail;
+        # a broker created before any work naturally starts from seq 0.
+        with self._connect() as conn:
+            self._ensure_state(conn)
 
     def _connect(self) -> sqlite3.Connection:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -393,13 +398,65 @@ class SupervisorBroker:
 
     def _ensure_state(self, conn: sqlite3.Connection) -> None:
         now = time.time_ns()
+        latest_row = conn.execute(
+            "SELECT COALESCE(MAX(seq), 0) AS max_seq FROM slp_events"
+        ).fetchone()
+        latest_seq = int(latest_row["max_seq"])
         conn.execute(
             "INSERT OR IGNORE INTO supervisor_broker_state("
-            "broker_id, last_processed_seq, health_status, last_error, "
-            "last_error_at_ns, updated_at_ns"
-            ") VALUES (?, 0, 'healthy', NULL, NULL, ?)",
-            (self.broker_id, now),
+            "broker_id, last_processed_seq, supervision_floor_seq, health_status, "
+            "last_error, last_error_at_ns, updated_at_ns"
+            ") VALUES (?, ?, ?, 'healthy', NULL, NULL, ?)",
+            (self.broker_id, latest_seq, latest_seq, now),
         )
+        # Older databases gain supervision_floor_seq through schema upgrade. If an
+        # unusual pre-release database left it NULL, baseline it once and never move
+        # it again.
+        conn.execute(
+            "UPDATE supervisor_broker_state SET supervision_floor_seq = ?, "
+            "updated_at_ns = ? WHERE broker_id = ? "
+            "AND supervision_floor_seq IS NULL",
+            (latest_seq, now, self.broker_id),
+        )
+        self._close_pre_floor_r5_cases(conn)
+
+    def _supervision_floor_seq(self, conn: sqlite3.Connection) -> int:
+        row = conn.execute(
+            "SELECT supervision_floor_seq FROM supervisor_broker_state "
+            "WHERE broker_id = ?",
+            (self.broker_id,),
+        ).fetchone()
+        if row is None:
+            raise RuntimeError("Supervisor broker state was not persisted")
+        value = row["supervision_floor_seq"]
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise RuntimeError("Supervisor supervision floor is invalid")
+        return value
+
+    def supervision_floor_seq(self) -> int:
+        with self._connect() as conn:
+            self._ensure_state(conn)
+            return self._supervision_floor_seq(conn)
+
+    def _close_pre_floor_r5_cases(self, conn: sqlite3.Connection) -> int:
+        floor_seq = self._supervision_floor_seq(conn)
+        if floor_seq <= 0:
+            return 0
+        now = time.time_ns()
+        cursor = conn.execute(
+            "UPDATE supervisor_cases "
+            "SET status = 'CLOSED', closed_event_seq = COALESCE(closed_event_seq, ?), "
+            "updated_at_ns = ? "
+            "WHERE rule = 'R5' AND status != 'CLOSED' "
+            "AND EXISTS ("
+            "SELECT 1 FROM slp_events e "
+            "WHERE e.event_type = 'peer.response' "
+            "AND e.turn_id = supervisor_cases.turn_id "
+            "AND e.seq <= ?"
+            ")",
+            (floor_seq, now, floor_seq),
+        )
+        return int(cursor.rowcount)
 
     def mark_retrying(self, error: BaseException) -> None:
         message = f"{type(error).__name__}: {error}"
@@ -992,12 +1049,18 @@ class SupervisorBroker:
             or not isinstance(current_revision, int)
         ):
             return 0, 0
+        supervision_floor_seq = self._supervision_floor_seq(conn)
         stale_rows = conn.execute(
             "SELECT * FROM slp_events "
             "WHERE event_type = 'peer.response' AND work_item_id = ? "
-            "AND seq < ? AND work_item_revision < ? "
+            "AND seq > ? AND seq < ? AND work_item_revision < ? "
             "ORDER BY seq ASC",
-            (work_item_id, int(event["seq"]), current_revision),
+            (
+                work_item_id,
+                supervision_floor_seq,
+                int(event["seq"]),
+                current_revision,
+            ),
         ).fetchall()
         opened = 0
         for stale in stale_rows:
@@ -1029,6 +1092,18 @@ class SupervisorBroker:
                 # A lower-revision revalidation does not make this candidate current.
                 break
             if reconciled:
+                continue
+
+            # One unresolved stale candidate needs one active R5 case. A later Work
+            # Item revision must not create another Supervisor review for the same
+            # turn until the existing case has been reconciled/closed.
+            active_case = conn.execute(
+                "SELECT case_id FROM supervisor_cases "
+                "WHERE rule = 'R5' AND turn_id = ? AND work_item_id = ? "
+                "AND status != 'CLOSED' ORDER BY opened_event_seq DESC LIMIT 1",
+                (turn_id, work_item_id),
+            ).fetchone()
+            if active_case is not None:
                 continue
 
             opened += int(
