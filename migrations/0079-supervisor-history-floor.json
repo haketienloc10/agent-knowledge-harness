@@ -1,0 +1,25 @@
+{
+  "version": 79,
+  "from_ref": "01ffe0926714d60df80acd583cb15cf5287fc1c7",
+  "to_ref": "77584d3b490fb7f81b2380022c4e9a2502daecc9",
+  "description": "bound autonomous Supervisor history to a durable supervision epoch: baseline first enablement and existing broker upgrades at the current semantic tail, advance the broker cursor so pre-epoch events are not replayed, close already-open pre-floor R5 backlog, restrict future R5 scans to post-floor Peer responses, and coalesce repeated Work Item revisions onto one active stale-turn case until explicit reconciliation",
+  "workspace": {
+    "merge": [],
+    "replace": [
+      "workspace-template/docs/SUPERVISOR_RUNTIME.md",
+      "workspace-template/mcp/qiqi_delegate/core.py",
+      "workspace-template/mcp/qiqi_delegate/supervisor_broker.py",
+      "workspace-template/mcp/qiqi_delegate/tests/test_phase4_integration.py",
+      "workspace-template/mcp/qiqi_delegate/tests/test_supervisor_broker.py",
+      "workspace-template/scripts/workspace-check.sh"
+    ],
+    "delete": [],
+    "manual_review": []
+  },
+  "repo": {
+    "merge": [],
+    "replace": [],
+    "delete": [],
+    "manual_review": []
+  }
+}
