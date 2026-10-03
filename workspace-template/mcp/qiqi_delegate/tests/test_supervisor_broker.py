@@ -460,6 +460,55 @@ class SupervisorBrokerTests(unittest.TestCase):
         self.assertEqual(replay["processed"], 0)
         self.assertEqual(last_processed, floor)
 
+    def test_schema_upgrade_baselines_existing_broker_state_at_current_tail(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            db_path = Path(temp) / "qiqi_delegate.sqlite3"
+            store = SessionStore(db_path)
+            packet = self.packet(work_item_id="e2e:upgrade-floor", revision=1)
+            store.record_turn(
+                turn_id="turn-before-floor-column",
+                session_id="session-before-floor-column",
+                repository="repo-a",
+                agent="claude",
+                route="claude-balanced",
+                state="settled",
+                native_turn_id=None,
+                packet=packet,
+                agent_response="historical candidate",
+            )
+            with sqlite3.connect(db_path) as conn:
+                conn.executescript(
+                    """
+                    DROP TABLE supervisor_broker_state;
+                    CREATE TABLE supervisor_broker_state (
+                        broker_id TEXT PRIMARY KEY,
+                        last_processed_seq INTEGER NOT NULL DEFAULT 0,
+                        health_status TEXT NOT NULL DEFAULT 'healthy',
+                        last_error TEXT,
+                        last_error_at_ns INTEGER,
+                        updated_at_ns INTEGER NOT NULL
+                    );
+                    """
+                )
+                conn.execute(
+                    "INSERT INTO supervisor_broker_state("
+                    "broker_id, last_processed_seq, health_status, last_error, "
+                    "last_error_at_ns, updated_at_ns"
+                    ") VALUES ('slp-supervisor', 0, 'healthy', NULL, NULL, 1)"
+                )
+                latest = conn.execute(
+                    "SELECT COALESCE(MAX(seq), 0) FROM slp_events"
+                ).fetchone()[0]
+
+            broker = SupervisorBroker(db_path)
+            floor = broker.supervision_floor_seq()
+            cursor = broker.last_processed_seq()
+            replay = broker.process_pending()
+
+        self.assertEqual(floor, latest)
+        self.assertEqual(cursor, latest)
+        self.assertEqual(replay["processed"], 0)
+
     def test_r5_supervision_floor_excludes_pre_epoch_turns(self) -> None:
         self.record_turn(
             "turn-pre-floor",
