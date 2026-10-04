@@ -1,0 +1,31 @@
+version: 1
+workspace_name: qiqi-eval-parallel
+repositories:
+  - name: alpha
+    path: repos/alpha
+    role: independent alpha service
+    depends_on: []
+    files:
+      AGENTS.md: |
+        # Eval repository policy
+        Work only inside this Git root. Implement the delegated TaskPacket and return verification evidence to QiQi.
+      state.txt: |
+        alpha=old
+      verify.py: |
+        from pathlib import Path
+        value = Path("state.txt").read_text(encoding="utf-8").strip()
+        raise SystemExit(0 if value == "alpha=new" else 1)
+  - name: beta
+    path: repos/beta
+    role: independent beta service
+    depends_on: []
+    files:
+      AGENTS.md: |
+        # Eval repository policy
+        Work only inside this Git root. Implement the delegated TaskPacket and return verification evidence to QiQi.
+      state.txt: |
+        beta=old
+      verify.py: |
+        from pathlib import Path
+        value = Path("state.txt").read_text(encoding="utf-8").strip()
+        raise SystemExit(0 if value == "beta=new" else 1)
