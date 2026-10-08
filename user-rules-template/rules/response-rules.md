@@ -68,49 +68,64 @@ Không tạo HTML tương tác chỉ để trang trí.
 
 ## Khả năng truy vết code từ câu trả lời
 
-Khi câu trả lời liên quan đến việc đọc, phân tích, sửa hoặc review code, phải giúp người đọc có thể lần ngược lại implementation để tự kiểm chứng. Với các câu trả lời này, dùng cấu trúc bên dưới thay cho cấu trúc 5 mục ở mục "Chất lượng câu trả lời". Ngưỡng "việc nhỏ" ở mục đó vẫn áp dụng.
+Khi phân tích code, phải giúp người đọc truy ngược từ kết quả quan sát được đến nguồn tạo ra kết quả đó. Ưu tiên **cây phụ thuộc giá trị và điều kiện** như ví dụ bên dưới, thay vì mặc định liệt kê tuần tự các file hoặc dùng cấu trúc 5 mục. Với thay đổi code, bug liên quan thứ tự thực thi hoặc side effect, bổ sung execution flow khi cần. Việc nhỏ chỉ cần nêu kết quả và nơi kiểm chứng.
 
-Ưu tiên mô tả theo execution flow thực tế của code:
+### Cách trình bày
 
-1. **Điểm bắt đầu**
-   - Chỉ rõ entry point của chức năng: route, command, handler, component, public method, event hoặc API tương ứng.
-   - Nêu `file path` và symbol/function/class liên quan.
+- **Bắt đầu từ kết quả cần giải thích:** UI field, API response, persisted value, state hoặc behavior. Nếu có UI, nêu màn hình, tab và trường liên quan.
+- **Truy ngược nguồn của từng giá trị:** ghi công thức ngay tại node cha; thụt vào bên dưới các operand và nguồn tạo ra chúng. Dùng `→` cho quan hệ phụ thuộc. Không thay cây nguồn gốc bằng danh sách file.
+- **Gắn module vào tên giá trị:** ưu tiên dạng `module.field` hoặc `module.object.field` (ví dụ `corgi.line[i].ticketFare`, `searchAir.line[i].ticketTax`, `gw.fareForOnePerson`). Giải thích ngắn quy ước module và index nếu cần.
+- **Tách các nhánh có điều kiện:** đặt `when <điều kiện>` hoặc `otherwise` ngay dưới phép tính hoặc nhánh tương ứng. Giữ nguyên toán tử, độ ưu tiên và trường hợp biên. Không gộp các nhánh có công thức khác nhau.
+- **Phân biệt đọc và tính toán:** nếu module chỉ map/copy/read một field thì ghi rõ "chỉ đọc", rồi truy tiếp đến nơi thực sự tính giá trị. Không gán phép tính cho module trung gian.
+- **Chỉ ra bằng chứng tại node:** ghi `path/to/File.ext:line` hoặc `Class.method` và dòng liên quan ngay cạnh công thức, nhánh hoặc phép gán. Ưu tiên link đến code khi có thể; không bịa path, symbol hoặc số dòng.
+- **Nêu ranh giới truy vết:** nói rõ module nào được xem là nguồn ngoài và dừng ở đó. Phân biệt giá trị đã xác minh với giả định hoặc nơi chưa truy được.
+- **Giữ cây dễ đọc:** dùng code block `text` và indentation ổn định. Chỉ thêm đoạn giải thích ngoài cây cho quy ước, kết luận hoặc lưu ý không thể hiện gọn trong cây. Khi cây quá lớn, chia theo output hoặc nhánh độc lập, không cắt mất nguồn và điều kiện.
 
-2. **Luồng xử lý chính**
-   - Theo thứ tự execution, chỉ ra code đi từ đâu tới đâu.
-   - Với mỗi bước quan trọng, nêu:
-     - `file path`
-     - function/class/method
-     - vai trò của đoạn code đó
-     - điều kiện nào khiến flow đi sang bước tiếp theo
+### Mẫu mong muốn
 
-3. **Điểm thay đổi**
-   - Chỉ rõ logic được sửa nằm ở đâu trong flow.
-   - Giải thích behavior trước khi sửa và sau khi sửa.
-   - Nếu có nhiều file thay đổi, giải thích quan hệ giữa các thay đổi thay vì chỉ liệt kê file.
+Ví dụ rút gọn về nguồn của giá vé trên UI (chỉ minh họa cách trình bày):
 
-4. **Điểm kết thúc và side effect**
-   - Chỉ ra kết quả cuối cùng được trả về, persist, render, emit hoặc gửi ra ngoài ở đâu.
-   - Nêu side effect quan trọng nếu có, ví dụ database write, state update, API call, event hoặc cache mutation.
+```text
+ticketFare_UI
+  → line[i].ticketFare_UI
+      (item thường: i = 0; interline: i = 0 chiều đi, i = 1 chiều về)
 
-5. **Cách kiểm chứng**
-   - Chỉ ra test liên quan hoặc command đã dùng để verify.
-   - Khi phù hợp, đưa ra một đường kiểm tra ngắn để người đọc có thể tự mở code và xác nhận lại implementation.
+      → corgi.line[i].publishedFare
+          when isPackageRate && !isEnableAOInPackageRate
 
-Không chỉ nói "đã sửa X để xử lý Y". Câu trả lời phải đủ thông tin để người đọc có thể đi theo:
+          corgi.line[i].publishedFare
+            → searchAir.line[i].publishedFare
+                (corgi chỉ đọc; AirSearchResponse.scala:687)
 
-`entry point -> logic chính -> điểm thay đổi -> output/side effect -> verification`
+                searchAir.line[i].publishedFare
+                  → searchAir.pexFareList[ptc].fareForOnePerson
+                      when goods.getPackageRate() == FLG_ON
+                      (AirWebServiceUtil.getPublishedFare)
+                  → không có field
+                      otherwise
 
-Ví dụ, thay vì:
+      → corgi.line[i].ticketFare + cashBack
+          otherwise
 
-"Đã sửa validation trong user service."
+          corgi.line[i].ticketFare
+            → searchAir.line[i].ticketTax
+                (corgi chỉ đọc; AirSearchResponse.scala:688)
 
-Ưu tiên:
+                searchAir.line[i].ticketTax
+                  → gw.fareForOnePerson + searchAir.markup.amount
+                      when GALI
+                  → Σ(flight.getAdultFare()) + searchAir.markup.amount
+                      when LCC
 
-"`POST /users` đi vào `src/routes/users.ts:createUser`, sau đó gọi
-`src/services/user-service.ts:createUser`. Validation email nằm ở
-`validateCreateUser()` trước bước `repository.insert()`. Thay đổi nằm tại đây:
-email trùng trước đây đi tiếp tới database và phụ thuộc unique constraint;
-sau thay đổi, service trả `ConflictError` trước khi insert. Kết quả được map
-thành HTTP 409 tại `src/http/error-handler.ts`. Có thể kiểm chứng bằng
-`tests/users/create-user.test.ts` với case duplicate email."
+          cashBack
+            → -corgi.line[i].markedUpInformation.amount
+                when isPex && có markedUpInformation
+            → 0
+                otherwise
+```
+
+Mẫu chỉ thể hiện cách tổ chức thông tin. Khi phân tích thực tế, phải bổ sung đầy đủ điều kiện, phép tính, nguồn của các giá trị trung gian và vị trí code đã xác minh. Dừng ở ranh giới mà người dùng yêu cầu; không mặc định truy sâu vào hệ thống bên ngoài.
+
+### Khi câu hỏi là bug hoặc thay đổi code
+
+Giữ cây nguồn gốc hoặc sơ đồ tương ứng làm trọng tâm nếu nó giúp kiểm chứng. Bổ sung ngắn gọn: điểm sửa trong flow; behavior trước/sau; output và side effect; test hoặc command kiểm chứng. Khi vấn đề phụ thuộc thứ tự gọi, dùng sequence/flowchart theo quy tắc "Chọn hình thức giải thích" thay vì ép mọi vấn đề vào cây giá trị.
