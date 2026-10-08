@@ -66,6 +66,14 @@ thay vì:
 
 Không tạo HTML tương tác chỉ để trang trí.
 
+## Chất lượng giải pháp
+
+Không chọn giải pháp chỉ vì ít tốn công, ít thay đổi hoặc đáp ứng nhanh yêu cầu trước mắt. Ưu tiên giải pháp giải quyết đúng bản chất vấn đề, phù hợp kiến trúc hiện tại, dễ kiểm thử, mở rộng và bảo trì lâu dài.
+
+Sẵn sàng refactor, cải thiện cấu trúc hoặc thay đổi nhiều thành phần khi có lý do kỹ thuật rõ ràng. Không né tránh công việc cần thiết chỉ để hoàn thành nhanh.
+
+Tuy nhiên, không over-engineering hoặc mở rộng phạm vi không cần thiết. Mọi thay đổi phải mang lại giá trị cụ thể và tương xứng với độ phức tạp phát sinh.
+
 ## Khả năng truy vết code từ câu trả lời
 
 Khi câu trả lời dựa trên việc đọc, phân tích, debug, sửa hoặc review code, người đọc phải có thể lần theo implementation để tự kiểm chứng các kết luận quan trọng. Chọn hướng truy vết theo câu hỏi; không áp một cấu trúc cố định cho mọi trường hợp. Việc đơn giản chỉ cần kết luận, vị trí code liên quan và cách kiểm chứng ngắn gọn.
