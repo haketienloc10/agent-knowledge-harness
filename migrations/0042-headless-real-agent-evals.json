@@ -1,0 +1,43 @@
+{
+  "version": 42,
+  "from_ref": "57067a3ccbee9af81ec7bdfc2f394c13d3cff5e9",
+  "to_ref": "8adbe7dd98cb1618b0462d7d653225e7348a0ba9",
+  "description": "add a headless real-agent evaluation harness for end-to-end QiQi orchestration with isolated fixtures, authoritative native parent result capture, deterministic evidence scoring, and three graph-core MVP scenarios",
+  "workspace": {
+    "merge": [],
+    "replace": [
+      "workspace-template/evals/README.md",
+      "workspace-template/evals/fixtures/retry.yaml",
+      "workspace-template/evals/fixtures/single-repo.yaml",
+      "workspace-template/evals/fixtures/two-independent-repos.yaml",
+      "workspace-template/evals/qiqi_eval/__init__.py",
+      "workspace-template/evals/qiqi_eval/capture.py",
+      "workspace-template/evals/qiqi_eval/fixture.py",
+      "workspace-template/evals/qiqi_eval/parent_driver.py",
+      "workspace-template/evals/qiqi_eval/runner.py",
+      "workspace-template/evals/qiqi_eval/scenario.py",
+      "workspace-template/evals/qiqi_eval/scoring.py",
+      "workspace-template/evals/run.py",
+      "workspace-template/evals/run.sh",
+      "workspace-template/evals/suites/graph-core/01-single-repo.yaml",
+      "workspace-template/evals/suites/graph-core/02-two-independent-repos.yaml",
+      "workspace-template/evals/suites/graph-core/03-retry-after-failed-acceptance.yaml",
+      "workspace-template/evals/tests/test_capture.py",
+      "workspace-template/evals/tests/test_fixture.py",
+      "workspace-template/evals/tests/test_scenario.py",
+      "workspace-template/evals/tests/test_scoring.py",
+      "workspace-template/evals/tests/test_parent_driver.py",
+      "workspace-template/evals/tests/test_runner.py",
+      "workspace-template/instructions/agent-routing.yaml",
+      "workspace-template/docs/examples/agent-routing.codex.yaml"
+    ],
+    "delete": [],
+    "manual_review": []
+  },
+  "repo": {
+    "merge": [],
+    "replace": [],
+    "delete": [],
+    "manual_review": []
+  }
+}
