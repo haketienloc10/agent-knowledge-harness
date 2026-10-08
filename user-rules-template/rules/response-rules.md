@@ -16,7 +16,7 @@
 
 Tránh câu trả lời trừu tượng.
 
-Khi giải thích quyết định, kế hoạch, rủi ro, bug, kiến trúc, trade-off hoặc thay đổi code, dùng ví dụ cụ thể và lập luận nhân quả theo từng bước. Với code, ưu tiên giải thích theo execution flow để người đọc có thể tự truy vết implementation.
+Khi giải thích quyết định, kế hoạch, rủi ro, bug, kiến trúc, trade-off hoặc thay đổi code, dùng ví dụ cụ thể và lập luận nhân quả theo từng bước. Với code, chọn hướng truy vết phù hợp câu hỏi để người đọc có thể tự kiểm chứng implementation.
 
 Cấu trúc đầy đủ bên dưới chỉ dùng khi giải thích bug, kiến trúc, quyết định hoặc thay đổi code từ vài file trở lên. Việc nhỏ thì trả lời ngắn: nêu kết quả và cách kiểm chứng.
 
@@ -68,64 +68,36 @@ Không tạo HTML tương tác chỉ để trang trí.
 
 ## Khả năng truy vết code từ câu trả lời
 
-Khi phân tích code, phải giúp người đọc truy ngược từ kết quả quan sát được đến nguồn tạo ra kết quả đó. Ưu tiên **cây phụ thuộc giá trị và điều kiện** như ví dụ bên dưới, thay vì mặc định liệt kê tuần tự các file hoặc dùng cấu trúc 5 mục. Với thay đổi code, bug liên quan thứ tự thực thi hoặc side effect, bổ sung execution flow khi cần. Việc nhỏ chỉ cần nêu kết quả và nơi kiểm chứng.
+Khi câu trả lời dựa trên việc đọc, phân tích, debug, sửa hoặc review code, người đọc phải có thể lần theo implementation để tự kiểm chứng các kết luận quan trọng. Chọn hướng truy vết theo câu hỏi; không áp một cấu trúc cố định cho mọi trường hợp. Việc đơn giản chỉ cần kết luận, vị trí code liên quan và cách kiểm chứng ngắn gọn.
+
+### Chọn hướng truy vết
+
+- **Nguồn gốc dữ liệu hoặc giá trị:** đi từ kết quả cần giải thích về các nguồn, phép biến đổi, điều kiện và nơi giá trị được tạo ra.
+- **Luồng xử lý hoặc side effect:** đi từ điểm kích hoạt qua những bước thực thi quyết định đến output, thay đổi state hoặc tác động ra bên ngoài.
+- **Điều kiện và nhánh logic:** chỉ ra điều kiện chọn nhánh, kết quả của từng nhánh liên quan và cách xử lý mặc định hoặc trường hợp biên.
+- **Trạng thái và lifecycle:** chỉ ra trạng thái ban đầu, sự kiện hoặc thao tác làm thay đổi trạng thái, và trạng thái tiếp theo.
+- **Kiến trúc và tương tác:** thể hiện trách nhiệm của các thành phần, quan hệ gọi hoặc phụ thuộc, và hướng dữ liệu đi qua chúng.
+- **Bug hoặc thay đổi code:** xác định điểm gây lỗi hoặc điểm sửa, giải thích behavior trước/sau, phạm vi ảnh hưởng và cách kiểm chứng.
+
+Có thể kết hợp nhiều hướng khi cần. Chỉ truy những nhánh giúp trả lời câu hỏi; không mặc định phải bắt đầu từ entry point hoặc truy đến tầng thấp nhất.
+
+### Yêu cầu về bằng chứng
+
+- Gắn kết luận quan trọng với vị trí code có thể mở để kiểm tra: `file path`, symbol/function/class và số dòng khi đã xác minh. Đặt tham chiếu sát logic được giải thích, không dồn thành danh sách file cuối câu trả lời.
+- Làm rõ **quan hệ giữa các bước**: dữ liệu được đọc, truyền tiếp, biến đổi, tính toán hoặc ghi ở đâu; lời gọi nào kích hoạt bước tiếp theo; điều kiện nào làm kết quả thay đổi. Không gán trách nhiệm tính toán cho nơi chỉ đọc hoặc chuyển tiếp dữ liệu.
+- Giữ chính xác tên identifier, biểu thức, thứ tự thực thi và điều kiện rẽ nhánh khi chúng quyết định behavior. Phân biệt đường xử lý chính với nhánh ngoại lệ hoặc fallback.
+- Nêu rõ ranh giới truy vết khi đi qua service, thư viện, API hoặc hệ thống bên ngoài. Phân biệt điều đã xác minh từ code với suy luận, giả định hoặc phần chưa thể kiểm tra.
+- Khi nói về thay đổi hoặc kiểm thử, phân biệt test/command **đã chạy** với cách kiểm chứng **đề xuất**. Không tuyên bố kết quả kiểm thử nếu chưa thực hiện.
 
 ### Cách trình bày
 
-- **Bắt đầu từ kết quả cần giải thích:** UI field, API response, persisted value, state hoặc behavior. Nếu có UI, nêu màn hình, tab và trường liên quan.
-- **Truy ngược nguồn của từng giá trị:** ghi công thức ngay tại node cha; thụt vào bên dưới các operand và nguồn tạo ra chúng. Dùng `→` cho quan hệ phụ thuộc. Không thay cây nguồn gốc bằng danh sách file.
-- **Gắn module vào tên giá trị:** ưu tiên dạng `module.field` hoặc `module.object.field` (ví dụ `corgi.line[i].ticketFare`, `searchAir.line[i].ticketTax`, `gw.fareForOnePerson`). Giải thích ngắn quy ước module và index nếu cần.
-- **Tách các nhánh có điều kiện:** đặt `when <điều kiện>` hoặc `otherwise` ngay dưới phép tính hoặc nhánh tương ứng. Giữ nguyên toán tử, độ ưu tiên và trường hợp biên. Không gộp các nhánh có công thức khác nhau.
-- **Phân biệt đọc và tính toán:** nếu module chỉ map/copy/read một field thì ghi rõ "chỉ đọc", rồi truy tiếp đến nơi thực sự tính giá trị. Không gán phép tính cho module trung gian.
-- **Chỉ ra bằng chứng tại node:** ghi `path/to/File.ext:line` hoặc `Class.method` và dòng liên quan ngay cạnh công thức, nhánh hoặc phép gán. Ưu tiên link đến code khi có thể; không bịa path, symbol hoặc số dòng.
-- **Nêu ranh giới truy vết:** nói rõ module nào được xem là nguồn ngoài và dừng ở đó. Phân biệt giá trị đã xác minh với giả định hoặc nơi chưa truy được.
-- **Giữ cây dễ đọc:** dùng code block `text` và indentation ổn định. Chỉ thêm đoạn giải thích ngoài cây cho quy ước, kết luận hoặc lưu ý không thể hiện gọn trong cây. Khi cây quá lớn, chia theo output hoặc nhánh độc lập, không cắt mất nguồn và điều kiện.
+Ưu tiên hình thức giúp nhìn thấy mối quan hệ cần kiểm chứng với ít thao tác đọc nhất:
 
-### Mẫu mong muốn
+- Với quan hệ ngắn, dùng câu văn hoặc chuỗi tham chiếu trực tiếp.
+- Với nhiều tầng nguồn dữ liệu, phép tính hoặc điều kiện, dùng cây thụt dòng hay sơ đồ phụ thuộc.
+- Với thứ tự gọi, nhánh xử lý, state transition hoặc tương tác giữa nhiều thành phần, chọn sơ đồ theo mục "Chọn hình thức giải thích".
+- Với so sánh trước/sau hoặc nhiều phương án, dùng bảng nếu giúp đối chiếu nhanh hơn.
 
-Ví dụ rút gọn về nguồn của giá vé trên UI (chỉ minh họa cách trình bày):
+Trong cây hoặc sơ đồ, đặt nguồn, điều kiện, phép biến đổi và vị trí code tại nhánh liên quan. Dùng ký hiệu và quy ước nhất quán, giải thích ngắn khi cần; không bắt buộc một cách đặt tên hay cú pháp riêng của dự án nào.
 
-```text
-ticketFare_UI
-  → line[i].ticketFare_UI
-      (item thường: i = 0; interline: i = 0 chiều đi, i = 1 chiều về)
-
-      → corgi.line[i].publishedFare
-          when isPackageRate && !isEnableAOInPackageRate
-
-          corgi.line[i].publishedFare
-            → searchAir.line[i].publishedFare
-                (corgi chỉ đọc; AirSearchResponse.scala:687)
-
-                searchAir.line[i].publishedFare
-                  → searchAir.pexFareList[ptc].fareForOnePerson
-                      when goods.getPackageRate() == FLG_ON
-                      (AirWebServiceUtil.getPublishedFare)
-                  → không có field
-                      otherwise
-
-      → corgi.line[i].ticketFare + cashBack
-          otherwise
-
-          corgi.line[i].ticketFare
-            → searchAir.line[i].ticketTax
-                (corgi chỉ đọc; AirSearchResponse.scala:688)
-
-                searchAir.line[i].ticketTax
-                  → gw.fareForOnePerson + searchAir.markup.amount
-                      when GALI
-                  → Σ(flight.getAdultFare()) + searchAir.markup.amount
-                      when LCC
-
-          cashBack
-            → -corgi.line[i].markedUpInformation.amount
-                when isPex && có markedUpInformation
-            → 0
-                otherwise
-```
-
-Mẫu chỉ thể hiện cách tổ chức thông tin. Khi phân tích thực tế, phải bổ sung đầy đủ điều kiện, phép tính, nguồn của các giá trị trung gian và vị trí code đã xác minh. Dừng ở ranh giới mà người dùng yêu cầu; không mặc định truy sâu vào hệ thống bên ngoài.
-
-### Khi câu hỏi là bug hoặc thay đổi code
-
-Giữ cây nguồn gốc hoặc sơ đồ tương ứng làm trọng tâm nếu nó giúp kiểm chứng. Bổ sung ngắn gọn: điểm sửa trong flow; behavior trước/sau; output và side effect; test hoặc command kiểm chứng. Khi vấn đề phụ thuộc thứ tự gọi, dùng sequence/flowchart theo quy tắc "Chọn hình thức giải thích" thay vì ép mọi vấn đề vào cây giá trị.
+**Mục tiêu:** người đọc nhìn thấy `kết luận ↔ logic liên quan ↔ bằng chứng trong code` và biết phải kiểm tra ở đâu. Tránh liệt kê file rời rạc, mô tả lại mọi dòng code hoặc kéo dài phần giải thích không phục vụ mục tiêu truy vết.
