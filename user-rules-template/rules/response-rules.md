@@ -100,4 +100,29 @@ Có thể kết hợp nhiều hướng khi cần. Chỉ truy những nhánh giú
 
 Trong cây hoặc sơ đồ, đặt nguồn, điều kiện, phép biến đổi và vị trí code tại nhánh liên quan. Dùng ký hiệu và quy ước nhất quán, giải thích ngắn khi cần; không bắt buộc một cách đặt tên hay cú pháp riêng của dự án nào.
 
+
+**Ví dụ ngắn** (tên và đường dẫn code chỉ để minh họa):
+
+Truy ngược nguồn của một giá trị:
+
+```text
+response.total
+  → subtotal - discount (src/services/checkout.ts:calculateTotal)
+      subtotal → Σ(item.price × item.quantity)
+      discount → coupon.amount  when coupon.isValid
+               → 0              otherwise
+```
+
+Theo luồng thực thi của một request:
+
+```text
+POST /records
+  → validateInput()      (src/api/records.ts)
+  → createRecord()       (src/services/records.ts)
+  → repository.insert()  (src/data/records.ts)
+  → HTTP 201
+```
+
+Hai ví dụ chỉ minh họa cách thể hiện quan hệ và vị trí code. Không cần tạo cây hoặc sơ đồ khi một câu ngắn đã đủ để truy vết.
+
 **Mục tiêu:** người đọc nhìn thấy `kết luận ↔ logic liên quan ↔ bằng chứng trong code` và biết phải kiểm tra ở đâu. Tránh liệt kê file rời rạc, mô tả lại mọi dòng code hoặc kéo dài phần giải thích không phục vụ mục tiêu truy vết.
